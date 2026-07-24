@@ -387,7 +387,12 @@ object AdServer {
       // site floors — same precedence the auctioneer used to admit the bid,
       // so a publisher-approved winner is never blocked at serve by a floor
       // the slot explicitly overrides. Also sets the clearing clamp.
-      adminSlotFloor: Option[CPM] = None
+      adminSlotFloor: Option[CPM] = None,
+      // Serve-pick scorecard sink. Serve-time drops used to be INVISIBLE —
+      // a candidate could lose every render to a floor edge, a page-cap
+      // hold, or a losing posterior with zero trace (the JRA hunt,
+      // 2026-07-24). The actor call site wires this to log.info.
+      trace: String => Unit = _ => ()
   ): Option[(CandidateView, CPM)] = {
     // Admin slot override first, then per-category floor, then site floor.
     // Empty map + no override → `siteFloor`, i.e. legacy single-floor behavior.
@@ -397,9 +402,19 @@ object AdServer {
     // creativeId). Slot-size eligibility was enforced upstream by the
     // auctioneer; fluid creatives render at any dimension. So serve-time
     // filtering is just floor (per the candidate's category) + per-page dedup.
-    val fitting = pool.filter { c =>
+    val (fitting, dropped) = pool.partition { c =>
       c.cpm.toDouble >= catFloor(c.category).toDouble &&
       !usedCampaigns.contains(c.campaignId.value)
+    }
+    if (dropped.nonEmpty) {
+      val reasons = dropped.map { c =>
+        val f = catFloor(c.category).toDouble
+        val why =
+          if (c.cpm.toDouble < f) f"floor(cpm=${c.cpm.toDouble}%.2f<$f%.2f cat=${c.category.value})"
+          else "page-cap"
+        s"${c.creativeId.value}=$why"
+      }
+      trace(s"drops slot=${slot.slotId.value} ${reasons.mkString("[", ", ", "]")}")
     }
     if (fitting.isEmpty) None
     else {
@@ -409,6 +424,9 @@ object AdServer {
       }
       val sorted = scored.sortBy { case (_, s) => -s.score }
       val (winner, winnerScore) = sorted.head
+      trace(sorted.map { case (c, s) =>
+        f"${c.creativeId.value}:cpm=${c.cpm.toDouble}%.2f:sampled=${s.score}%.4f:mean=${s.meanScore}%.4f"
+      }.mkString(s"pick slot=${slot.slotId.value} winner=${winner.creativeId.value} [", ", ", "]"))
       // Same-category second price: price the winner against the best loser
       // IN ITS OWN category (cross-category runners-up never set the price),
       // clamped to the winner's category floor. Pricing reads the posterior-
@@ -512,7 +530,9 @@ object AdServer {
       // category/site floors, mirroring the auctioneer's admission floor —
       // an approved winner admitted under a slot override must not be
       // blocked here by the higher site floor.
-      adminSlotFloors: Map[SlotId, CPM] = Map.empty
+      adminSlotFloors: Map[SlotId, CPM] = Map.empty,
+      // Serve-pick scorecard sink (see pickBestForSlot.trace).
+      trace: String => Unit = _ => ()
   )(using ExecutionContext): Future[(Vector[Protocol.BatchSlotOutcome], Map[CampaignId, Double])] = {
     val effectivePinPool = if (pinLookupPool.isEmpty) pool else pinLookupPool
     // Initial assignment: largest slot first, greedy. Track what each
@@ -553,9 +573,9 @@ object AdServer {
         hardUsed: Set[String]
     ): Option[(CandidateView, CPM)] =
       pickBestForSlot(slot, available, hardUsed ++ pageBlocked, alpha, stats, siteFloor, rng, categoryFloors,
-        adminSlotFloors.get(slot.slotId))
+        adminSlotFloors.get(slot.slotId), trace = m => trace(s"[soft] $m"))
         .orElse(pickBestForSlot(slot, available, hardUsed, alpha, stats, siteFloor, rng, categoryFloors,
-          adminSlotFloors.get(slot.slotId)))
+          adminSlotFloors.get(slot.slotId), trace = m => trace(s"[hard] $m")))
     // excludedCreatives: pinned by the user for slots not on this
     // page. Site-wide block — those creatives never appear anywhere
     // except their own pinned slot, so the user's saved selection
@@ -651,6 +671,11 @@ object AdServer {
                 newPending.getOrElse(cand.campaignId, 0.0) + delta
               )
             } else {
+              // A failed reservation silently forfeits the slot to the next
+              // candidate — without this line a winning bidder can lose
+              // every render (timeout, budget edge) with zero trace.
+              trace(s"RESERVE-FAIL slot=${slot.slotId.value} creative=${cand.creativeId.value} " +
+                f"campaign=${cand.campaignId.value} clearing=${clearing.toDouble}%.4f")
               failures += ((slot, cand))
             }
           }
@@ -4433,7 +4458,8 @@ private[delivery] class AdServer(
       isApproved = isApproved,
       pinLookupPool = pinLookupPool,
       categoryFloors = siteCategoryFloors,
-      adminSlotFloors = adminSlotFloors
+      adminSlotFloors = adminSlotFloors,
+      trace = msg => log.info("SERVE-PICK site={} {}", siteId.value, msg)
     )(using ctx.executionContext)
 
   /**
