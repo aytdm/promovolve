@@ -406,7 +406,7 @@ document.body.addEventListener('inboxActed', function(){
         <div class="grid grid-cols-2 gap-4 text-sm mb-6">
           <div><p class="text-gray-500">{{t "Advertiser"}}</p><p class="font-medium" title="{{$c.AdvertiserID}}">{{if $c.AdvertiserName}}{{$c.AdvertiserName}}{{else}}&mdash;{{end}}</p></div>
           <div><p class="text-gray-500">{{t "Campaign"}}</p><p class="font-medium" title="{{$c.CampaignID}}">{{if $c.CampaignName}}{{$c.CampaignName}}{{else}}&mdash;{{end}}</p></div>
-          <div><p class="text-gray-500">{{t "Max Bid"}}</p><p class="font-medium">${{$c.CPM}}</p></div>
+          <div><p class="text-gray-500">{{t "Max Bid"}}</p><p class="font-medium">${{$c.CPM}}{{curHint $.Cur $c.CPM}}</p></div>
           <div><p class="text-gray-500">{{t "Landing Domain"}}</p><p class="font-medium">{{if $c.LandingDomain}}{{$c.LandingDomain}}{{else}}&mdash;{{end}}</p></div>
           {{/* Honest queue age — survives the pending row's TTL purge /
                re-queue churn on the core, unlike the row's created time.
@@ -510,7 +510,7 @@ document.body.addEventListener('inboxActed', function(){
         <div class="grid grid-cols-2 gap-4 text-sm mb-6">
           <div><p class="text-gray-500">{{t "Advertiser"}}</p><p class="font-medium" title="{{$c.AdvertiserID}}">{{if $c.AdvertiserName}}{{$c.AdvertiserName}}{{else}}&mdash;{{end}}</p></div>
           <div><p class="text-gray-500">{{t "Campaign"}}</p><p class="font-medium" title="{{$c.CampaignID}}">{{if $c.CampaignName}}{{$c.CampaignName}}{{else}}&mdash;{{end}}</p></div>
-          <div><p class="text-gray-500">{{t "Max Bid"}}</p><p class="font-medium">${{$c.CPM}}{{if $c.BelowFloor}} <span class="text-amber-600 text-xs">{{t "(floor $%s)" $c.FloorCPM}}</span>{{end}}</p></div>
+          <div><p class="text-gray-500">{{t "Max Bid"}}</p><p class="font-medium">${{$c.CPM}}{{curHint $.Cur $c.CPM}}{{if $c.BelowFloor}} <span class="text-amber-600 text-xs">{{t "(floor $%s)" $c.FloorCPM}}</span>{{end}}</p></div>
           <div><p class="text-gray-500">{{t "Landing Domain"}}</p><p class="font-medium">{{if $c.LandingDomain}}{{$c.LandingDomain}}{{else}}&mdash;{{end}}</p></div>
         </div>
         {{if $c.Placements}}
@@ -549,7 +549,7 @@ document.body.addEventListener('inboxActed', function(){
         <div class="grid grid-cols-2 gap-4 text-sm mb-4">
           <div><p class="text-gray-500">{{t "Advertiser"}}</p><p class="font-medium" title="{{$c.AdvertiserID}}">{{if $c.AdvertiserName}}{{$c.AdvertiserName}}{{else}}&mdash;{{end}}</p></div>
           <div><p class="text-gray-500">{{t "Campaign"}}</p><p class="font-medium" title="{{$c.CampaignID}}">{{if $c.CampaignName}}{{$c.CampaignName}}{{else}}&mdash;{{end}}</p></div>
-          <div><p class="text-gray-500">{{t "Max Bid"}}</p><p class="font-medium">${{$c.CPM}}</p></div>
+          <div><p class="text-gray-500">{{t "Max Bid"}}</p><p class="font-medium">${{$c.CPM}}{{curHint $.Cur $c.CPM}}</p></div>
           <div><p class="text-gray-500">{{t "Landing Domain"}}</p><p class="font-medium">{{if $c.LandingDomain}}{{$c.LandingDomain}}{{else}}&mdash;{{end}}</p></div>
         </div>
         {{if $c.Reason}}

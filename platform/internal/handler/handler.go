@@ -150,22 +150,28 @@ var funcMap = template.FuncMap{
 	// CurrencyCtx on pageData): {{cur $.Cur .SpendToday}}. Accepts float64
 	// or a numeric string (several handlers pre-format amounts as strings).
 	"cur": func(c *CurrencyCtx, v any) string {
-		switch x := v.(type) {
-		case float64:
-			return curFormat(c, x)
-		case int:
-			return curFormat(c, float64(x))
-		case int64:
-			return curFormat(c, float64(x))
-		case string:
-			f, err := strconv.ParseFloat(strings.TrimPrefix(strings.TrimSpace(x), "$"), 64)
-			if err != nil {
-				return x
+		f, ok := moneyToFloat(v)
+		if !ok {
+			if s, isStr := v.(string); isStr {
+				return s
 			}
-			return curFormat(c, f)
-		default:
 			return ""
 		}
+		return curFormat(c, f)
+	},
+	// curHint renders the grey parenthetical converted equivalent for a
+	// dollar-primary figure — "" when no display currency is active:
+	// ${{.MaxCPM}}{{curHint $.Cur .MaxCPM}} → $10.00 (≈¥1,638)
+	"curHint": func(c *CurrencyCtx, v any) template.HTML {
+		if c == nil || !c.Convert {
+			return ""
+		}
+		f, ok := moneyToFloat(v)
+		if !ok {
+			return ""
+		}
+		return template.HTML(` <span class="text-xs font-normal text-gray-400">(` +
+			template.HTMLEscapeString(curFormat(c, f)) + `)</span>`)
 	},
 	// asset builds a version-stamped /static URL (see staticVersion).
 	"asset": func(name string) string {
@@ -256,6 +262,27 @@ func curFormat(c *CurrencyCtx, usd float64) string {
 		decimals = 0
 	}
 	return "≈" + fx.Symbol(c.Code) + groupThousands(usd*c.Rate, decimals)
+}
+
+// moneyToFloat coerces the value shapes templates hand to cur/curHint:
+// numbers, or strings like "10.00" / "$10.00".
+func moneyToFloat(v any) (float64, bool) {
+	switch x := v.(type) {
+	case float64:
+		return x, true
+	case int:
+		return float64(x), true
+	case int64:
+		return float64(x), true
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimPrefix(strings.TrimSpace(x), "$"), 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	default:
+		return 0, false
+	}
 }
 
 // groupThousands formats with comma separators and fixed decimals.

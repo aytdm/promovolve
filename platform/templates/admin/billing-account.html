@@ -22,7 +22,7 @@
     {{if .IsPublisher}}
     <div class="bg-white p-6 rounded-lg border">
       <p class="text-sm text-gray-500">{{t "Lifetime paid"}}</p>
-      <p class="text-3xl font-semibold mt-2">${{.LifetimePaid}}</p>
+      <p class="text-3xl font-semibold mt-2">${{.LifetimePaid}}{{curHint $.Cur .LifetimePaid}}</p>
     </div>
     {{end}}
   </div>
@@ -75,7 +75,7 @@
           <td class="px-6 py-2 text-gray-500">{{.Period}}</td>
           <td class="px-6 py-2"><span class="badge {{.StatusBadge}}">{{t .Status}}</span></td>
           <td class="px-6 py-2 text-gray-500">{{.ExternalRef}}</td>
-          <td class="px-6 py-2 text-right font-medium">${{.Amount}}</td>
+          <td class="px-6 py-2 text-right font-medium">${{.Amount}}{{curHint $.Cur .Amount}}</td>
         </tr>
         {{else}}
         <tr><td class="px-6 py-4 text-gray-400" colspan="5">{{t "No payouts yet."}}</td></tr>
@@ -105,10 +105,10 @@
         <tr class="border-b last:border-0">
           <td class="px-6 py-2 font-medium">{{.Month}}</td>
           <td class="px-6 py-2 text-gray-500">{{.Impressions}}</td>
-          <td class="px-6 py-2 text-right text-gray-500">${{.Gross}}</td>
+          <td class="px-6 py-2 text-right text-gray-500">${{.Gross}}{{curHint $.Cur .Gross}}</td>
           {{if $.AdminAccount.IsPublisher}}
           <td class="px-6 py-2 text-right text-gray-500">−${{.Fee}}</td>
-          <td class="px-6 py-2 text-right font-medium">${{.Net}}</td>
+          <td class="px-6 py-2 text-right font-medium">${{.Net}}{{curHint $.Cur .Net}}</td>
           {{end}}
         </tr>
         {{else}}

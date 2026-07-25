@@ -278,7 +278,7 @@
             {{end}}
           </div>
           <p class="text-xs text-gray-400 mt-1" title="{{t "Manually-set fallback floor. The optimizer overrides this within seconds of starting. Treat as a startup default only."}}">
-            {{t "Starting floor:"}} ${{if .FloorCpm}}{{.FloorCpm}}{{else}}0.50{{end}}
+            {{t "Starting floor:"}} ${{if .FloorCpm}}{{.FloorCpm}}{{curHint $.Cur .FloorCpm}}{{else}}0.50{{end}}
           </p>
         </div>
         {{if .HealthKnown}}
