@@ -1319,6 +1319,9 @@ private final class AuctioneerEntity private (
           slot.prior.map(p => f"q=${p.qualityScore}%.2f region=${p.region}").getOrElse("none")
         )
 
+        // Captured for the aggregator thread (same discipline as
+        // CategoryBidderEntity's scorecard logging).
+        val auctionLog = ctx.log
         ctx.spawnAnonymous(
           Aggregator[CategoryBidResponse, CandidatesCollected](
             sendRequests = { aggReply =>
@@ -1337,6 +1340,25 @@ private final class AuctioneerEntity private (
             expectedReplies = expandedCandidates.size,
             replyTo = ctx.self,
             aggregateReplies = { responses =>
+              // CATEGORY-SILENT: a bidder stripe that never answers is
+              // indistinguishable from "no demand" — the auction just
+              // proceeds without that category. That silence hid an
+              // 11-hour wedge (Bidder[497|0] stranded on the quorum pod,
+              // 2026-07-25): the campaign bid eligibly every minute while
+              // its category never reached a single auction. Asked
+              // categories are demand-gated by construction, so a missing
+              // reply is always demand lost — WARN, loudly and per
+              // auction, until whatever wedged the stripe is healed.
+              val answered = responses.iterator.map(_.categoryId.value).toSet
+              val silent = expandedCandidates.toSet -- answered
+              if (silent.nonEmpty)
+                auctionLog.warn(
+                  "CATEGORY-SILENT auction: site={} slot={} — no bidder response from categor{} [{}] within the window; their demand is absent from this auction",
+                  siteId,
+                  slot.slotId.value,
+                  if (silent.size == 1) "y" else "ies",
+                  silent.toSeq.sorted.mkString(",")
+                )
               val candidates = for {
                 r <- responses
                 campaignBid <- r.campaigns

@@ -64,6 +64,10 @@ object CampaignDistributor {
   /** Internal: broadcast to virtual shards completed */
   private final case class BroadcastCompleted(categoryId: CategoryId) extends Command
 
+  /** Broadcast finished with fewer stripe acks than stripes — a bidder shard is dark. */
+  private final case class BroadcastPartial(categoryId: CategoryId, acked: Int, expected: Int)
+      extends Command
+
   /** Internal: broadcast to virtual shards timed out */
   private final case class BroadcastTimeout(categoryId: CategoryId) extends Command
 
@@ -149,6 +153,24 @@ object CampaignDistributor {
             val newInFlight = state.inFlight - categoryId
             processQueue(state.copy(inFlight = newInFlight), sharding, ctx)
 
+          case BroadcastPartial(categoryId, acked, expected) =>
+            // A stripe that doesn't ack is a bidder actor not receiving
+            // messages — a wedged shard leaves auctions on its sites
+            // silently missing this category's demand (11h dark
+            // Bidder[497|0], 2026-07-25, invisible because this ack count
+            // used to be discarded). The reconcile re-publishes every
+            // minute, so a dead stripe repeats this WARN once a minute
+            // until healed — treat a recurring line as an alarm, and heal
+            // by bouncing the pod hosting the unacked stripe's shard.
+            ctx.log.warn(
+              "BIDDER STRIPE UNACKED: category={} acked={}/{} stripes — a category-bidder shard is not receiving demand pushes; auctions on its sites are missing this category",
+              categoryId.value,
+              acked: java.lang.Integer,
+              expected: java.lang.Integer
+            )
+            val newInFlight = state.inFlight - categoryId
+            processQueue(state.copy(inFlight = newInFlight), sharding, ctx)
+
           case BroadcastTimeout(categoryId) =>
             ctx.log.warn("CampaignDistributor[{}] broadcast timed out for {}", workerId, categoryId)
             val newInFlight = state.inFlight - categoryId
@@ -188,8 +210,14 @@ object CampaignDistributor {
         val shardRefs: Seq[EntityRef[CategoryBidderEntity.Command]] =
           shardIds.map(id => sharding.entityRefFor(CategoryBidderEntity.TypeKey, id))
 
-        // Create response adapter for aggregator results
-        val completedAdapter = ctx.messageAdapter[AggregatorResult](_ => BroadcastCompleted(categoryId))
+        // Adapter inspects the REAL ack count. Mapping every result to
+        // BroadcastCompleted (as this used to) threw the count away and
+        // made a permanently dead stripe invisible to the reconcile.
+        val expected = shardIds.size
+        val completedAdapter = ctx.messageAdapter[AggregatorResult] { res =>
+          if (res.ackedCount < expected) BroadcastPartial(categoryId, res.ackedCount, expected)
+          else BroadcastCompleted(categoryId)
+        }
 
         ctx.spawnAnonymous(
           Aggregator[CategoryBidderEntity.ActiveCampaignsAck, AggregatorResult](
