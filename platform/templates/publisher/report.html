@@ -17,7 +17,7 @@
 <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
   <div class="card card-tight">
     <p class="text-xs text-gray-500">{{t "Revenue"}}</p>
-    <p class="text-xl font-semibold mt-1">${{$r.Totals.SpendDisp}}</p>
+    <p class="text-xl font-semibold mt-1">{{cur $.Cur $r.Totals.SpendDisp}}</p>
     {{if $r.FeePct}}<p class="text-xs text-gray-400">{{t "net of %s%% platform fee" $r.FeePct}}</p>{{end}}
   </div>
   <div class="card card-tight">
@@ -39,7 +39,7 @@
   </div>
   <div class="card card-tight">
     <p class="text-xs text-gray-500">{{t "eCPM"}}</p>
-    <p class="text-xl font-semibold mt-1">${{$r.Totals.ECPM}}</p>
+    <p class="text-xl font-semibold mt-1">{{cur $.Cur $r.Totals.ECPM}}</p>
   </div>
 </div>
 
@@ -81,8 +81,8 @@
           <td class="py-2 pr-4 text-right">{{.Clicks}}</td>
           <td class="py-2 pr-4 text-right">{{.CTR}}</td>
           <td class="py-2 pr-4 text-right">{{.CTAClicks}}</td>
-          <td class="py-2 pr-4 text-right">${{.SpendDisp}}</td>
-          <td class="py-2 text-right">${{.ECPM}}</td>
+          <td class="py-2 pr-4 text-right">{{cur $.Cur .SpendDisp}}</td>
+          <td class="py-2 text-right">{{cur $.Cur .ECPM}}</td>
         </tr>
         {{end}}
       </tbody>
@@ -141,8 +141,8 @@
           <td class="py-2 pr-4 text-right">{{.Clicks}}</td>
           <td class="py-2 pr-4 text-right">{{.CTR}}</td>
           <td class="py-2 pr-4 text-right">{{.CTAClicks}}</td>
-          <td class="py-2 pr-4 text-right">${{.SpendDisp}}</td>
-          <td class="py-2 text-right">${{.ECPM}}</td>
+          <td class="py-2 pr-4 text-right">{{cur $.Cur .SpendDisp}}</td>
+          <td class="py-2 text-right">{{cur $.Cur .ECPM}}</td>
         </tr>
         {{end}}
         <tr class="border-b bg-gray-50 text-gray-600">
@@ -151,8 +151,8 @@
           <td class="py-1.5 pr-4 text-right text-xs font-medium">{{$s.Totals.Clicks}}</td>
           <td class="py-1.5 pr-4 text-right text-xs font-medium">{{$s.Totals.CTR}}</td>
           <td class="py-1.5 pr-4 text-right text-xs font-medium">{{$s.Totals.CTAClicks}}</td>
-          <td class="py-1.5 pr-4 text-right text-xs font-medium">${{$s.Totals.SpendDisp}}</td>
-          <td class="py-1.5 text-right text-xs font-medium">${{$s.Totals.ECPM}}</td>
+          <td class="py-1.5 pr-4 text-right text-xs font-medium">{{cur $.Cur $s.Totals.SpendDisp}}</td>
+          <td class="py-1.5 text-right text-xs font-medium">{{cur $.Cur $s.Totals.ECPM}}</td>
         </tr>
       </tbody>
     </table>

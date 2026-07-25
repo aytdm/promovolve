@@ -31,11 +31,11 @@
   </div>
   <div class="bg-white p-6 rounded-lg border" title="{{t "Net earnings per 1000 impressions today (Revenue Today ÷ Impressions Today × 1000)."}}">
     <p class="text-sm text-gray-500">{{t "eCPM"}}</p>
-    <p class="text-3xl font-semibold mt-2">{{if .Stats.ECPM}}${{.Stats.ECPM}}{{else}}&mdash;{{end}}</p>
+    <p class="text-3xl font-semibold mt-2">{{if .Stats.ECPM}}{{cur $.Cur .Stats.ECPM}}{{else}}&mdash;{{end}}</p>
   </div>
   <div class="bg-white p-6 rounded-lg border" title="{{t "Your net earnings today after the platform fee. Sourced from tracking_events. Resets at midnight of your organization's timezone. Advertiser-side Today's Spend shows the gross amount."}}">
     <p class="text-sm text-gray-500">{{t "Revenue Today"}}</p>
-    <p class="text-3xl font-semibold mt-2">${{.Stats.Revenue}}</p>
+    <p class="text-3xl font-semibold mt-2">{{cur $.Cur .Stats.Revenue}}</p>
     {{if .Stats.FeePct}}
     <p class="text-xs text-gray-400 mt-1">{{t "$%s gross − $%s platform fee (%s%%)" .Stats.GrossRevenue .Stats.Fee .Stats.FeePct}}</p>
     {{end}}
