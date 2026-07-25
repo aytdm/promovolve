@@ -306,7 +306,7 @@ object ClusterBootstrap {
       initCampaignDistributor(sharding)
 
       // Auction domain
-      initCategoryBidderEntity(sharding, repos.categoryDemand)
+      initCategoryBidderEntity(sharding, repos.categoryDemand, system.settings.config)
       initTaxonomyRankerEntity(sharding, system.settings.config)
       initContentProductAffinityEntity(sharding, system.settings.config)
       initAuctioneerEntity(sharding, topics, system.settings.config, affinityRegistry, campaignDirectory)
@@ -364,11 +364,18 @@ object ClusterBootstrap {
         CampaignDistributor(ctx.entityId, sharding)
       }.withEntityProps(DispatcherSelector.fromConfig("auction-dispatcher")))
 
-    private def initCategoryBidderEntity(sharding: ClusterSharding, categoryDemand: CategoryDemandRepo): Unit =
+    private def initCategoryBidderEntity(
+        sharding: ClusterSharding,
+        categoryDemand: CategoryDemandRepo,
+        config: com.typesafe.config.Config
+    ): Unit = {
+      val bidBookEnabled = config.hasPath("promovolve.auction.bid-book.enabled") &&
+        config.getBoolean("promovolve.auction.bid-book.enabled")
       sharding.init(Entity(CategoryBidderEntity.TypeKey) { ctx =>
         // Entity ID is now compound format: "categoryId|shardIndex" (e.g., "IAB1|2")
-        CategoryBidderEntity(ctx.entityId, sharding, categoryDemand)
+        CategoryBidderEntity(ctx.entityId, sharding, categoryDemand, bidBookEnabled = bidBookEnabled)
       }.withEntityProps(DispatcherSelector.fromConfig("auction-dispatcher")))
+    }
 
     private def initTaxonomyRankerEntity(
         sharding: ClusterSharding,

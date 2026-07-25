@@ -316,6 +316,23 @@ object CampaignEntity {
         }
 
         /**
+         * STANDING BID BOOK (docs/design/bid-book.md): broadcast this
+         * campaign's current bid material to every stripe of every targeted
+         * category. Fired on registration/config change, on the staggered
+         * QuoteTick heartbeat, and on RequestQuote from a warming bidder.
+         * The creative set is fetched off-thread; eligibility is evaluated
+         * against CURRENT state when the context lands (QuoteContextReady).
+         */
+        def broadcastQuote(state: State): Unit =
+          ctx.pipeToSelf(fetchBidContext(state.creativeAssignments)) {
+            case Success(bc) => QuoteContextReady(bc.creatives)
+            case Failure(_)  => QuoteContextReady(Set.empty)
+          }
+
+        def scheduleLive(state: State, now: Instant): Boolean =
+          !state.startAt.isAfter(now) && state.endAt.forall(_.isAfter(now))
+
+        /**
          * Notify CampaignDirectory when a campaign becomes active/inactive or
          * its demand-relevant config changes. Fire-and-forget: registration
          * completes asynchronously (DirectoryRegistered flips the campaign to
@@ -365,6 +382,7 @@ object CampaignEntity {
               sendCampaignReady(state, configEdit = isEdit)
               timers.startSingleTimer(RegistrationRetryKey, RetryDirectoryRegistration, 10.seconds)
               writeDemandTable(state, active = true)
+              broadcastQuote(state)
 
             case _ =>
               () // no directory change needed
@@ -1376,6 +1394,43 @@ object CampaignEntity {
         // ═══════════════════════════════════════════════════════════════════════
 
         def lifecycle(state: State): PartialFunction[Command, Effect[State]] = {
+          case RequestQuote =>
+            broadcastQuote(state)
+            Effect.none
+
+          case QuoteTick =>
+            broadcastQuote(state)
+            Effect.none
+
+          case QuoteContextReady(creatives) =>
+            // Eligibility snapshot at broadcast time; membership churn is
+            // handled by the registry, so the quote only carries the
+            // material facts + a schedule/status gate.
+            val now = Instant.now()
+            val eligible = state.status == Status.Active && scheduleLive(state, now)
+            val landingDomain = state.landingUrl.flatMap { url =>
+              scala.util.Try(java.net.URI.create(url).getHost).toOption
+            }.getOrElse("")
+            val quotedAt = System.currentTimeMillis()
+            val cats = state.effectiveCategories -- state.categoryBlocklist
+            cats.foreach { cat =>
+              promovolve.auction.CategoryBidderEntity.allEntityIdsFor(cat.value).foreach { id =>
+                sharding.entityRefFor(promovolve.auction.CategoryBidderEntity.TypeKey, id) !
+                promovolve.auction.CategoryBidderEntity.BidQuote(
+                  campaignId = campaignId,
+                  advertiserId = state.advertiserId,
+                  maxCpm = state.maxCpm,
+                  creatives = creatives,
+                  adProductCategory = state.adProductCategory,
+                  landingDomain = landingDomain,
+                  siteAllowlist = state.siteAllowlist,
+                  eligible = eligible,
+                  quotedAtMs = quotedAt
+                )
+              }
+            }
+            Effect.none
+
           case IgnoreDDataResponse =>
             // Adapted DData Update reply — fire-and-forget publish, nothing to do.
             Effect.none
@@ -1492,6 +1547,14 @@ object CampaignEntity {
           // Start timers AFTER recovery to prevent processing timer messages before state is ready
           timers.startTimerWithFixedDelay(FlushTick, flushInterval)
           timers.startTimerWithFixedDelay(CheckWindowRoll, 5.minutes)
+          // Bid-book heartbeat, hash-staggered so campaigns don't thunder.
+          timers.startTimerWithFixedDelay(
+            QuoteTick,
+            QuoteTick,
+            (math.abs(campaignId.value.hashCode) % 60).seconds,
+            60.seconds
+          )
+          broadcastQuote(state)
 
           // Adopt the account timezone in case the advertiser's fan-out tell
           // was lost while this entity was passivated (no-op when unchanged).
@@ -1701,6 +1764,13 @@ object CampaignEntity {
   ) extends Command
 
   final case class ConfigUpdated(campaignId: CampaignId) extends promovolve.CborSerializable
+
+  /**
+   * STANDING BID BOOK: a CategoryBidder asks this campaign to (re)push its
+   * BidQuote — warm-up after a bidder restart or a registry add. Tell+tell:
+   * the campaign broadcasts quotes to all stripes of all its categories.
+   */
+  case object RequestQuote extends Command
 
   final case class CampaignBidRequest(
       siteId: SiteId,
@@ -1992,6 +2062,11 @@ object CampaignEntity {
 
   // ----- Internal commands -----
   private case class FlushBuffer(ts: Instant) extends Internal
+
+  /** Internal: advertiser bid context fetched for a quote broadcast. */
+  private case class QuoteContextReady(creatives: Set[AdvertiserEntity.Creative]) extends Internal
+
+  private case object QuoteTick extends Internal
 
   private case class BidRequest(
       siteId: SiteId,

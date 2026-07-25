@@ -59,7 +59,11 @@ object CategoryBidderEntity {
       // 550ms leaves ~250ms of hop/mailbox margin for the partial to land.
       askTimeout: FiniteDuration = 550.millis,
       cpmThresholdPct: Double = 0.80, // Return campaigns within 80% of winner (widened: quality-adjusted pricing handles diverse bids)
-      maxCampaignsPerCategory: Int = 50 // Limit campaigns to bound downstream creative evaluation
+      maxCampaignsPerCategory: Int = 50, // Limit campaigns to bound downstream creative evaluation
+      // STANDING BID BOOK (docs/design/bid-book.md): answer auctions
+      // synchronously from pushed quotes instead of racing live asks
+      // against deadlines. Off → legacy live-ask path only.
+      bidBookEnabled: Boolean = false
   ): Behavior[Command] =
     Behaviors.setup { ctx =>
       given Timeout = Timeout(askTimeout)
@@ -75,6 +79,7 @@ object CategoryBidderEntity {
         askTimeout,
         cpmThresholdPct,
         maxCampaignsPerCategory,
+        bidBookEnabled,
         ctx
       )
 
@@ -161,6 +166,31 @@ object CategoryBidderEntity {
   /** Internal: cross-check read failed — keep the pushed registry as-is. */
   private case class ReconcileFailed(reason: String) extends Command
 
+  /**
+   * STANDING BID BOOK quote, pushed by CampaignEntity (on material change,
+   * on a 60s heartbeat, and in reply to RequestQuote). Site-agnostic: the
+   * per-site facts (creative approval, allowlist) are derived at answer
+   * time from the carried creatives/allowlist. quotedAtMs drives the
+   * staleness ladder — slow campaigns cost freshness, never presence.
+   */
+  final case class BidQuote(
+      campaignId: CampaignId,
+      advertiserId: AdvertiserId,
+      maxCpm: CPM,
+      creatives: Set[AdvertiserEntity.Creative],
+      adProductCategory: Option[AdProductCategoryId],
+      landingDomain: String,
+      siteAllowlist: Set[String],
+      eligible: Boolean, // status Active && schedule live, at quote time
+      quotedAtMs: Long
+  ) extends Command
+
+  /** Quote older than this logs BOOK-STALE (still served). */
+  val BookSoftStaleMs: Long = 3L * 60 * 1000
+
+  /** Quote older than this is excluded — a silent campaign IS absent demand. */
+  val BookHardTtlMs: Long = 10L * 60 * 1000
+
   // (campaignId, advertiserId, creatives, cpm, maxCpm, adProductCategory, landingDomain, hasApprovedCreative)
   private type Collected = Vector[(CampaignId, AdvertiserId, Set[AdvertiserEntity.Creative], CPM, CPM,
       Option[AdProductCategoryId], String, Boolean)]
@@ -201,6 +231,7 @@ private final class CategoryBidderEntity(
     askTimeout: FiniteDuration,
     cpmThresholdPct: Double,
     maxCampaignsPerCategory: Int,
+    bidBookEnabled: Boolean,
     ctx: org.apache.pekko.actor.typed.scaladsl.ActorContext[CategoryBidderEntity.Command]
 )(using timeout: Timeout, ec: scala.concurrent.ExecutionContext) {
 
@@ -213,6 +244,84 @@ private final class CategoryBidderEntity(
    * than the table). Either way the dark window is gone: we never sit empty
    * waiting for the singleton.
    */
+  /**
+   * Synchronous auction answer from the standing bid book. Replicates the
+   * legacy per-campaign eligibility exactly, minus the race:
+   *  - allowlist: nonEmpty allowlist must contain the requesting site
+   *  - creatives: isEligibleFor(siteId) (active + not rejected there)
+   *  - floor: qualify when maxCpm ≥ floor; bid = max(maxCpm, floor)
+   *    (same formula the campaign used); below-floor entries feed the
+   *    approved/unfiltered reject stats the floor optimizer reads
+   *  - budget is deliberately NOT gated here: TryReserve at serve time is
+   *    the authoritative money gate; a stale-eligible quote costs one
+   *    declined reservation, never a wrong charge
+   * Staleness ladder: entries older than BookHardTtlMs are excluded (a
+   * silent campaign IS absent demand — floors and liveness must see it);
+   * older than BookSoftStaleMs serve but WARN (repeat-per-auction alarm).
+   */
+  private def answerFromBook(
+      siteId: SiteId,
+      floorCpm: CPM,
+      replyTo: ActorRef[CategoryBidResponse],
+      activeCampaigns: Map[CampaignId, AdvertiserId],
+      bidBook: Map[CampaignId, BidQuote]
+  ): Unit = {
+    val nowMs = System.currentTimeMillis()
+    val entries = activeCampaigns.keysIterator.flatMap(bidBook.get).toVector
+
+    val (live, expired) = entries.partition(e => nowMs - e.quotedAtMs <= BookHardTtlMs)
+    if (expired.nonEmpty)
+      ctx.log.warn(
+        "BOOK-EXPIRED: cat={} dropping {} quote(s) older than {}m [{}] — campaigns silent, treating as absent demand",
+        categoryId.value,
+        expired.size: java.lang.Integer,
+        (BookHardTtlMs / 60000): java.lang.Long,
+        expired.map(_.campaignId.value).mkString(",")
+      )
+    val stale = live.filter(e => nowMs - e.quotedAtMs > BookSoftStaleMs)
+    if (stale.nonEmpty)
+      ctx.log.warn(
+        "BOOK-STALE: cat={} serving {} quote(s) older than {}m [{}] — check the owning campaign entities",
+        categoryId.value,
+        stale.size: java.lang.Integer,
+        (BookSoftStaleMs / 60000): java.lang.Long,
+        stale.map(_.campaignId.value).mkString(",")
+      )
+
+    val admissible = live.filter { e =>
+      e.eligible && (e.siteAllowlist.isEmpty || e.siteAllowlist.contains(siteId.value))
+    }
+    def eligibleCreatives(e: BidQuote) = e.creatives.filter(_.isEligibleFor(siteId))
+    def hasApproved(e: BidQuote) =
+      e.creatives.exists(c => c.isActive && c.isApprovedFor(siteId))
+
+    val (qualifying0, belowFloor) = admissible.partition(_.maxCpm.toDouble >= floorCpm.toDouble)
+
+    val collected: Collected = qualifying0.flatMap { e =>
+      val creatives = eligibleCreatives(e)
+      if (creatives.isEmpty) None // NoCreatives — same exclusion as legacy
+      else
+        Some((e.campaignId, e.advertiserId, creatives, CPM.max(e.maxCpm, floorCpm), e.maxCpm,
+          e.adProductCategory, e.landingDomain, hasApproved(e)))
+    }
+    val qualifying = collected.selectCampaigns(cpmThresholdPct, maxCampaignsPerCategory)
+
+    val rejCpms = belowFloor.map(_.maxCpm.toDouble).filter(_ > 0.0)
+    val approvedBelow = belowFloor.filter(hasApproved)
+    val apprCpms = approvedBelow.map(_.maxCpm.toDouble).filter(_ > 0.0)
+
+    replyTo ! CategoryBidResponse(
+      categoryId,
+      qualifying,
+      rejectedByFloor = belowFloor.size,
+      maxRejectedCpm = rejCpms.maxOption.getOrElse(0.0),
+      minRejectedCpm = rejCpms.minOption.getOrElse(0.0),
+      approvedRejectedByFloor = approvedBelow.size,
+      maxApprovedRejectedCpm = apprCpms.maxOption.getOrElse(0.0),
+      minApprovedRejectedCpm = apprCpms.minOption.getOrElse(0.0)
+    )
+  }
+
   def seeding(): Behavior[Command] =
     Behaviors.withStash(1000) { buffer =>
       ctx.pipeToSelf(categoryDemandRepo.listByCategory(categoryId.value)) {
@@ -237,7 +346,14 @@ private final class CategoryBidderEntity(
             "CategoryBidder[{}] seeded {} campaigns from category_demand",
             categoryId.value, seed.size: java.lang.Integer
           )
-          buffer.unstashAll(serving(seed.map { case (c, a) => CampaignId(c) -> AdvertiserId(a) }))
+          val members = seed.map { case (c, a) => CampaignId(c) -> AdvertiserId(a) }
+          // Bid-book warm-up: tell+tell handshake — each member pushes a
+          // quote back within milliseconds; until quotes land, requests
+          // fall back to the legacy live-ask path (hybrid, no dark window).
+          if (bidBookEnabled) members.foreach { case (cid, adv) =>
+            scala.util.Try(entityFor(adv, cid) ! CampaignEntity.RequestQuote)
+          }
+          buffer.unstashAll(serving(members))
         case SeedFailed(reason) =>
           ctx.log.warn(
             "CategoryBidder[{}] demand seed failed ({}); starting empty until pushed",
@@ -255,12 +371,29 @@ private final class CategoryBidderEntity(
     }
 
   /** @param activeCampaigns Map of campaignId -> advertiserId for entity sharding lookup */
-  def serving(activeCampaigns: Map[CampaignId, AdvertiserId] = Map.empty): Behavior[Command] =
+  def serving(
+      activeCampaigns: Map[CampaignId, AdvertiserId] = Map.empty,
+      bidBook: Map[CampaignId, BidQuote] = Map.empty
+  ): Behavior[Command] =
     Behaviors.receiveMessage {
+      case q: BidQuote =>
+        // Standing bid book update. Accept quotes even for campaigns not
+        // (yet) in the registry — membership can lag a quote by a push
+        // cycle; the answer path intersects with the registry anyway.
+        serving(activeCampaigns, bidBook.updated(q.campaignId, q))
 
       case ActiveCampaigns(campaigns, replyTo) =>
         replyTo ! ActiveCampaignsAck(categoryId)
         val removed = activeCampaigns.keySet -- campaigns.keySet
+        // Registry replaced: campaigns newly added without a quote get one
+        // requested immediately (tell+tell — no ask, no deadline).
+        if (bidBookEnabled) {
+          (campaigns.keySet -- bidBook.keySet).foreach { cid =>
+            campaigns.get(cid).foreach { adv =>
+              scala.util.Try(entityFor(adv, cid) ! CampaignEntity.RequestQuote)
+            }
+          }
+        }
         if (removed.nonEmpty) {
           // A shrinking push is either a real leave (pause/delete — the
           // CampaignEntity also removes its category_demand rows) or a
@@ -289,7 +422,7 @@ private final class CategoryBidderEntity(
             campaigns.size: java.lang.Integer
           )
         }
-        serving(campaigns)
+        serving(campaigns, bidBook)
 
       case ReconcileLoaded(rows) =>
         val restored = rows.collect {
@@ -303,7 +436,7 @@ private final class CategoryBidderEntity(
             restored.size: java.lang.Integer,
             restored.keys.map(_.value).mkString(",")
           )
-          serving(activeCampaigns ++ restored)
+          serving(activeCampaigns ++ restored, bidBook)
         } else Behaviors.same
 
       case ReconcileFailed(reason) =>
@@ -313,7 +446,26 @@ private final class CategoryBidderEntity(
         )
         Behaviors.same
 
+      case CategoryBidRequest(siteId, url, slotId, sizes, floorCpm, replyTo)
+          if bidBookEnabled && activeCampaigns.nonEmpty &&
+          activeCampaigns.keySet.forall(bidBook.contains) =>
+        // STANDING BID BOOK: answer synchronously — no aggregator, no
+        // window, no race. Late information is staleness (disclosed),
+        // never absence (docs/design/bid-book.md).
+        answerFromBook(siteId, floorCpm, replyTo, activeCampaigns, bidBook)
+        Behaviors.same
+
       case CategoryBidRequest(siteId, url, slotId, sizes, floorCpm, replyTo) =>
+        // Hybrid fallback: book disabled, or registry members still missing
+        // quotes (fresh bidder, brand-new campaign). Request the missing
+        // quotes so the NEXT auction answers from the book, and serve this
+        // one on the legacy live-ask path.
+        if (bidBookEnabled) {
+          (activeCampaigns.keySet -- bidBook.keySet).foreach { cid =>
+            activeCampaigns.get(cid).foreach(adv =>
+              scala.util.Try(entityFor(adv, cid) ! CampaignEntity.RequestQuote))
+          }
+        }
         if (activeCampaigns.isEmpty) {
           ctx.log.debug(
             "CategoryBidder[{}] has no active campaigns for site={}",
