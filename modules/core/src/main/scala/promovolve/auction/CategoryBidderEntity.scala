@@ -335,6 +335,12 @@ private final class CategoryBidderEntity(
           }
           // Capture logger on actor thread — safe to use from Aggregator's thread
           val log = ctx.log
+          // For CAMPAIGN-LATE detection: registry membership + window start,
+          // captured for the aggregator thread.
+          val expectedCampaigns = activeCampaigns.keySet
+          val windowStartMs = System.currentTimeMillis()
+          val windowMs = askTimeout.toMillis
+          val bidderCategory = categoryId
           ctx.spawnAnonymous(
             Aggregator[CampaignEntity.CampaignBidResponse, CategoryBidResponse](
               sendRequests = { aggReply =>
@@ -364,6 +370,27 @@ private final class CategoryBidderEntity(
                   entries.mkString(", ")
                 )
 
+                // CAMPAIGN-LATE: the per-campaign sibling of CATEGORY-SILENT.
+                // A campaign whose reply chain exceeds this bidder's window is
+                // silently absent from the partial aggregate — it "bids"
+                // (BidsToday counts its work) but never reaches an auction,
+                // with every dashboard green (5h dark JRA, 2026-07-25: replies
+                // formed 1.6s after the auction closed, every cycle). Repeat-
+                // per-auction WARN = the alarm; the missing campaign's own
+                // late reply lands in dead letters.
+                if (results.size < expectedCampaigns.size) {
+                  val replied = results.iterator.map(_.campaignId).toSet
+                  val missing = expectedCampaigns -- replied
+                  log.warn(
+                    "CAMPAIGN-LATE: cat={} {}/{} replies within {}ms window (started {}ms ago) — missing [{}]; their demand is absent from this auction",
+                    bidderCategory.value,
+                    results.size: java.lang.Integer,
+                    expectedCampaigns.size: java.lang.Integer,
+                    windowMs: java.lang.Long,
+                    (System.currentTimeMillis() - windowStartMs): java.lang.Long,
+                    missing.map(_.value).mkString(",")
+                  )
+                }
                 val collected: Collected =
                   results.collect {
                     case r: CampaignEntity.CampaignBidResponse if r.eligible =>

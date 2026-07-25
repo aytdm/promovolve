@@ -443,6 +443,7 @@ object CampaignEntity {
               slotId.value,
               url
             )
+            val bidReceivedAtMs = System.currentTimeMillis()
             ctx.pipeToSelf(fetchBidContext(state.creativeAssignments)) {
               case Success(bidContext) =>
                 BidRequest(
@@ -451,7 +452,8 @@ object CampaignEntity {
                   floorCpm = floorCpm,
                   replyTo = replyTo,
                   advRemaining = bidContext.remaining,
-                  creatives = bidContext.creatives
+                  creatives = bidContext.creatives,
+                  receivedAtMs = bidReceivedAtMs
                 )
               case Failure(ex) =>
                 ctx.log.error(
@@ -465,7 +467,8 @@ object CampaignEntity {
                   floorCpm = floorCpm,
                   replyTo = replyTo,
                   advRemaining = Budget.zero,
-                  creatives = Set.empty
+                  creatives = Set.empty,
+                  receivedAtMs = bidReceivedAtMs
                 )
             }
             Effect.none
@@ -476,8 +479,22 @@ object CampaignEntity {
                 floorCpm,
                 replyTo,
                 advRemaining,
-                creatives
+                creatives,
+                receivedAtMs
               ) =>
+            // In-entity bid latency: receipt of CampaignBidRequest → this
+            // reply forming. The bidder window is 550ms; anything close to
+            // or above it means this campaign is being silently dropped
+            // from auctions (CAMPAIGN-LATE) — WARN so the slow hop names
+            // itself.
+            if (receivedAtMs > 0) {
+              val elapsed = System.currentTimeMillis() - receivedAtMs
+              if (elapsed > 400)
+                ctx.log.warn(
+                  "SLOW BID CHAIN: campaign={} took {}ms from bid request to reply (bidder window 550ms) — advertiser ask + mailbox latency",
+                  campaignId.value, elapsed: java.lang.Long
+                )
+            }
             ctx.log.debug(
               "BidRequest[{}]: creatives={}, pageCategory={}, advRemaining={}",
               campaignId.value,
@@ -1982,7 +1999,12 @@ object CampaignEntity {
       floorCpm: CPM,
       replyTo: ActorRef[CampaignBidResponse],
       advRemaining: Budget,
-      creatives: Set[AdvertiserEntity.Creative]
+      creatives: Set[AdvertiserEntity.Creative],
+      // Receipt time of the originating CampaignBidRequest — the reply
+      // handler logs total in-entity latency so a slow bid chain (the
+      // CAMPAIGN-LATE disease) names its slow hop instead of hiding in
+      // dead letters.
+      receivedAtMs: Long = 0L
   ) extends Internal
 
   private case class SpendReportSuccess(recorded: CampaignSpendRecorded, flushId: FlushId)
