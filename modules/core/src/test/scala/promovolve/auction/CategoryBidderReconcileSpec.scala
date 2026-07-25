@@ -82,8 +82,11 @@ class CategoryBidderReconcileSpec extends AnyWordSpec with Matchers with BeforeA
 
       // PARTIAL push drops c2 → shrink WARN + cross-check → c2 restored
       // (the table still lists it) → "PARTIAL PUSH detected" WARN.
+      // Match includes THIS entity's category: LoggingTestKit intercepts
+      // logback globally, and concurrent suites (seed-race) can emit the
+      // same warn for their own entities.
       LoggingTestKit
-        .warn("PARTIAL PUSH detected")
+        .warn("CategoryBidder[IAB2] PARTIAL PUSH detected")
         .expect {
           bidder ! ActiveCampaigns(Map(CampaignId("c1") -> AdvertiserId("a1")), ack.ref)
           ack.expectMessageType[ActiveCampaignsAck]

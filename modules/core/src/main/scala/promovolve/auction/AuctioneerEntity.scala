@@ -70,7 +70,8 @@ object AuctioneerEntity {
       ],
       settings: Settings = Settings(),
       affinityRegistry: Option[ActorRef[promovolve.taxonomy.AffinityRegistryDData.Cmd]] = None,
-      campaignDirectory: Option[ActorRef[promovolve.advertiser.CampaignDirectory.Command]] = None
+      campaignDirectory: Option[ActorRef[promovolve.advertiser.CampaignDirectory.Command]] = None,
+      livenessTopic: Option[ActorRef[Topic.Command[DemandLivenessMonitor.CategoryAuctionReport]]] = None
   ): Behavior[Command] =
     Behaviors
       .setup[Messages] { ctx =>
@@ -97,7 +98,8 @@ object AuctioneerEntity {
           campaignChangedTopic,
           ctx,
           affinityRegistry,
-          campaignDirectory
+          campaignDirectory,
+          livenessTopic
         ).serving()
       }
       .narrow
@@ -341,7 +343,8 @@ private final class AuctioneerEntity private (
     ],
     ctx: ActorContext[Messages],
     affinityRegistry: Option[ActorRef[promovolve.taxonomy.AffinityRegistryDData.Cmd]],
-    campaignDirectory: Option[ActorRef[promovolve.advertiser.CampaignDirectory.Command]]
+    campaignDirectory: Option[ActorRef[promovolve.advertiser.CampaignDirectory.Command]],
+    livenessTopic: Option[ActorRef[Topic.Command[DemandLivenessMonitor.CategoryAuctionReport]]] = None
 ) {
 
   // Pending affinity expansion state
@@ -1359,6 +1362,19 @@ private final class AuctioneerEntity private (
                   if (silent.size == 1) "y" else "ies",
                   silent.toSeq.sorted.mkString(",")
                 )
+              // Feed the outcome-level clog detector: per-category
+              // answered/silent facts, folded by DemandLivenessMonitor
+              // into "silence persisting across auctions" — the
+              // mechanism-agnostic alarm. Tell is thread-safe from the
+              // aggregator thread.
+              livenessTopic.foreach { t =>
+                answered.foreach(c =>
+                  t ! Topic.Publish(
+                    DemandLivenessMonitor.CategoryAuctionReport(siteId.value, c, answered = true)))
+                silent.foreach(c =>
+                  t ! Topic.Publish(
+                    DemandLivenessMonitor.CategoryAuctionReport(siteId.value, c, answered = false)))
+              }
               val candidates = for {
                 r <- responses
                 campaignBid <- r.campaigns

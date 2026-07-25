@@ -50,12 +50,19 @@ object ClusterBootstrap {
         "budget-events-topic"
       )
 
-      Refs(campaignChanged, budgetEvent)
+      val categoryLiveness = context.spawn(
+        Topic[promovolve.auction.DemandLivenessMonitor.CategoryAuctionReport]("category-liveness"),
+        "category-liveness-topic"
+      )
+
+      Refs(campaignChanged, budgetEvent, categoryLiveness)
     }
 
     case class Refs(
         campaignChanged: ActorRef[Topic.Command[CampaignEntity.CampaignChanged]],
-        budgetEvent: ActorRef[Topic.Command[BudgetEvent]]
+        budgetEvent: ActorRef[Topic.Command[BudgetEvent]],
+        categoryLiveness: ActorRef[
+          Topic.Command[promovolve.auction.DemandLivenessMonitor.CategoryAuctionReport]]
     )
   }
 
@@ -72,11 +79,17 @@ object ClusterBootstrap {
     )(using ExecutionContext): Refs = {
       system.log.info("Initializing cluster singletons...")
 
+      UnhandledMessageReporter.init(system)
+
       val campaignDirectory = CampaignDirectory.singletonInit(
         system,
         sharding,
         topics.campaignChanged
       )
+
+      // Outcome-level clog detector: warns when a demand-bearing category
+      // stays silent across auctions, whatever the mechanism.
+      promovolve.auction.DemandLivenessMonitor.singletonInit(system, topics.categoryLiveness)
 
       val categoryRegistry = CategoryRegistry.init(system)
 
@@ -133,12 +146,16 @@ object ClusterBootstrap {
     ): Refs = {
       system.log.info("Initializing singleton proxies...")
 
+      UnhandledMessageReporter.init(system)
+
       // These will be proxies since this node doesn't have singleton role
       val campaignDirectory = CampaignDirectory.singletonInit(
         system,
         sharding,
         topics.campaignChanged
       )
+
+      promovolve.auction.DemandLivenessMonitor.singletonInit(system, topics.categoryLiveness)
 
       val categoryRegistry = CategoryRegistry.init(system)
 
@@ -411,7 +428,8 @@ object ClusterBootstrap {
           topics.campaignChanged,
           settings = settings,
           affinityRegistry = Some(affinityRegistry),
-          campaignDirectory = Some(campaignDirectory)
+          campaignDirectory = Some(campaignDirectory),
+          livenessTopic = Some(topics.categoryLiveness)
         )
       }.withEntityProps(DispatcherSelector.fromConfig("auction-dispatcher")))
     }

@@ -214,6 +214,18 @@ private final class CategoryBidderEntity(
         case scala.util.Success(rows) => SeedLoaded(rows.toMap)
         case scala.util.Failure(e)    => SeedFailed(e.getMessage)
       }
+      // SEED DEADLINE: a hung seed query (starved pod, exhausted pool)
+      // used to leave this state stashing bid requests silently until
+      // stash overflow — an actor alive-but-unhandleable, the wedge
+      // shape. Fail open to an empty registry instead: the directory's
+      // per-minute reconcile push repopulates it. If the real seed (or
+      // this timer's twin) arrives after promotion, serving() drops the
+      // stale message safely.
+      ctx.scheduleOnce(
+        scala.concurrent.duration.DurationInt(10).seconds,
+        ctx.self,
+        SeedFailed("seed deadline (10s) exceeded — repo call still pending")
+      )
       Behaviors.receiveMessage {
         case SeedLoaded(seed) =>
           ctx.log.info(
