@@ -800,6 +800,11 @@ export class ExpandableMagazineBanner extends HTMLElement {
     const tempo = this.paperFeel().tempo;
     const flyMs = Math.round(360 * tempo);
     const flyStagger = Math.round(90 * tempo);
+    // Chrome leaves FIRST, then the sheets: the pill's 120ms exit fade
+    // (paper.ts .last-flight) completes inside this beat, so no button
+    // hovers over a departing sheet — the close reads as an ordered
+    // farewell, not chrome dissolving mid-flight.
+    const chromeBeat = 140;
     flyers.forEach((el, k) => {
       el.animate(
         [
@@ -811,10 +816,15 @@ export class ExpandableMagazineBanner extends HTMLElement {
         ],
         // Same tempo as the deal-in, scaled by paper mass — the pile
         // leaves at the speed it arrived, and heavy stock moves slower.
-        { duration: flyMs, delay: k * flyStagger, easing: "cubic-bezier(0.5, 0, 0.8, 0.4)", fill: "forwards" },
+        {
+          duration: flyMs,
+          delay: chromeBeat + k * flyStagger,
+          easing: "cubic-bezier(0.5, 0, 0.8, 0.4)",
+          fill: "forwards",
+        },
       );
     });
-    setTimeout(() => this._collapse(), flyMs + (flyers.length - 1) * flyStagger + 40);
+    setTimeout(() => this._collapse(), chromeBeat + flyMs + (flyers.length - 1) * flyStagger + 40);
   }
 
   /** Send the last sheet away with the same lift-and-slide the drag
@@ -1604,6 +1614,12 @@ export class ExpandableMagazineBanner extends HTMLElement {
       });
       overlay.addEventListener("touchend", (e) => {
         if (e.composedPath().includes(closeX)) return;
+        schedulePill(900);
+      });
+      // A gesture the browser takes over (system edge-swipe, pinch,
+      // long-press menu) ends in touchcancel, not touchend — without
+      // this the touchstart hide sticks and the pill never returns.
+      overlay.addEventListener("touchcancel", () => {
         schedulePill(900);
       });
       setPill(false);

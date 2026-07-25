@@ -175,12 +175,17 @@ export const PAPER_CSS = `
    * the moment the 3rd sheet is grabbed or the close pill is clicked;
    * removed if the drag cancels and the sheet lands back. */
   .overlay.last-flight .close-pill,
+  .overlay.last-flight .mobile-close-x,
+  .overlay.last-flight .swipe-hint,
   .overlay.last-flight .nav-prev,
   .overlay.last-flight .nav-next,
   .overlay.last-flight .page-counter {
     opacity: 0 !important;
     pointer-events: none !important;
-    transition: opacity 160ms ease;
+    /* !important so the mobile pill's inline 0.3s hide/show transition
+     * can't slow the exit — chrome must be gone inside the beat
+     * closeViaFlight waits before the sheets fly. */
+    transition: opacity 120ms ease !important;
   }
 
   /* Fine grain over the whole composition. mix-blend-mode:overlay
