@@ -81,7 +81,13 @@ object CampaignEntity {
   )(using system: ActorSystem[?], ec: ExecutionContext): Behavior[Command] =
     Behaviors.setup { ctx =>
       Behaviors.withTimers { timers =>
-        given askTimeout: Timeout = Timeout(500.millis)
+        // Third rung of the auction timeout ladder: auctioneer 800ms >
+        // category-bidder 550ms > this 300ms. The advertiser ask must
+        // resolve (or fail → we still reply, with empty creatives) early
+        // enough that the campaign's reply fits inside the bidder's
+        // window — at the old 500ms a dead advertiser pushed the reply
+        // past everything upstream.
+        given askTimeout: Timeout = Timeout(300.millis)
 
         val advertiserRef = sharding.entityRefFor(AdvertiserEntity.TypeKey, advertiserId.value)
 
@@ -1435,7 +1441,23 @@ object CampaignEntity {
                 budgetManagement(state)).orElse(
                 lifecycle(state))
 
-            handlers(command)
+            // applyOrElse, not apply: a (state, command) pair no partial
+            // covers used to MatchError → entity failure → stop — the
+            // crash-family that killed CategoryBidders in the seed-race
+            // incident. Survive it, and let Effect.unhandled publish
+            // UnhandledMessage so the reporter names it at WARN.
+            handlers.applyOrElse(
+              command,
+              (c: Command) => {
+                ctx.log.warn(
+                  "Campaign[{}] unhandled command {} in status={} — dropped (no handler for this state)",
+                  campaignId.value,
+                  c.getClass.getSimpleName,
+                  state.status
+                )
+                Effect.unhandled
+              }
+            )
           }
         ).receiveSignal { case (state, RecoveryCompleted) =>
           ctx.log.info(

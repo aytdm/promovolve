@@ -52,7 +52,12 @@ object CategoryBidderEntity {
       entityId: String, // Compound ID like "IAB1|2" (category|shardIndex)
       sharding: ClusterSharding,
       categoryDemandRepo: CategoryDemandRepo,
-      askTimeout: FiniteDuration = 800.millis,
+      // MUST be strictly below AuctioneerEntity.Settings.askTimeout (800ms):
+      // this window starts a hop later, so an equal budget meant one silent
+      // campaign pushed the bidder's partial reply past the auctioneer's
+      // window — the whole category silently vanished from the auction.
+      // 550ms leaves ~250ms of hop/mailbox margin for the partial to land.
+      askTimeout: FiniteDuration = 550.millis,
       cpmThresholdPct: Double = 0.80, // Return campaigns within 80% of winner (widened: quality-adjusted pricing handles diverse bids)
       maxCampaignsPerCategory: Int = 50 // Limit campaigns to bound downstream creative evaluation
   ): Behavior[Command] =
