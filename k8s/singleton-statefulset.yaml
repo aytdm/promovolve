@@ -141,10 +141,14 @@ spec:
             failureThreshold: 6
           resources:
             requests:
-              # 250m: this pod is idle-by-design (no api role, no serve path —
-              # just the cluster singletons). The c4a-standard-4 node only has
-              # ~800m of unrequested CPU with both api pods at 1000m.
-              cpu: "250m"
+              # 500m (was 250m): "idle-by-design" turned out false — this pod
+              # carries the "entity" role (load-bearing: sharding-state quorum
+              # is 3 entity nodes), so shard rebalances legally park bidders/
+              # campaigns/ad-servers here. At 250m, that latency turned into
+              # the 11h silent Bidder[497|0] outage (2026-07-25) under the
+              # then-flat timeout ladders. 500m doubles its scheduling weight
+              # while leaving ~350m headroom for the backup cron jobs.
+              cpu: "500m"
               memory: 1024Mi
             limits:
               memory: 2048Mi
