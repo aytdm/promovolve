@@ -417,6 +417,24 @@ object SiteEntity {
             (floors, snaps, decisions)
           }
 
+          // WAVE DAMPENING: last per-category floor map pushed to the
+          // auctioneer. Floors are stable for hours, but they used to be
+          // pushed EVERY observation tick, and every push triggered a full
+          // site re-auction — so all sites re-auctioned in the same second
+          // once a minute, and the synchronized queue spike was what made
+          // bid-chain latency a lottery (the 2s JRA replies, 2026-07-25).
+          // Now: push only when the map actually changed. A restarted
+          // auctioneer still gets the current map via AuctioneerStarted.
+          var lastPushedCategoryFloors: Option[Map[String, CPM]] = None
+
+          def pushCategoryFloorsIfChanged(floors: Map[String, CPM]): Unit =
+            if (!lastPushedCategoryFloors.contains(floors)) {
+              lastPushedCategoryFloors = Some(floors)
+              auctioneerRef ! AuctioneerEntity.UpdateCategoryFloors(
+                floors.map { case (k, v) => CategoryId(k) -> v }
+              )
+            }
+
           // Cached traffic ratio from AdServer (published via DData)
           var cachedTrafficRatio: Double = 1.0
           var cachedTrafficWarmedUp: Boolean = false
@@ -805,6 +823,14 @@ object SiteEntity {
                   "SiteEntity {} re-arming restarted auctioneer with {} admin slot floors",
                   siteId.value, adminMap.size)
                 auctioneerRef ! AuctioneerEntity.UpdateAdminSlotFloors(adminMap)
+                // Change-gated floor pushes mean a restarted auctioneer would
+                // otherwise wait for the next floor CHANGE — re-arm it with
+                // the current maps unconditionally on this handshake.
+                lastPushedCategoryFloors = Some(state.floorCpmByCategory)
+                auctioneerRef ! AuctioneerEntity.UpdateFloorCpm(state.floorCpm)
+                auctioneerRef ! AuctioneerEntity.UpdateCategoryFloors(
+                  state.floorCpmByCategory.map { case (k, v) => CategoryId(k) -> v }
+                )
                 // The page-classification cache (`lastPage`) is in-memory
                 // only too, and used to be replayed ONLY at SiteEntity's own
                 // recovery — an auctioneer incarnation spawned in between
@@ -1578,12 +1604,18 @@ object SiteEntity {
                   scaled.seconds
                 } else 15.minutes
               }
-            timers.startTimerAtFixedRate("floor-cpm-observation", FloorCpmObservationTick, floorObsInterval)
-            ctx.log.info("SiteEntity {} floor CPM sweep optimizer initialized (floor={}, obsInterval={})",
-              siteId.value, state.floorCpm.toDouble, floorObsInterval)
+            // Hash-staggered initial delay so sites don't tick in lockstep
+            // (they all arm timers within the same post-roll seconds and
+            // then stay phase-locked forever — the other half of the wave).
+            val obsSplay = (math.abs(siteId.value.hashCode) % floorObsInterval.toSeconds.max(1)).seconds
+            timers.startTimerAtFixedRate("floor-cpm-observation", FloorCpmObservationTick, obsSplay,
+              floorObsInterval)
+            ctx.log.info("SiteEntity {} floor CPM sweep optimizer initialized (floor={}, obsInterval={}, splay={})",
+              siteId.value, state.floorCpm.toDouble, floorObsInterval, obsSplay)
 
-            // Start periodic demand category refresh
-            timers.startTimerWithFixedDelay("refresh-demand", RefreshDemandCategories, 5.minutes)
+            // Start periodic demand category refresh (staggered likewise)
+            timers.startTimerWithFixedDelay("refresh-demand", RefreshDemandCategories,
+              (math.abs(siteId.value.hashCode) % 300).seconds, 5.minutes)
             refreshDemandCategories()
           // STRIPPED: on-recovery bootstrap crawl. Under on-demand classification
           // we do NOT proactively crawl — a recovered site's lastPage is already

@@ -1593,7 +1593,14 @@ private final class AuctioneerEntity private (
     Behaviors.withTimers { timers =>
       _timers = Some(timers)
       // Start a periodic reauction timer
-      timers.startTimerAtFixedRate(PeriodicReauction, cfg.reauctionInterval)
+      // Hash-staggered so sites' periodic re-auctions spread across the
+      // interval instead of stacking in one synchronized wave.
+      timers.startTimerAtFixedRate(
+        PeriodicReauction,
+        PeriodicReauction,
+        (math.abs(siteId.value.hashCode) % cfg.reauctionInterval.toSeconds.max(1)).seconds,
+        cfg.reauctionInterval
+      )
 
       // Start a cleanup timer (classification-freshness: remove stale classifications)
       timers.startTimerAtFixedRate(CleanupStaleContent, cfg.cleanupInterval)
