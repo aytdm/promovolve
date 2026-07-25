@@ -51,6 +51,20 @@
       </p>
     </div>
 
+    <div>
+      <label class="form-label">{{t "Display currency"}}</label>
+      <select name="displayCurrency" class="form-input w-full">
+        <option value="" {{if not .User.DisplayCurrency}}selected{{end}}>USD ($)</option>
+        {{$cur := .User.DisplayCurrency}}
+        {{range .Currencies}}
+        <option value="{{.}}" {{if eq . $cur}}selected{{end}}>{{.}}</option>
+        {{end}}
+      </select>
+      <p class="text-xs text-gray-400 mt-1">
+        {{t "Display only: amounts marked ≈ are converted at the day's reference rate. All billing, budgets, and auction prices are in USD."}}
+      </p>
+    </div>
+
     {{if .LandingSides}}
     <div>
       <label class="form-label">{{t "Sign-in lands on"}}</label>

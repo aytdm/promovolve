@@ -17,7 +17,7 @@
 <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
   <div class="card card-tight">
     <p class="text-xs text-gray-500">{{t "Spend"}}</p>
-    <p class="text-xl font-semibold mt-1">${{$r.Totals.SpendDisp}}</p>
+    <p class="text-xl font-semibold mt-1">{{cur $.Cur $r.Totals.SpendDisp}}</p>
   </div>
   <div class="card card-tight">
     <p class="text-xs text-gray-500">{{t "Impressions"}}</p>
@@ -38,7 +38,7 @@
   </div>
   <div class="card card-tight">
     <p class="text-xs text-gray-500">{{t "eCPM"}}</p>
-    <p class="text-xl font-semibold mt-1">${{$r.Totals.ECPM}}</p>
+    <p class="text-xl font-semibold mt-1">{{cur $.Cur $r.Totals.ECPM}}</p>
   </div>
 </div>
 
@@ -172,8 +172,8 @@
           <td class="py-2 pr-4 text-right">{{$row.Clicks}}</td>
           <td class="py-2 pr-4 text-right">{{$row.CTR}}</td>
           <td class="py-2 pr-4 text-right">{{$row.CTAClicks}}</td>
-          <td class="py-2 pr-4 text-right">${{$row.SpendDisp}}</td>
-          <td class="py-2 text-right">${{$row.ECPM}}</td>
+          <td class="py-2 pr-4 text-right">{{cur $.Cur $row.SpendDisp}}</td>
+          <td class="py-2 text-right">{{cur $.Cur $row.ECPM}}</td>
         </tr>
         {{end}}
         {{if $g.ShowSubtotal}}
@@ -184,8 +184,8 @@
           <td class="py-1.5 pr-4 text-right text-xs font-medium">{{$g.Subtotal.Clicks}}</td>
           <td class="py-1.5 pr-4 text-right text-xs font-medium">{{$g.Subtotal.CTR}}</td>
           <td class="py-1.5 pr-4 text-right text-xs font-medium">{{$g.Subtotal.CTAClicks}}</td>
-          <td class="py-1.5 pr-4 text-right text-xs font-medium">${{$g.Subtotal.SpendDisp}}</td>
-          <td class="py-1.5 text-right text-xs font-medium">${{$g.Subtotal.ECPM}}</td>
+          <td class="py-1.5 pr-4 text-right text-xs font-medium">{{cur $.Cur $g.Subtotal.SpendDisp}}</td>
+          <td class="py-1.5 text-right text-xs font-medium">{{cur $.Cur $g.Subtotal.ECPM}}</td>
         </tr>
         {{end}}
         {{end}}
@@ -337,8 +337,8 @@
         <td class="py-2 pr-4 text-right">{{$row.Clicks}}</td>
         <td class="py-2 pr-4 text-right">{{$row.CTR}}</td>
         <td class="py-2 pr-4 text-right">{{$row.CTAClicks}}</td>
-        <td class="py-2 pr-4 text-right">${{$row.SpendDisp}}</td>
-        <td class="py-2 text-right">${{$row.ECPM}}</td>
+        <td class="py-2 pr-4 text-right">{{cur $.Cur $row.SpendDisp}}</td>
+        <td class="py-2 text-right">{{cur $.Cur $row.ECPM}}</td>
         {{if $.CanBlock}}
         <td class="py-2 pl-4 text-right">
           {{if and (eq $i 0) $g.BlockDomain}}
@@ -359,8 +359,8 @@
         <td class="py-1.5 pr-4 text-right text-xs font-medium">{{$g.Subtotal.Clicks}}</td>
         <td class="py-1.5 pr-4 text-right text-xs font-medium">{{$g.Subtotal.CTR}}</td>
         <td class="py-1.5 pr-4 text-right text-xs font-medium">{{$g.Subtotal.CTAClicks}}</td>
-        <td class="py-1.5 pr-4 text-right text-xs font-medium">${{$g.Subtotal.SpendDisp}}</td>
-        <td class="py-1.5 text-right text-xs font-medium">${{$g.Subtotal.ECPM}}</td>
+        <td class="py-1.5 pr-4 text-right text-xs font-medium">{{cur $.Cur $g.Subtotal.SpendDisp}}</td>
+        <td class="py-1.5 text-right text-xs font-medium">{{cur $.Cur $g.Subtotal.ECPM}}</td>
         {{if $.CanBlock}}<td></td>{{end}}
       </tr>
       {{end}}
@@ -416,8 +416,8 @@
         <td class="py-2 pr-4 text-right">{{.Clicks}}</td>
         <td class="py-2 pr-4 text-right">{{.CTR}}</td>
         <td class="py-2 pr-4 text-right">{{.CTAClicks}}</td>
-        <td class="py-2 pr-4 text-right">${{.SpendDisp}}</td>
-        <td class="py-2 {{if $.ShowConv}}pr-4 {{end}}text-right">${{.ECPM}}</td>
+        <td class="py-2 pr-4 text-right">{{cur $.Cur .SpendDisp}}</td>
+        <td class="py-2 {{if $.ShowConv}}pr-4 {{end}}text-right">{{cur $.Cur .ECPM}}</td>
         {{if $.ShowConv}}
         <td class="py-2 pr-4 text-right">{{if .Conversions}}{{.Conversions}}{{else}}<span class="text-gray-300">—</span>{{end}}</td>
         <td class="py-2 pr-4 text-right">{{.CPA}}</td>

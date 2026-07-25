@@ -37,6 +37,11 @@ type User struct {
 	Timezone string `json:"timezone,omitempty"`
 	// Dashboard language ("en"/"ja"; "" = auto, follow Accept-Language).
 	Locale string `json:"locale,omitempty"`
+	// Display currency for money shown in dashboards ("" = USD). Purely a
+	// rendering preference: books, auctions, floors, and every input stay
+	// USD; conversion is informational, at the day's reference rate, and
+	// always labeled as approximate.
+	DisplayCurrency string `json:"displayCurrency,omitempty"`
 	AdvertiserID *string `json:"advertiserId,omitempty"`
 	PublisherID  *string `json:"publisherId,omitempty"`
 	// RequestedSide is the side a pending account request asked for — the

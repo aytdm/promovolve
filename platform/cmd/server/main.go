@@ -16,6 +16,7 @@ import (
 	"github.com/hanishi/promovolve/platform/internal/audit"
 	"github.com/hanishi/promovolve/platform/internal/auth"
 	"github.com/hanishi/promovolve/platform/internal/billing"
+	"github.com/hanishi/promovolve/platform/internal/fx"
 	"github.com/hanishi/promovolve/platform/internal/config"
 	"github.com/hanishi/promovolve/platform/internal/db"
 	"github.com/hanishi/promovolve/platform/internal/handler"
@@ -117,6 +118,9 @@ func main() {
 	defer stopSettler()
 	go settler.Run(settleCtx)
 
+	fxSvc := fx.NewService(pool)
+	fxSvc.Start(context.Background())
+
 	h := handler.New(handler.Deps{
 		CoreAPIURL:      cfg.CoreAPIURL,
 		BannerScriptURL: cfg.BannerScriptURL,
@@ -131,6 +135,7 @@ func main() {
 		AuditRepo:       auditRepo,
 		Settler:         settler,
 		OrgCore:         coreInternal,
+		FxSvc:           fxSvc,
 		DevAuth:         cfg.DevAuth,
 		SecureCookies:   cfg.RPID != "localhost",
 	})

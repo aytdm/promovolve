@@ -861,6 +861,9 @@ var ja = map[string]string{
 
 	// ── publisher Go-side: flash + status lines ──
 	"could not load pending site requests":                                        "審査待ちのサイト申請を読み込めませんでした",
+	"Display currency":                                                           "表示通貨",
+	"Display only: amounts marked ≈ are converted at the day's reference rate. All billing, budgets, and auction prices are in USD.": "表示のみ:≈付きの金額は当日の参考レートによる換算です。請求・予算・オークション価格はすべて米ドル建てです。",
+	"Amounts marked ≈ are converted from USD at the daily reference rate of %s (1 USD = %s %s). All billing, budgets, and auction prices are in USD.": "≈付きの金額は %s の参考レート(1米ドル = %s %s)で米ドルから換算した概算です。請求・予算・オークション価格はすべて米ドル建てです。",
 	"%s is already registered":                                                    "%s はすでに登録されています",
 	"%s is already registered to another publisher":                               "%s はすでに別のパブリッシャーに登録されています",
 	"a request for %s is already awaiting approval":                               "%s の申請はすでに承認待ちです",

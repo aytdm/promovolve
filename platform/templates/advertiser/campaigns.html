@@ -25,7 +25,7 @@
 <div class="grid grid-cols-4 gap-4 mb-6">
   <div class="bg-white p-4 rounded-lg border">
     <p class="text-xs text-gray-500 uppercase tracking-wide">{{t "Today's Spend"}}</p>
-    <p class="text-2xl font-semibold mt-1">{{if .AdvBudget}}${{.AdvBudget.SpendToday}}{{else}}$0.00{{end}}</p>
+    <p class="text-2xl font-semibold mt-1">{{if .AdvBudget}}{{cur $.Cur .AdvBudget.SpendToday}}{{else}}{{cur $.Cur 0.0}}{{end}}</p>
   </div>
   <div class="bg-white p-4 rounded-lg border">
     <p class="text-xs text-gray-500 uppercase tracking-wide">{{t "Campaigns"}}</p>
@@ -301,8 +301,8 @@
       <!-- Budget bar -->
       <div class="w-32">
         <div class="flex justify-between text-xs text-gray-500 mb-1">
-          <span>${{.SpendToday}}</span>
-          <span>${{.DailyBudget}}</span>
+          <span>{{cur $.Cur .SpendToday}}</span>
+          <span>{{cur $.Cur .DailyBudget}}</span>
         </div>
         <div class="h-1.5 bg-gray-200 rounded-full">
           <div class="h-full rounded-full {{if gt .BudgetPct 90.0}}bg-red-500{{else if gt .BudgetPct 70.0}}bg-amber-500{{else}}bg-green-500{{end}}"

@@ -83,7 +83,7 @@
       </div>
       <div>
         <p class="text-xs text-gray-500">{{t "Spend"}}</p>
-        <p class="text-xl font-semibold">${{if .SpendToday}}{{.SpendToday}}{{else}}0.00{{end}} / ${{if .DailyBudget}}{{.DailyBudget}}{{else}}0.00{{end}}</p>
+        <p class="text-xl font-semibold">{{if .SpendToday}}{{cur $.Cur .SpendToday}}{{else}}{{cur $.Cur 0.0}}{{end}} / {{if .DailyBudget}}{{cur $.Cur .DailyBudget}}{{else}}{{cur $.Cur 0.0}}{{end}}</p>
       </div>
       <div>
         <p class="text-xs text-gray-500">{{t "Budget Used"}}</p>

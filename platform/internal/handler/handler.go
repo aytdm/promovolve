@@ -23,6 +23,7 @@ import (
 	"github.com/hanishi/promovolve/platform/internal/audit"
 	"github.com/hanishi/promovolve/platform/internal/auth"
 	"github.com/hanishi/promovolve/platform/internal/billing"
+	"github.com/hanishi/promovolve/platform/internal/fx"
 	"github.com/hanishi/promovolve/platform/internal/i18n"
 	"github.com/hanishi/promovolve/platform/internal/model"
 	"github.com/hanishi/promovolve/platform/internal/org"
@@ -90,6 +91,9 @@ type Handler struct {
 	// orgCore reaches the core /v1/internal endpoints for the operator
 	// org suspend/resume cascade.
 	orgCore *billing.HTTPCoreClient
+	// fxSvc provides daily USD-base reference rates for DISPLAY-ONLY
+	// currency conversion (nil-safe: absent = everything renders USD).
+	fxSvc *fx.Service
 	// devAuth mirrors config.DevAuth: renders the legacy password forms and
 	// accepts password POSTs on /login. Never true in production.
 	devAuth bool
@@ -115,6 +119,7 @@ type Deps struct {
 	// OrgCore reaches the core's /v1/internal endpoints (X-Internal-Key) for
 	// the org suspend/resume cascade — the operator-privileged channel.
 	OrgCore       *billing.HTTPCoreClient
+	FxSvc         *fx.Service
 	DevAuth       bool
 	SecureCookies bool
 }
@@ -141,6 +146,27 @@ type UserService interface {
 }
 
 var funcMap = template.FuncMap{
+	// cur renders a USD amount in the request's display currency (see
+	// CurrencyCtx on pageData): {{cur $.Cur .SpendToday}}. Accepts float64
+	// or a numeric string (several handlers pre-format amounts as strings).
+	"cur": func(c *CurrencyCtx, v any) string {
+		switch x := v.(type) {
+		case float64:
+			return curFormat(c, x)
+		case int:
+			return curFormat(c, float64(x))
+		case int64:
+			return curFormat(c, float64(x))
+		case string:
+			f, err := strconv.ParseFloat(strings.TrimPrefix(strings.TrimSpace(x), "$"), 64)
+			if err != nil {
+				return x
+			}
+			return curFormat(c, f)
+		default:
+			return ""
+		}
+	},
 	// asset builds a version-stamped /static URL (see staticVersion).
 	"asset": func(name string) string {
 		return "/static/" + name + "?v=" + staticVersion
@@ -198,6 +224,63 @@ var funcMap = template.FuncMap{
 	},
 }
 
+// currencyCtx resolves the display-currency context for a user. USD (or an
+// unavailable rate) yields Convert=false — amounts render exactly as booked.
+func (h *Handler) currencyCtx(u *model.User) *CurrencyCtx {
+	code := ""
+	if u != nil {
+		code = u.DisplayCurrency
+	}
+	if code == "" || code == "USD" || h.fxSvc == nil {
+		return &CurrencyCtx{Code: "USD", Rate: 1}
+	}
+	if r, ok := h.fxSvc.Get(code); ok && r.Rate > 0 {
+		return &CurrencyCtx{Code: code, Rate: r.Rate, Date: r.FetchedAt.Format("2006-01-02"), Convert: true}
+	}
+	return &CurrencyCtx{Code: "USD", Rate: 1}
+}
+
+// curFormat renders a USD amount in the context's display currency: "$8.00"
+// untouched for USD, "≈¥1,258" for converted (the ≈ is load-bearing — the
+// booked value is the USD one). Pure function of (ctx, amount) so it lives
+// in the shared parse-time funcMap.
+func curFormat(c *CurrencyCtx, usd float64) string {
+	if c == nil || !c.Convert {
+		return "$" + groupThousands(usd, 2)
+	}
+	decimals := 2
+	if fx.ZeroDecimal(c.Code) {
+		decimals = 0
+	}
+	return "≈" + fx.Symbol(c.Code) + groupThousands(usd*c.Rate, decimals)
+}
+
+// groupThousands formats with comma separators and fixed decimals.
+func groupThousands(v float64, decimals int) string {
+	s := strconv.FormatFloat(v, 'f', decimals, 64)
+	intPart := s
+	frac := ""
+	if i := strings.IndexByte(s, '.'); i >= 0 {
+		intPart, frac = s[:i], s[i:]
+	}
+	neg := strings.HasPrefix(intPart, "-")
+	if neg {
+		intPart = intPart[1:]
+	}
+	var b strings.Builder
+	for i, ch := range intPart {
+		if i > 0 && (len(intPart)-i)%3 == 0 {
+			b.WriteByte(',')
+		}
+		b.WriteRune(ch)
+	}
+	out := b.String() + frac
+	if neg {
+		out = "-" + out
+	}
+	return out
+}
+
 func New(d Deps) *Handler {
 	return &Handler{
 		coreAPIURL:      d.CoreAPIURL,
@@ -213,6 +296,7 @@ func New(d Deps) *Handler {
 		auditRepo:       d.AuditRepo,
 		settler:         d.Settler,
 		orgCore:         d.OrgCore,
+		fxSvc:           d.FxSvc,
 		devAuth:         d.DevAuth,
 		secureCookies:   d.SecureCookies,
 	}
@@ -301,11 +385,24 @@ func (h *Handler) lang(r *http.Request, u *model.User) string {
 	return i18n.Resolve(pref, r.Header.Get("Accept-Language"))
 }
 
+// CurrencyCtx is the per-request display-currency context, computed in
+// renderStatus from the user's preference + the fx service and carried on
+// pageData (template caches are per-language, so per-user state cannot be
+// bound into the funcmap). Convert=false means "render USD as-is" — either
+// the user chose USD or no rate is available (honest fallback).
+type CurrencyCtx struct {
+	Code    string  // "USD", "JPY", …
+	Rate    float64 // USD → Code multiplier (1 for USD)
+	Date    string  // rate date (YYYY-MM-DD), "" for USD
+	Convert bool
+}
+
 type pageData struct {
 	Title string
 	Nav   string
 	User  *model.User
 	Error string
+	Cur   *CurrencyCtx
 	// Billing (docs/design/BILLING.md Phase 4)
 	AdminBilling  *adminBillingData
 	AdminTopups   *adminTopupsData
@@ -438,6 +535,7 @@ type pageData struct {
 	// Preferences page
 	Saved        bool // "saved ✓" banner after a successful POST-redirect
 	Timezones    []string
+	Currencies   []string
 	LandingSide  string
 	LandingSides []string
 }
@@ -652,6 +750,9 @@ func (h *Handler) renderStatus(w http.ResponseWriter, r *http.Request, status in
 	// through untouched; already-translated strings miss the catalog and
 	// pass through unchanged, so this is safe to layer.
 	data.Title = i18n.T(lang, data.Title)
+	if data.Cur == nil {
+		data.Cur = h.currencyCtx(data.User)
+	}
 	t := getPage(lang, name)
 	if err := t.ExecuteTemplate(w, "layout", data); err != nil {
 		slog.Error("template render failed", "error", err, "template", name)
