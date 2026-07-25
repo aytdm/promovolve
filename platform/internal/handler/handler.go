@@ -235,7 +235,10 @@ func (h *Handler) currencyCtx(u *model.User) *CurrencyCtx {
 		return &CurrencyCtx{Code: "USD", Rate: 1}
 	}
 	if r, ok := h.fxSvc.Get(code); ok && r.Rate > 0 {
-		return &CurrencyCtx{Code: code, Rate: r.Rate, Date: r.FetchedAt.Format("2006-01-02"), Convert: true}
+		return &CurrencyCtx{
+			Code: code, Rate: r.Rate, Date: r.FetchedAt.Format("2006-01-02"),
+			Symbol: fx.Symbol(code), ZeroDec: fx.ZeroDecimal(code), Convert: true,
+		}
 	}
 	return &CurrencyCtx{Code: "USD", Rate: 1}
 }
@@ -394,6 +397,8 @@ type CurrencyCtx struct {
 	Code    string  // "USD", "JPY", …
 	Rate    float64 // USD → Code multiplier (1 for USD)
 	Date    string  // rate date (YYYY-MM-DD), "" for USD
+	Symbol  string  // display symbol ("¥"), for client-side live hints
+	ZeroDec bool    // currency conventionally shows no decimals (JPY, KRW)
 	Convert bool
 }
 

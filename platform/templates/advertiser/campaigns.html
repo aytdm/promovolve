@@ -233,13 +233,19 @@
     <div class="grid grid-cols-2 gap-4 mb-4">
       <div>
         <label class="form-label">{{t "Daily Budget ($)"}}</label>
+        <div {{if and $.Cur $.Cur.Convert}}x-data="{fxb:''}"{{end}}>
         <input type="number" name="budget" step="0.01" min="0.01" required placeholder="25.00"
-               class="form-input">
+               {{if and $.Cur $.Cur.Convert}}x-model="fxb"{{end}} class="form-input">
+        {{if and $.Cur $.Cur.Convert}}<p class="text-xs text-gray-400 mt-1" x-show="fxb>0" x-text="'≈{{$.Cur.Symbol}}'+(fxb*{{$.Cur.Rate}}).toLocaleString(undefined,{maximumFractionDigits:{{if $.Cur.ZeroDec}}0{{else}}2{{end}}})"></p>{{end}}
+        </div>
       </div>
       <div>
         <label class="form-label">{{t "Max CPM ($)"}}</label>
+        <div {{if and $.Cur $.Cur.Convert}}x-data="{fxc:''}"{{end}}>
         <input type="number" name="maxCpm" step="0.01" min="0.01" required placeholder="5.00"
-               class="form-input">
+               {{if and $.Cur $.Cur.Convert}}x-model="fxc"{{end}} class="form-input">
+        {{if and $.Cur $.Cur.Convert}}<p class="text-xs text-gray-400 mt-1" x-show="fxc>0" x-text="'≈{{$.Cur.Symbol}}'+(fxc*{{$.Cur.Rate}}).toLocaleString(undefined,{maximumFractionDigits:{{if $.Cur.ZeroDec}}0{{else}}2{{end}}})"></p>{{end}}
+        </div>
         <span data-hint-slot>{{template "market-rates-hint" $.MarketRates}}</span>
       </div>
     </div>
@@ -610,13 +616,19 @@
           <div class="grid grid-cols-2 gap-4 mb-4">
             <div>
               <label class="form-label">{{t "Daily Budget ($)"}}</label>
+              <div {{if and $.Cur $.Cur.Convert}}x-data="{fxb:'{{.DailyBudget}}'}"{{end}}>
               <input type="number" name="budget" step="0.01" min="0.01" value="{{.DailyBudget}}"
-                     class="form-input">
+                     {{if and $.Cur $.Cur.Convert}}x-model="fxb"{{end}} class="form-input">
+              {{if and $.Cur $.Cur.Convert}}<p class="text-xs text-gray-400 mt-1" x-show="fxb>0" x-text="'≈{{$.Cur.Symbol}}'+(fxb*{{$.Cur.Rate}}).toLocaleString(undefined,{maximumFractionDigits:{{if $.Cur.ZeroDec}}0{{else}}2{{end}}})"></p>{{end}}
+              </div>
             </div>
             <div>
               <label class="form-label">{{t "Max CPM ($)"}}</label>
+              <div {{if and $.Cur $.Cur.Convert}}x-data="{fxc:'{{.MaxCPM}}'}"{{end}}>
               <input type="number" name="maxCpm" step="0.01" min="0.01" value="{{.MaxCPM}}"
-                     class="form-input">
+                     {{if and $.Cur $.Cur.Convert}}x-model="fxc"{{end}} class="form-input">
+              {{if and $.Cur $.Cur.Convert}}<p class="text-xs text-gray-400 mt-1" x-show="fxc>0" x-text="'≈{{$.Cur.Symbol}}'+(fxc*{{$.Cur.Rate}}).toLocaleString(undefined,{maximumFractionDigits:{{if $.Cur.ZeroDec}}0{{else}}2{{end}}})"></p>{{end}}
+              </div>
               <span data-hint-slot>{{template "market-rates-hint" $.MarketRates}}</span>
             </div>
           </div>
