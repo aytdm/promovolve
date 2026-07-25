@@ -1602,6 +1602,18 @@ private final class AuctioneerEntity private (
         cfg.reauctionInterval
       )
 
+      // SETTLE RE-AUCTIONS: the startup auction fires within ~1s of entity
+      // registration events — usually BEFORE campaign quote broadcasts and
+      // bidder warm-ups have landed after a roll — so its snapshot can be
+      // missing demand. The old every-minute floor-push wave papered over
+      // this by rebuilding the index constantly; wave dampening removed
+      // that accidental healing (live regression 2026-07-25: a roll froze
+      // a JRA-less snapshot for the whole periodic interval). Two bounded
+      // one-shots wash the startup transient, then the periodic + change
+      // events take over.
+      timers.startSingleTimer("settle-reauction-1", PeriodicReauction, 90.seconds)
+      timers.startSingleTimer("settle-reauction-2", PeriodicReauction, 4.minutes)
+
       // Start a cleanup timer (classification-freshness: remove stale classifications)
       timers.startTimerAtFixedRate(CleanupStaleContent, cfg.cleanupInterval)
 
