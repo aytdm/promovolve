@@ -44,7 +44,15 @@ final case class Candidate(
     landingDomain: String = "",
     preApproved: Boolean = false, // Already approved for this publisher (skip pending queue)
     adProductCategory: Option[AdProductCategoryId] = None, // IAB Ad Product Taxonomy 2.0 category
-    maxCpm: CPM = CPM.zero // advertiser's max CPM (for ServeIndex/Thompson Sampling)
+    maxCpm: CPM = CPM.zero, // advertiser's max CPM (for ServeIndex/Thompson Sampling)
+    // How many taxonomy hops separate this bid's category from the page's
+    // OWN categories: 0 = the page carries the category natively; 1 = the
+    // campaign was reached via a direct parent; 2 = grandparent, etc.
+    // Ancestor fan-out is reach, not relevance — serve-time selection
+    // decays categoryScore by this distance so native demand outcompetes
+    // distant-ancestor demand (Food Industry → Business ads on a food
+    // page, 2026-07-25).
+    ancestorHops: Int = 0
 )
 
 final case class Selection(

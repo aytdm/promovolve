@@ -79,6 +79,13 @@ object CandidateLogic {
    */
   private val GeminiCategoryBoost = 1.15
 
+  /**
+   * Per-hop discount on categoryScore for ancestor-reached bids (see
+   * Candidate.ancestorHops). Reach stays intact — only the selection
+   * prior decays with taxonomy distance.
+   */
+  val AncestorAffinityDecay = 0.7
+
   /** Build CandidateView from candidate with creative and scores. */
   def buildCandidateView(
       candidate: Candidate,
@@ -96,7 +103,17 @@ object CandidateLogic {
     // 1.0 because downstream code treats categoryScore as a
     // probability-shaped prior for Thompson Sampling.
     val geminiMatch = creative.suggestedContentCategories.contains(candidate.category.value)
-    val score = if (geminiMatch) math.min(1.0, rawScore * GeminiCategoryBoost) else rawScore
+    // ANCESTOR DECAY: a bid reached via taxonomy ancestors (page carries
+    // "Food Industry", campaign targets grandparent "Business and
+    // Finance") used to score as if the page were natively about the
+    // ancestor — business/tech ads outcompeting food ads on food pages.
+    // Each hop of distance discounts the affinity prior, so native
+    // demand naturally wins selection and ancestor demand serves as
+    // backfill when nothing closer is available. 0.7^hops: parent 0.7×,
+    // grandparent 0.49× — strong enough to reorder, gentle enough that
+    // an ancestor bid still fills an otherwise-empty slot.
+    val distanceDecayed = rawScore * math.pow(AncestorAffinityDecay, candidate.ancestorHops)
+    val score = if (geminiMatch) math.min(1.0, distanceDecayed * GeminiCategoryBoost) else distanceDecayed
     if (geminiMatch && log.isDebugEnabled) {
       log.debug(
         "Gemini category boost: creative={} page-cat={} raw={} → boosted={} (suggested={})",

@@ -738,6 +738,21 @@ object SlickPendingSelectionStore {
     }
   }
 
-  given candidateFormat: JsonFormat[Candidate] = jsonFormat10(Candidate.apply)
+  // Candidate rows persist in pending_selection.selection_json, and spray's
+  // jsonFormatN rejects missing fields (it ignores case-class defaults —
+  // gotcha_spray_json_defaults). ancestorHops was added 2026-07-25, so rows
+  // written before then lack it: default it to 0 (native) on read instead
+  // of failing every pre-existing approval card.
+  given candidateFormat: JsonFormat[Candidate] = new JsonFormat[Candidate] {
+    private val base = jsonFormat11(Candidate.apply)
+    def write(c: Candidate): JsValue = base.write(c)
+    def read(json: JsValue): Candidate = {
+      val obj = json.asJsObject
+      val patched =
+        if (obj.fields.contains("ancestorHops")) obj
+        else JsObject(obj.fields + ("ancestorHops" -> JsNumber(0)))
+      base.read(patched)
+    }
+  }
   given selectionFormat: JsonFormat[Selection] = jsonFormat8(Selection.apply)
 }

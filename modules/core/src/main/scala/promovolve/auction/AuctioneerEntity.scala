@@ -57,6 +57,26 @@ object AuctioneerEntity {
   val TypeKey: EntityTypeKey[Command] =
     EntityTypeKey[Command]("auctioneer-entity")
 
+  /**
+   * Expand page-native categories to (themselves ∪ their taxonomy
+   * ancestors), keeping the MINIMUM hop distance for each: 0 = the page
+   * carries the category natively, 1 = direct parent, 2 = grandparent…
+   * A category reachable both natively and as someone's ancestor keeps
+   * distance 0. The distance is relevance metadata — fan-out itself
+   * remains distance-blind (every shard still gets asked).
+   */
+  def expandWithHops(pageCategories: List[String]): Map[String, Int] =
+    pageCategories
+      .flatMap { c =>
+        (c, 0) +:
+        promovolve.taxonomy.TieredCategory
+          .getAncestors(c)
+          .map(_.id)
+          .zipWithIndex
+          .map { case (id, i) => (id, i + 1) }
+      }
+      .groupMapReduce(_._1)(_._2)(math.min)
+
   def apply(
       siteId: SiteId,
       sharding: ClusterSharding,
@@ -1285,9 +1305,12 @@ private final class AuctioneerEntity private (
       // actually lives — never gets a request. Expanding here delivers the
       // bid request to every shard a parent-targeting campaign could be
       // registered under.
-      val expandedCandidates: List[String] = categoryCandidates.flatMap { c =>
-        c +: TieredCategory.getAncestors(c).map(_.id)
-      }.distinct
+      // Track the MINIMUM hop distance from any page-native category to
+      // each expanded category (native = 0, parent = 1, ...). The distance
+      // rides on every Candidate so serve-time selection can decay distant-
+      // ancestor demand instead of scoring it as if native.
+      val hopsByCategory: Map[String, Int] = AuctioneerEntity.expandWithHops(categoryCandidates)
+      val expandedCandidates: List[String] = hopsByCategory.keys.toList
       slots.foreach { slot =>
         val slotSizes = normalizeSizes((slot.declaredSizes :+ slot.computedSize).toSet)
         // Per-slot effective floor priority (most authoritative first):
@@ -1400,7 +1423,8 @@ private final class AuctioneerEntity private (
                 preApproved = false,
                 adProductCategory = campaignBid.adProductCategory,
                 landingDomain = campaignBid.landingDomain,
-                maxCpm = campaignBid.maxCpm
+                maxCpm = campaignBid.maxCpm,
+                ancestorHops = hopsByCategory.getOrElse(r.categoryId.value, 0)
               )
               val totalFloorRejects = responses.collect {
                 case r: CategoryBidResponse => r.rejectedByFloor
