@@ -2657,10 +2657,25 @@ private[delivery] class AdServer(
         val now = Instant.now()
         val updatedCache = spendInfoCache ++ fetchedInfo
         val currentCampaignSet = view.candidates.map(_.campaignId).toSet
-        if (fetchedInfo.isEmpty) {
-          // Fetch returned nothing — fail open, serve without pacing
-          // gating. Mirrors SpendInfoFetched's dummy path in the per-
-          // slot flow.
+        // The fetch may have covered only the campaigns the cache was
+        // missing — pacing aggregates must see the UNION of fetched and
+        // already-cached entries, not just this fetch's results.
+        val mergedInfos: Seq[(CampaignId, CachedSpendInfo)] =
+          view.candidates.map(_.campaignId).distinct.flatMap { campId =>
+            updatedCache.get(campId).map(info => (campId, info))
+          }
+        val stillMissing = currentCampaignSet -- mergedInfos.map(_._1)
+        if (stillMissing.nonEmpty) {
+          // Their asks timed out/failed. They stay ELIGIBLE (TryReserve is
+          // the money gate); they are merely absent from pacing aggregates
+          // until a later fetch or their own SpendUpdate lands.
+          log.warn("BATCH PACING: no spend info for {} campaign(s) after fetch, serving them ungated: {}",
+            stillMissing.size: java.lang.Integer, stillMissing.map(_.value).mkString(","))
+        }
+        if (mergedInfos.isEmpty) {
+          // Nothing cached AND nothing fetched — fail open, serve without
+          // pacing gating. Mirrors SpendInfoFetched's dummy path in the
+          // per-slot flow.
           log.warn("BATCH PACING: fetch returned no spend info, serving without gate ({} slots)",
             slots.size: java.lang.Integer)
           val pageKey = AdServer.pageWinnersKeyFor(siteId, url)
@@ -2694,7 +2709,7 @@ private[delivery] class AdServer(
             log.info("BATCH PACING: campaign mix changed, resetting PI")
             pacingStrategy.reset()
           }
-          val validInfos = fetchedInfo.toSeq
+          val validInfos = mergedInfos
           val cpmByCampaign = PacingLogic.computeCpmByCampaign(view.candidates)
           val (totalDailyBudget, totalTodaySpend, avgCpm) = PacingLogic.computeAggregateBudget(
             validInfos, cpmByCampaign, pendingSpendByCampaign
@@ -2744,10 +2759,9 @@ private[delivery] class AdServer(
             val h = validInfos.head._2
             CampaignEntity.SpendInfo(h.dailyBudget, h.todaySpend, h.dayStart)
           }
-          val eligibleCampIds = validInfos.map(_._1).toSet
-          val eligibleCandidates = if (requestPasses)
-            view.candidates.filter(c => eligibleCampIds.contains(c.campaignId))
-          else Vector.empty
+          // Site-level pass/no-pass only — never per-candidate presence
+          // filtering (see checkBatchPacingGate; TryReserve gates money).
+          val eligibleCandidates = if (requestPasses) view.candidates else Vector.empty
           val pageKey = AdServer.pageWinnersKeyFor(siteId, url)
           val pageBlocked: Set[String] = state.pageWinners.get(pageKey)
             .map(_.campaigns).getOrElse(Set.empty)
@@ -4537,16 +4551,25 @@ private[delivery] class AdServer(
     val validInfos: Seq[(CampaignId, CachedSpendInfo)] = uniqueCampaigns.flatMap { campId =>
       spendInfoCache.get(campId).map(info => (campId, info))
     }
+    val missingCampaigns: Set[CampaignId] =
+      currentCampaignSet -- validInfos.map(_._1)
 
-    if (validInfos.isEmpty) {
-      // Cache-miss path — fetch from CampaignEntity in parallel.
-      // Mirrors the per-slot fallback in `checkPacingGate`.
+    if (missingCampaigns.nonEmpty) {
+      // Cache-miss path — fetch from CampaignEntity in parallel, but ONLY
+      // for the campaigns the cache doesn't cover. This used to run only
+      // when the cache had NONE of the page's campaigns; a single cached
+      // campaign skipped the fetch and the presence filter below silently
+      // dropped every uncached candidate. Since the cache is populated by
+      // serving, a campaign that fell out (1h idle eviction / pod restart)
+      // could never serve again on any page where another campaign was
+      // still cached — pools thinned page by page until restart.
       // Serve-ladder rung: was 500ms — LARGER than the old 300ms upstream
       // window, so a cold-cache batch could never reply in time even when
       // every fetch succeeded. 250ms fits inside HTTP 800ms with the
       // reserve chain after it.
       given Timeout = Timeout(250.millis)
       val campaignRefs = view.candidates
+        .filter(c => missingCampaigns.contains(c.campaignId))
         .groupBy(c => (c.advertiserId, c.campaignId))
         .keys.toVector
       val futures: Vector[Future[(CampaignId, Option[CachedSpendInfo])]] =
@@ -4615,10 +4638,10 @@ private[delivery] class AdServer(
       )
       val throttle = pacingStrategy.throttleProbability(pacingCtx)
       val requestPasses = rng.nextDouble() >= throttle
-      val eligibleCampIds = validInfos.map(_._1).toSet
-      val eligibleCandidates = if (requestPasses)
-        view.candidates.filter(c => eligibleCampIds.contains(c.campaignId))
-      else Vector.empty
+      // Pacing is a site-level pass/no-pass; spend-info presence must never
+      // gate individual candidates (TryReserve at reservation time is the
+      // money gate). Reaching here means every campaign was cached anyway.
+      val eligibleCandidates = if (requestPasses) view.candidates else Vector.empty
       val pageKey = AdServer.pageWinnersKeyFor(siteId, url)
       val pageBlocked: Set[String] = pageWinners.get(pageKey)
         .map(_.campaigns).getOrElse(Set.empty)
