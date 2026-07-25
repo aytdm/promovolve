@@ -416,8 +416,9 @@ object Protocol {
   /** Notifies AdServer to refresh TTL for an advertiser's entries (used when budget exhausts) */
   final case class RefreshTTLForAdvertiser(advertiserId: AdvertiserId) extends Command
 
-  /** Notifies AdServer that a campaign's effective CPM changed due to RL bid multiplier adjustment */
-  final case class BidCpmChanged(campaignId: CampaignId, newCpm: CPM) extends Command
+  // BidCpmChanged (RL bid-multiplier era) removed 2026-07-25: zero producers
+  // since RL was dropped, and AdServer had NO handler — any future sender
+  // would have MatchError-crashed the entity (audit finding F3).
 
   // ==================== Internal Commands (pipeToSelf results) ====================
 
@@ -876,6 +877,13 @@ object Protocol {
       existingView: Option[ServeView], // Full view to preserve orphaned approved creatives
       authoritativeAbsent: Set[CampaignId]
   ) extends Command
+
+  /**
+   * Internal: the pre-Put ServeIndex read FAILED (timeout ≠ empty index) —
+   * this auction's index update is skipped so orphan preservation can't run
+   * against a phantom empty view. The next auction retries.
+   */
+  private[delivery] final case class ServeIndexLoadSkipped(slotKey: String) extends Command
 
   /** Internal: category scores fetched for processCandidates */
   private[delivery] final case class CandidateScoresFetched(

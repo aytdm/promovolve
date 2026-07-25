@@ -229,13 +229,15 @@ class AdServerBatchRetrySpec extends AnyWordSpec with Matchers with ScalaFutures
       winners should not contain "c1"
     }
 
-    "free a failed winner's campaign back to the pool for other slots via soft cap" in {
+    "keep a failed winner's campaign excluded for the rest of the batch (no double-reserve)" in {
       // Two slots, same size. Pool has two candidates from campaign A
-      // (c1, c2) and one from campaign B (c3). Initial assignment
-      // picks c1 for s1 (highest CPM) and, via soft cap on campA,
-      // c3 for s2 (despite lower raw score). If c1's reservation
-      // fails, campA is "unused" again — retry for s1 should be
-      // able to pick c2 (campA) since c3 is locked to s2.
+      // (c1, c2) and one from campaign B (c3). Initial assignment picks
+      // c1 for s1 and c3 for s2. c1's reservation FAILS — but a reserve
+      // timeout is not a reserve failure: CampaignEntity may have
+      // committed the reservation and replied into dead letters, so
+      // re-reserving c2 (same campaign A) could double-reserve one page
+      // load (2026-07-25 audit F6). Campaign A must sit out the rest of
+      // this batch: s1 ends with no winner, s2 keeps c3.
       val c1 = candidate("c1", "campA", 300, 250, cpm = 10.0)
       val c2 = candidate("c2", "campA", 300, 250, cpm = 8.0)
       val c3 = candidate("c3", "campB", 300, 250, cpm = 5.0)
@@ -250,9 +252,7 @@ class AdServerBatchRetrySpec extends AnyWordSpec with Matchers with ScalaFutures
         rng = seedRng()
       ).futureValue
       val winners = outcomes.flatMap(_.winner).map(_.creativeId.value).toSet
-      // s1 retries with c2 (campA — OK since c1's reservation failed
-      // → campA not actually locked). s2 has c3 confirmed.
-      winners shouldBe Set("c2", "c3")
+      winners shouldBe Set("c3")
     }
 
     "terminate when the pool is exhausted mid-retry without looping forever" in {

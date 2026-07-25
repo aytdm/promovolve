@@ -682,9 +682,15 @@ object AdServer {
 
           // Second pass: retry failed slots. Now lockedCreatives sees
           // every winner confirmed in this iteration.
+          //
+          // The failed campaign stays in `newUsed` (it used to be freed
+          // here): a reserve TIMEOUT is not a reserve FAILURE — the
+          // CampaignEntity may have committed the reservation and replied
+          // into dead letters. Re-picking another creative of the same
+          // campaign could double-reserve one page slot. The campaign
+          // sits out the rest of this batch; the next request retries it.
           val nextPicks = Vector.newBuilder[(Protocol.BatchSlotSpec, CandidateView, CPM)]
           for ((slot, cand) <- failures.result()) {
-            newUsed = newUsed - cand.campaignId.value
             val alreadyTried = newTried.getOrElse(slot.slotId, Set.empty) + cand.creativeId
             newTried = newTried.updated(slot.slotId, alreadyTried)
             val lockedCreatives = newConfirmed.flatMap(_.winner).map(_.creativeId).toSet
@@ -1891,16 +1897,34 @@ private[delivery] class AdServer(
           import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
           given Timeout = Timeout(300.millis)
           val viewFuture = serveIndex.ask[Option[ServeView]](ServeIndexDData.Get(slotKey, _))
-          ctx.pipeToSelf(viewFuture) { result =>
-            val existingView = result.toOption.flatten
-            val existingCreativeIds = existingView
-              .map(_.candidates.map(_.creativeId).toSet)
-              .getOrElse(Set.empty)
-            ServeIndexLoadedForCandidates(url, slotId, candidates, classifiedAt, ttl, slotKey, existingCreativeIds,
-              existingView, authoritativeAbsent)
+          // Capture logger for the future callback (never ctx off-thread).
+          val loadLog = log
+          ctx.pipeToSelf(viewFuture) {
+            case scala.util.Failure(ex) =>
+              // A TIMEOUT is not an EMPTY INDEX. Collapsing failure to None
+              // used to run orphan preservation against "nothing there",
+              // silently dropping approved-but-not-rebidding creatives from
+              // the slot. Skip this index update instead — the current view
+              // keeps serving and the next auction (≤1 min away) retries.
+              loadLog.warn(
+                "ServeIndex read failed for {} — skipping index update this auction (orphans preserved by inaction): {}",
+                slotKey, ex.getMessage
+              )
+              ServeIndexLoadSkipped(slotKey)
+            case scala.util.Success(existingView) =>
+              val existingCreativeIds = existingView
+                .map(_.candidates.map(_.creativeId).toSet)
+                .getOrElse(Set.empty)
+              ServeIndexLoadedForCandidates(url, slotId, candidates, classifiedAt, ttl, slotKey, existingCreativeIds,
+                existingView, authoritativeAbsent)
           }
           behavior(state.copy(participatingCampaigns = updatedParticipating))
         }
+
+      case ServeIndexLoadSkipped(_) =>
+        // Read-failed marker only — the WARN was logged at pipe time; the
+        // existing view keeps serving and the next auction retries the Put.
+        Behaviors.same
 
       case ServeIndexLoadedForCandidates(url, slotId, candidates, classifiedAt, ttl, slotKey, existingCreativeIds,
             existingView, authoritativeAbsent) =>
@@ -2481,7 +2505,11 @@ private[delivery] class AdServer(
                   behavior(newState)
                 } else {
                   import org.apache.pekko.actor.typed.scaladsl.AskPattern.*
-                  given Timeout = Timeout(300.millis)
+                  // Second rung of the serve ladder (HTTP 800ms > this).
+                  // At the old 300ms this was FLAT with the upstream ask —
+                  // one slow local index read consumed the caller's whole
+                  // budget and the reply dead-lettered.
+                  given Timeout = Timeout(150.millis)
                   // Fetch each slot's ServeView in parallel so the batch
                   // handler can score against whichever pool is populated.
                   // Unions the pools below by taking the first non-empty view
@@ -2652,6 +2680,12 @@ private[delivery] class AdServer(
           )
           behavior(state.copy(
             spendInfoCache = updatedCache,
+            // Stamp fetched entries too — entries born on this cache-miss
+            // path used to skip the timestamp map, making them invisible
+            // to cleanupStaleSpendCache: immortal, permanently stale
+            // budget numbers feeding the pacing gate.
+            spendInfoLastUpdated =
+              state.spendInfoLastUpdated ++ fetchedInfo.keys.map(_ -> now),
             lastRequestTimeMs = now.toEpochMilli
           ))
         } else {
@@ -2736,6 +2770,8 @@ private[delivery] class AdServer(
           behavior(state.copy(
             lastDayStart = Some(effectiveDayStart),
             spendInfoCache = updatedCache,
+            spendInfoLastUpdated =
+              state.spendInfoLastUpdated ++ fetchedInfo.keys.map(_ -> now),
             lastRequestTimeMs = now.toEpochMilli,
             lastCampaignSet = currentCampaignSet
           ))
@@ -4395,7 +4431,12 @@ private[delivery] class AdServer(
    * amount — but those are real served impressions, not phantom.)
    */
   private def batchReserveOne(candidate: CandidateView, clearingPrice: CPM, requestId: String): Future[Boolean] = {
-    given Timeout = Timeout(100.millis)
+    // 200ms PER ask, two chained asks → ≤400ms worst case, inside the
+    // HTTP 800ms anchor. The old 100ms could not cover a passivated
+    // entity's recovery or a cross-node hop under GC — the reserve
+    // silently failed (recover → false) and the slot forfeited to the
+    // next candidate, which is how a top bidder lost renders invisibly.
+    given Timeout = Timeout(200.millis)
     val baseCpm = clearingPrice.toDouble / 1000.0
     val spendAmount = Spend(baseCpm)
     val campaignRef = sharding.entityRefFor(
@@ -4500,7 +4541,11 @@ private[delivery] class AdServer(
     if (validInfos.isEmpty) {
       // Cache-miss path — fetch from CampaignEntity in parallel.
       // Mirrors the per-slot fallback in `checkPacingGate`.
-      given Timeout = Timeout(500.millis)
+      // Serve-ladder rung: was 500ms — LARGER than the old 300ms upstream
+      // window, so a cold-cache batch could never reply in time even when
+      // every fetch succeeded. 250ms fits inside HTTP 800ms with the
+      // reserve chain after it.
+      given Timeout = Timeout(250.millis)
       val campaignRefs = view.candidates
         .groupBy(c => (c.advertiserId, c.campaignId))
         .keys.toVector

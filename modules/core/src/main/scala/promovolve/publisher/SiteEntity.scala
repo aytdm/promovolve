@@ -688,10 +688,20 @@ object SiteEntity {
                   .persist(newState)
                   .thenRun { _ =>
                     publishPacingConfig(config.copy(bidWeight = state.bidWeight, floorCpm = state.floorCpm.toDouble))
-                    // Reschedule floor CPM observation with scaled interval
-                    val ds = config.dayDurationSeconds
-                    val interval =
-                      if (ds < 86400) math.max(5, (ds.toDouble / 86400.0 * 900).toInt).seconds else 15.minutes
+                    // Reschedule floor CPM observation with scaled interval.
+                    // MUST honor the same FLOOR_OBSERVATION_INTERVAL_SECONDS
+                    // env override the recovery path (and the GetCategoryFloors
+                    // dashboard mirror) uses — this path used to re-derive
+                    // purely from dayDurationSeconds, silently clobbering an
+                    // operator-set cadence on any pacing edit.
+                    val interval = sys.env.get("FLOOR_OBSERVATION_INTERVAL_SECONDS")
+                      .flatMap(s => scala.util.Try(s.trim.toInt).toOption)
+                      .filter(_ > 0)
+                      .map(_.seconds)
+                      .getOrElse {
+                        val ds = config.dayDurationSeconds
+                        if (ds < 86400) math.max(5, (ds.toDouble / 86400.0 * 900).toInt).seconds else 15.minutes
+                      }
                     timers.startTimerAtFixedRate("floor-cpm-observation", FloorCpmObservationTick, interval)
                     ctx.log.info("SiteEntity {} floor observation interval rescaled to {}", siteId.value, interval)
                   }
@@ -1047,7 +1057,22 @@ object SiteEntity {
                           }
                       }
 
-                    ctx.pipeToSelf(verifyF) {
+                    // Hard deadline on the whole fetch chain (2 candidates ×
+                    // 3 redirect hops + DNS fallback): a publisher server
+                    // that accepts and dribbles bytes kept this future alive
+                    // indefinitely (pekko-http idle-timeout resets per byte),
+                    // the dashboard ask timed out, and each retry click
+                    // stacked another concurrent crawl. 20s covers slow-but-
+                    // honest sites; the dashboard ask is 30s.
+                    val deadline = org.apache.pekko.pattern.after(
+                      20.seconds,
+                      ctx.system.classicSystem.scheduler
+                    )(scala.concurrent.Future.successful(
+                      VerificationCheckResult(success = false, host,
+                        Some("Verification timed out after 20s — site too slow to respond"), replyTo)))(
+                      ctx.executionContext)
+                    ctx.pipeToSelf(scala.concurrent.Future.firstCompletedOf(Seq(verifyF, deadline))(
+                      ctx.executionContext)) {
                       case Success(result) => result
                       case Failure(ex)     =>
                         VerificationCheckResult(success = false, host, Some(s"Verification failed: ${ex.getMessage}"),
@@ -1123,78 +1148,94 @@ object SiteEntity {
                 Effect.none
 
               case FloorCpmObservationTick =>
-                floorSweepOptimizer match {
-                  case Some(sweep) =>
-                    val hour = java.time.LocalTime.now().getHour
-                    val floorBefore = sweep.currentFloorCpm
-                    val observeResult = sweep.observe()
+                // Guard the whole tick: this handler runs the sweep, the
+                // per-category optimizers, and snapshot building. An
+                // exception escaping it stops the DurableStateBehavior,
+                // which CANCELS THE TIMERS — and on a low-traffic site the
+                // timers are the only inbound messages, so floors and
+                // demand refresh would stay dead until an unrelated message
+                // happened to respawn the shard. Skipping one tick is
+                // always safer than dying.
+                try floorSweepOptimizer match {
+                    case Some(sweep) =>
+                      val hour = java.time.LocalTime.now().getHour
+                      val floorBefore = sweep.currentFloorCpm
+                      val observeResult = sweep.observe()
 
-                    recordFloorObservation(FloorObservation(
-                      ts = java.time.Instant.now(),
-                      hour = hour,
-                      trafficShape = if (cachedTrafficWarmedUp) cachedTrafficRatio else 0.0,
-                      floorBefore = floorBefore,
-                      floorAfter = sweep.currentFloorCpm,
-                      epsilon = sweep.epsilon,
-                      observed = observeResult.isDefined,
-                      trainingLoss = None,
-                      slotOverrideCount = 0
-                    ))
+                      recordFloorObservation(FloorObservation(
+                        ts = java.time.Instant.now(),
+                        hour = hour,
+                        trafficShape = if (cachedTrafficWarmedUp) cachedTrafficRatio else 0.0,
+                        floorBefore = floorBefore,
+                        floorAfter = sweep.currentFloorCpm,
+                        epsilon = sweep.epsilon,
+                        observed = observeResult.isDefined,
+                        trainingLoss = None,
+                        slotOverrideCount = 0
+                      ))
 
-                    // Advance the per-category optimizers in lock-step with the
-                    // site-level sweep and fold their updates into the same
-                    // persist (shadow mode logs + persists; it does not push).
-                    val (catFloors, catSnaps, catDecisions) = observeAllCategories(state)
+                      // Advance the per-category optimizers in lock-step with the
+                      // site-level sweep and fold their updates into the same
+                      // persist (shadow mode logs + persists; it does not push).
+                      val (catFloors, catSnaps, catDecisions) = observeAllCategories(state)
 
-                    observeResult match {
-                      case Some(FloorSweepOptimizer.ObserveResult(newFloor, completedCycle)) =>
-                        val cpm = CPM(newFloor)
-                        ctx.log.info(
-                          "SiteEntity {} sweep floor CPM update: floor={} progress={}",
-                          siteId.value,
-                          f"$newFloor%.4f",
-                          f"${sweep.epsilon}%.3f"
-                        )
-                        val newState = state
-                          .withFloorCpm(cpm)
-                          .withFloorSweepSnapshot(sweep.snapshot())
-                          .withCategoryFloors(catFloors, catSnaps)
-                          .withRecentFloorObservations(recentFloorObservations)
-                        Effect.persist(newState).thenRun { _ =>
-                          auctioneerRef ! AuctioneerEntity.UpdateFloorCpm(cpm)
-                          // Enforce mode: push the learned per-category floors to
-                          // the auctioneer (bid collection) — it forwards them to
-                          // AdServer on CandidatesCollected for serve-time pricing.
-                          auctioneerRef ! AuctioneerEntity.UpdateCategoryFloors(
-                            newState.floorCpmByCategory.map { case (k, v) => CategoryId(k) -> v }
+                      observeResult match {
+                        case Some(FloorSweepOptimizer.ObserveResult(newFloor, completedCycle)) =>
+                          val cpm = CPM(newFloor)
+                          ctx.log.info(
+                            "SiteEntity {} sweep floor CPM update: floor={} progress={}",
+                            siteId.value,
+                            f"$newFloor%.4f",
+                            f"${sweep.epsilon}%.3f"
                           )
-                          publishPacingConfig(state.pacingConfig.copy(bidWeight = state.bidWeight,
-                            floorCpm = cpm.toDouble))
-                          // Journal completed-cycle decisions AFTER the persist:
-                          // a crash before the persist replays Init, which
-                          // re-derives the same payload — writing pre-persist
-                          // would double-write. Site-wide (None) + per-category.
-                          completedCycle.foreach(d => journalDecision(None, d))
-                          catDecisions.foreach { case (cat, d) => journalDecision(Some(cat), d) }
-                        }
-                      case None =>
-                        // Exploit phase tick — persist the updated snapshot
-                        // anyway so phase counters survive restart.
-                        val ns = state
-                          .withFloorSweepSnapshot(sweep.snapshot())
-                          .withCategoryFloors(catFloors, catSnaps)
-                          .withRecentFloorObservations(recentFloorObservations)
-                        Effect.persist(ns).thenRun { _ =>
-                          // Keep the auctioneer's per-category map fresh between
-                          // site-floor changes (per-category sweeps drift too).
-                          auctioneerRef ! AuctioneerEntity.UpdateCategoryFloors(
-                            ns.floorCpmByCategory.map { case (k, v) => CategoryId(k) -> v }
-                          )
-                          catDecisions.foreach { case (cat, d) => journalDecision(Some(cat), d) }
-                        }
-                    }
+                          val newState = state
+                            .withFloorCpm(cpm)
+                            .withFloorSweepSnapshot(sweep.snapshot())
+                            .withCategoryFloors(catFloors, catSnaps)
+                            .withRecentFloorObservations(recentFloorObservations)
+                          Effect.persist(newState).thenRun { _ =>
+                            auctioneerRef ! AuctioneerEntity.UpdateFloorCpm(cpm)
+                            // Enforce mode: push the learned per-category floors to
+                            // the auctioneer (bid collection) — it forwards them to
+                            // AdServer on CandidatesCollected for serve-time pricing.
+                            auctioneerRef ! AuctioneerEntity.UpdateCategoryFloors(
+                              newState.floorCpmByCategory.map { case (k, v) => CategoryId(k) -> v }
+                            )
+                            publishPacingConfig(state.pacingConfig.copy(bidWeight = state.bidWeight,
+                              floorCpm = cpm.toDouble))
+                            // Journal completed-cycle decisions AFTER the persist:
+                            // a crash before the persist replays Init, which
+                            // re-derives the same payload — writing pre-persist
+                            // would double-write. Site-wide (None) + per-category.
+                            completedCycle.foreach(d => journalDecision(None, d))
+                            catDecisions.foreach { case (cat, d) => journalDecision(Some(cat), d) }
+                          }
+                        case None =>
+                          // Exploit phase tick — persist the updated snapshot
+                          // anyway so phase counters survive restart.
+                          val ns = state
+                            .withFloorSweepSnapshot(sweep.snapshot())
+                            .withCategoryFloors(catFloors, catSnaps)
+                            .withRecentFloorObservations(recentFloorObservations)
+                          Effect.persist(ns).thenRun { _ =>
+                            // Keep the auctioneer's per-category map fresh between
+                            // site-floor changes (per-category sweeps drift too).
+                            auctioneerRef ! AuctioneerEntity.UpdateCategoryFloors(
+                              ns.floorCpmByCategory.map { case (k, v) => CategoryId(k) -> v }
+                            )
+                            catDecisions.foreach { case (cat, d) => journalDecision(Some(cat), d) }
+                          }
+                      }
 
-                  case None =>
+                    case None =>
+                      Effect.none
+                  }
+                catch {
+                  case scala.util.control.NonFatal(ex) =>
+                    ctx.log.error(
+                      "SiteEntity {} floor observation tick failed — skipping this window (timers stay alive): {}",
+                      siteId.value, ex.toString
+                    )
                     Effect.none
                 }
 

@@ -1088,6 +1088,18 @@ private final class AuctioneerEntity private (
       reauctionForCampaign(event.campaignId, "Campaign budget exhausted")
       Behaviors.same
 
+    case event: promovolve.CampaignEnded =>
+      // Published by CampaignEntity when the schedule's endAt passes. This
+      // used to fall into the silent catch-all: an ended campaign's
+      // ServeIndex entries lingered (and could serve) until the ~30min
+      // periodic re-auction. Evict now and re-auction its slots — unlike
+      // budget exhaustion this is terminal, not a state that resumes at
+      // day rollover.
+      ctx.log.info("🏁 CampaignEnded: campaign={} — evicting and re-auctioning", event.campaignId.value)
+      adServer ! AdServer.EvictCampaignFromSite(event.campaignId)
+      reauctionForCampaign(event.campaignId, "Campaign ended (schedule)")
+      Behaviors.same
+
     // Handle advertiser-level budget events (affects all campaigns for that advertiser)
     //
     // Why full re-auction instead of targeted?
@@ -1618,7 +1630,16 @@ private final class AuctioneerEntity private (
             }
             Behaviors.same
           case msg =>
-            pipeline.orElse(public).applyOrElse(msg, _ => Behaviors.same)
+            pipeline.orElse(public).applyOrElse(
+              msg,
+              (m: Messages) => {
+                // A silent catch-all hid genuinely unhandled subscribed
+                // events for weeks (CampaignEnded among them). Keep the
+                // total match (no MatchError → no entity stop) but say so.
+                ctx.log.debug("Auctioneer[{}] unhandled message {}", siteId.value, m.getClass.getSimpleName)
+                Behaviors.same
+              }
+            )
         }
         .receiveSignal { case (_, PostStop) =>
           // Unsubscribe from budget events (use ctx.self with union types)

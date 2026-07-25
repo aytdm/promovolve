@@ -500,7 +500,14 @@ final class ServeRoutes(
 
   private val BucketMs = 60 * 1000L
 
-  private given Timeout = Timeout(300.millis)
+  // Outer anchor of the SERVE timeout ladder. Everything inside AdServer's
+  // batch pipeline (index reads 150ms, cold spend fetch 250ms, reserve chain
+  // 2×200ms) must fit inside this window with margin. At the old 300ms the
+  // inner budgets were flat or INVERTED (spend fetch alone was 500ms): a
+  // cold-cache batch arithmetically could not reply in time, the tag saw a
+  // failed request, and the pipeline still committed reservations for a
+  // response nobody received.
+  private given Timeout = Timeout(800.millis)
 
   private given ExecutionContext = system.executionContext
 

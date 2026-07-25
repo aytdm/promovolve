@@ -197,7 +197,12 @@ object LPWorker {
       Behaviors.receiveMessage {
         case req: AnalyzeLP =>
           if (running.contains(req.url)) {
-            running.updateWith(req.url)(_.map(_.copy(startedAt = Instant.now())))
+            // Do NOT refresh startedAt here: a duplicate request restarting
+            // the staleness clock meant a HUNG analysis whose URL kept being
+            // re-requested (the editor auto-analyzes on open) was never
+            // evicted by SweepStale — with one slot per worker, the worker
+            // wedged permanently and the queue grew without bound. The
+            // original start time is the truth SweepStale needs.
             log.debug("LPWorker {} ignoring duplicate AnalyzeLP for in-flight {}", workerIndex, req.url)
           } else if (queuedUrls.contains(req.url)) {
             val pos = queue.indexWhere(_.url == req.url)

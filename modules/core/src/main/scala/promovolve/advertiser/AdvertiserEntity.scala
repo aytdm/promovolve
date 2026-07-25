@@ -145,7 +145,21 @@ object AdvertiserEntity {
           advertiserInfo(state, budgetEventTopic, ctx)).orElse(
           creativeManagement(state, budgetEventTopic, ctx)).orElse(
           ddataRetry(state, syncToDData, scheduleRetry, ctx))
-      handlers(cmd)
+      // applyOrElse, not apply: an uncovered Command is a MatchError →
+      // entity stop → every in-flight ask dead-letters (same trap fixed in
+      // CampaignEntity). All 22 subtypes are covered today; this guards the
+      // 23rd.
+      handlers.applyOrElse(
+        cmd,
+        (c: Command) => {
+          ctx.log.warn(
+            "Advertiser[{}] unhandled command {} — dropped",
+            state.advertiserId.value,
+            c.getClass.getSimpleName
+          )
+          Effect.unhandled
+        }
+      )
 
     case response: Replicator.UpdateResponse[?] =>
       response match {
@@ -185,6 +199,12 @@ object AdvertiserEntity {
       error,
       MaxDDataRetries
     )
+    // KNOWN LIMIT (2026-07-25 audit): every failure response restarts the
+    // ladder at attempt 1, so a PERSISTENTLY failing store retries forever
+    // (~2s cadence) and the exhaustion branch above only fires when the
+    // replicator never responds at all. Bounding this needs an attempt
+    // counter threaded through the response path; WriteLocal failures are
+    // rare enough that the churn is tolerable until then.
     scheduleRetry(1)
     Effect.none
   }
