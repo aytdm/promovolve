@@ -330,11 +330,11 @@
 
       <!-- CPM -->
       <div class="text-right text-sm w-20">
-        <p class="font-medium">${{if .MaxCPM}}{{.MaxCPM}}{{else}}&mdash;{{end}}</p>
+        <p class="font-medium">{{if .MaxCPM}}${{.MaxCPM}}{{if and $.Cur $.Cur.Convert}} <span class="font-normal text-gray-400 text-xs">({{cur $.Cur .MaxCPM}})</span>{{end}}{{else}}&mdash;{{end}}</p>
         <p class="text-xs text-gray-500">{{t "max CPM"}}</p>
       </div>
       <div class="text-right text-sm w-20">
-        <p class="font-medium">{{if .ECPM}}{{.ECPM}}{{else}}&mdash;{{end}}</p>
+        <p class="font-medium">{{if .ECPM}}{{cur $.Cur .ECPM}}{{else}}&mdash;{{end}}</p>
         <p class="text-xs text-gray-500">{{t "eCPM"}}</p>
       </div>
 

@@ -98,9 +98,9 @@
          gone — campaign-side RL was removed, and the handler never fed
          those fields; they always showed the placeholder values.) -->
     <div class="flex gap-8 text-sm text-gray-500 border-t pt-3">
-      <span>{{t "Effective CPM:"}} <strong class="text-gray-900">{{if .ECPM}}{{.ECPM}}{{else}}&mdash;{{end}}</strong></span>
-      <span>{{t "Lifetime spend:"}} <strong class="text-gray-900">{{if .LifetimeSpend}}{{.LifetimeSpend}}{{else}}&mdash;{{end}}</strong></span>
-      <span>{{t "Max CPM:"}} <strong class="text-gray-900">{{if .MaxCPM}}${{.MaxCPM}}{{else}}&mdash;{{end}}</strong></span>
+      <span>{{t "Effective CPM:"}} <strong class="text-gray-900">{{if .ECPM}}{{cur $.Cur .ECPM}}{{else}}&mdash;{{end}}</strong></span>
+      <span>{{t "Lifetime spend:"}} <strong class="text-gray-900">{{if .LifetimeSpend}}{{cur $.Cur .LifetimeSpend}}{{else}}&mdash;{{end}}</strong></span>
+      <span>{{t "Max CPM:"}} <strong class="text-gray-900">{{if .MaxCPM}}${{.MaxCPM}}{{if and $.Cur $.Cur.Convert}} <span class="font-normal text-gray-400">({{cur $.Cur .MaxCPM}})</span>{{end}}{{else}}&mdash;{{end}}</strong></span>
     </div>
   </div>
   {{end}}
