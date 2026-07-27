@@ -220,6 +220,71 @@ jobs:
             kubectl -n promovolve rollout status deployment/promovolve-platform --timeout=300s
           fi
 
+  # Write the digests we just rolled back into k8s/kustomization.yaml, so the
+  # repo always describes what is actually deployed.
+  #
+  # Without this the pins were hand-maintained and permanently behind main,
+  # which is not cosmetic: a manual overlay apply deploys the PINS and rolls
+  # the app backwards (2026-07-12 reverted four shipped fixes; 2026-07-27
+  # gke-factory-reset.sh reverted api+singleton to a four-day-old build and
+  # every /v1/internal/* route vanished with it). And on a CLEAN install there
+  # is nothing running to preserve, so the pins are simply what deploys —
+  # which is the open-source path (k8s-gke/setup.sh --build-images), so a
+  # stale pin means a stranger's first install is born broken.
+  #
+  # No CI loop: this commit touches only k8s/kustomization.yaml, which matches
+  # neither the `api` nor the `platform` paths-filter, so the Deploy it
+  # triggers skips both builds and deploys nothing. `[skip ci]` keeps it from
+  # burning a run at all.
+  pin-images:
+    name: Pin deployed digests back to the repo
+    needs: [build-api, build-platform, deploy]
+    if: "!cancelled() && needs.deploy.result == 'success'"
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write   # the only job here that writes to the repo
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: main
+          # Default token can push; the checkout must keep credentials for it.
+          persist-credentials: true
+
+      - name: Update pins
+        run: |
+          set -euo pipefail
+          if [ "${{ needs.build-api.result }}" = "success" ]; then
+            scripts/pin-image-digest.sh api \
+              "${{ needs.build-api.outputs.digest }}" \
+              "${GITHUB_SHA:0:7}" "${GITHUB_RUN_ID}"
+          fi
+          if [ "${{ needs.build-platform.result }}" = "success" ]; then
+            scripts/pin-image-digest.sh platform \
+              "${{ needs.build-platform.outputs.digest }}" \
+              "${GITHUB_SHA:0:7}" "${GITHUB_RUN_ID}"
+          fi
+
+      - name: Commit if anything changed
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- k8s/kustomization.yaml; then
+            echo "pins already current — nothing to commit"; exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add k8s/kustomization.yaml
+          git commit -m "ci: pin deployed image digests [skip ci]" \
+                     -m "Deployed by run ${GITHUB_RUN_ID} from ${GITHUB_SHA}."
+          # Someone may have pushed while the rollout ran; rebase and retry
+          # once rather than failing a deploy that already succeeded.
+          for i in 1 2 3; do
+            if git push origin HEAD:main; then exit 0; fi
+            echo "push rejected (attempt $i) — rebasing on main"
+            git pull --rebase origin main
+          done
+          echo "could not push updated pins after 3 attempts" >&2
+          exit 1
+
   # Publish the delivered banner runtime to R2 and point the cluster at the
   # new immutable URL. This is the piece CI historically did NOT do — the
   # "R2 blind spot": a banner-component change never reached visitors without
