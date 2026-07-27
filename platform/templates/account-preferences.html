@@ -28,7 +28,7 @@
     <div>
       <label class="form-label">{{t "Timezone"}}</label>
       <select name="timezone" class="form-input w-full">
-        <option value="" {{if not .User.Timezone}}selected{{end}}>{{t "UTC (default)"}}</option>
+        <option value="" {{if not .User.Timezone}}selected{{end}}>{{t "Platform default (%s)" platformZone}}</option>
         {{$current := .User.Timezone}}
         {{range .Timezones}}
         {{if ne . "UTC"}}<option value="{{.}}" {{if eq . $current}}selected{{end}}>{{.}}</option>{{end}}

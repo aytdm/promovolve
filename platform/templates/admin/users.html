@@ -59,7 +59,7 @@
             <input type="hidden" name="orgId" value="{{.ID}}">
             {{$tz := .Timezone}}
             <select name="timezone" class="form-input text-sm w-72">
-              <option value="">{{t "UTC (default)"}}</option>
+              <option value="">{{t "Platform default (%s)" platformZone}}</option>
               {{range $.Timezones}}{{if ne . "UTC"}}<option value="{{.}}" {{if eq . $tz}}selected{{end}}>{{.}}</option>{{end}}{{end}}
             </select>
             <button type="submit" class="btn btn-secondary btn-sm">{{t "Save"}}</button>

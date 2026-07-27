@@ -206,6 +206,13 @@ var funcMap = template.FuncMap{
 	"asset": func(name string) string {
 		return "/static/" + name + "?v=" + staticVersion
 	},
+	// platformZone names the deployment's own timezone, for the pickers whose
+	// blank option means "inherit the platform zone" rather than "UTC". Those
+	// labels used to hardcode "UTC (default)", which on a Tokyo install told
+	// the reader the opposite of what selecting it would do. NOT for the setup
+	// wizard or the admin default-timezone picker: blank there really does
+	// mean UTC, because it is the setting itself being chosen.
+	"platformZone": func() string { return model.SystemLocation().String() },
 	// stripQuery renders a URL without its query/fragment — display trim
 	// for UTM-laden landing URLs; pair with queryCount so the reader can
 	// tell params were dropped (the full URL stays in href/title).
