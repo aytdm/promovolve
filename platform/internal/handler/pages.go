@@ -2753,6 +2753,13 @@ type creativeData struct {
 	// render and were hidden; the card surfaces a warning so the advertiser
 	// can swap the source image.
 	BrokenImages int
+	// Gemini's ADVISORY safety flags ("violence", "hate_speech"). These no
+	// longer block delivery — the publisher decides — but the advertiser is
+	// the only one who can act on them by regenerating the imagery, and
+	// until 2026-07-27 nothing showed them at all: a flagged campaign bid
+	// all day, served nothing, and neither dashboard said why.
+	SafetyAdvisories []string
+	SafetyScore      *float64
 	// Per-site performance of THIS creative (trailing 30 days, bounded by
 	// tracking_events retention) — "which media does this creative earn
 	// its keep on". Sorted by spend desc; empty until it has served.
@@ -2867,8 +2874,10 @@ func (h *Handler) AdvertiserCreatives(w http.ResponseWriter, r *http.Request) {
 					Type string `json:"type"`
 					URL  string `json:"url"`
 				} `json:"asset"`
-				MatchConfidence *float64 `json:"matchConfidence"`
-				BrokenImages    int      `json:"brokenImages"`
+				MatchConfidence  *float64 `json:"matchConfidence"`
+				BrokenImages     int      `json:"brokenImages"`
+				SafetyAdvisories []string `json:"safetyAdvisories"`
+				SafetyScore      *float64 `json:"safetyScore"`
 			} `json:"data"`
 		}
 		json.Unmarshal(crBody, &crResp)
@@ -2913,7 +2922,8 @@ func (h *Handler) AdvertiserCreatives(w http.ResponseWriter, r *http.Request) {
 		}
 
 		for _, c := range crResp.Data {
-			cd := creativeData{ID: c.ID, Name: c.Name, Status: c.Status, ActiveStatus: c.ActiveStatus, BrokenImages: c.BrokenImages}
+			cd := creativeData{ID: c.ID, Name: c.Name, Status: c.Status, ActiveStatus: c.ActiveStatus,
+				BrokenImages: c.BrokenImages, SafetyAdvisories: c.SafetyAdvisories, SafetyScore: c.SafetyScore}
 			if c.Asset != nil {
 				cd.AssetURL = c.Asset.URL
 			}

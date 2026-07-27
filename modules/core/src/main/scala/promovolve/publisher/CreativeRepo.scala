@@ -87,13 +87,42 @@ final case class Creative(
   /** True if creative has been verified */
   def isVerified: Boolean = matchConfidence.isDefined
 
-  /** True if any safety flag is set */
-  def isSafetyBlocked: Boolean = adultContent || violence || hateSpeech
+  /**
+   * HARD block — content the network will not carry at any price, on any
+   * site. Adult content only.
+   *
+   * `violence` and `hateSpeech` used to sit here too, which made the block
+   * absolute AND silent: a flagged creative still bid, still won slots and
+   * still wrote pending_selection rows, but `canParticipate` dropped it from
+   * the publisher's approval queue — so it could never be approved, never
+   * served, and nothing anywhere said why. Observed 2026-07-27: a TV-drama
+   * campaign bid all day against a live site while both dashboards showed
+   * nothing to act on.
+   *
+   * It also decided on the publisher's behalf. An ad FOR a crime drama is not
+   * a violent ad — the flag fires on drama stills, and the category pass had
+   * the creative at match_confidence 1.0. A blanket veto rules out film, TV
+   * and games advertising wholesale. The approval queue already exists to let
+   * a publisher choose what they host, so those flags now INFORM that choice
+   * (see `safetyAdvisories`) rather than pre-empt it.
+   */
+  def isSafetyBlocked: Boolean = adultContent
+
+  /**
+   * Advisory flags. Shown to the publisher deciding whether to accept the
+   * creative, and to the advertiser who can regenerate the imagery. Never a
+   * veto — a creative carrying these still bids and still reaches the queue.
+   */
+  def safetyAdvisories: List[String] =
+    List(
+      Option.when(violence)("violence"),
+      Option.when(hateSpeech)("hate_speech")
+    ).flatten
 
   /** True if creative is active (not paused) */
   def isActive: Boolean = status == CreativeStatus.Active
 
-  /** True if creative can participate in auctions (active and not safety blocked) */
+  /** True if creative can participate in auctions (active and not hard-blocked) */
   def canParticipate: Boolean = isActive && !isSafetyBlocked
 }
 

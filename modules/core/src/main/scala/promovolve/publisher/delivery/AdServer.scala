@@ -4168,7 +4168,9 @@ private[delivery] class AdServer(
               campaignId = Some(c.campaignId.value),
               advertiserId = Some(c.advertiserId.value),
               firstSeenEpochMs = age.map(_.firstSeen.toEpochMilli),
-              requeueCount = age.map(_.requeueCount)
+              requeueCount = age.map(_.requeueCount),
+              safetyAdvisories = cr.safetyAdvisories.toVector,
+              safetyScore = cr.safetyScore
             )
           }
         }

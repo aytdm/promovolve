@@ -207,7 +207,14 @@ object ApiModels {
       // Images that failed to load at the last render (dead/IP-blocked src,
       // logo included) and were hidden. >0 = the banner shipped degraded;
       // the dashboard surfaces it so the advertiser can swap the image.
-      brokenImages: Int = 0
+      brokenImages: Int = 0,
+      // Gemini's safety read. ADVISORY: a flagged creative still bids and
+      // still reaches the publisher's queue, where the publisher decides.
+      // Surfaced here because the advertiser is the only one who can act on
+      // it — before this, a flagged campaign bid all day and served nothing
+      // with no explanation on either dashboard (2026-07-27).
+      safetyAdvisories: Vector[String] = Vector.empty, // "violence", "hate_speech"
+      safetyScore: Option[Double] = None // 0.0 unsafe … 1.0 safe
   )
 
   case class CreativeList(
@@ -1357,7 +1364,14 @@ object ApiModels {
       firstSeenAt: Option[Long] = None,
       // Re-auction waves survived unreviewed since first seen (max across
       // placements; debounced per wave, not per placement upsert).
-      requeueCount: Option[Int] = None
+      requeueCount: Option[Int] = None,
+      // Gemini's ADVISORY safety flags ("violence", "hate_speech"). These do
+      // not block: the publisher decides whether to host the creative, which
+      // is what this queue is for. Only adultContent is a hard block and never
+      // reaches here at all. Shown so the decision is informed rather than
+      // blind — previously these silently removed the creative from the queue.
+      safetyAdvisories: Vector[String] = Vector.empty,
+      safetyScore: Option[Double] = None
   )
 
   case class PendingCreativeGroupList(

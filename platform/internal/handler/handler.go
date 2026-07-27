@@ -213,6 +213,10 @@ var funcMap = template.FuncMap{
 	// wizard or the admin default-timezone picker: blank there really does
 	// mean UTC, because it is the setting itself being chosen.
 	"platformZone": func() string { return model.SystemLocation().String() },
+	// join renders a string slice for display ("violence, hate_speech").
+	// Template-side so the separator stays translatable with the sentence
+	// that carries it, rather than baked into a Go handler.
+	"join": func(items []string, sep string) string { return strings.Join(items, sep) },
 	// stripQuery renders a URL without its query/fragment — display trim
 	// for UTM-laden landing URLs; pair with queryCount so the reader can
 	// tell params were dropped (the full URL stays in href/title).
@@ -638,6 +642,12 @@ type pendingPlacement struct {
 }
 
 type pendingCreative struct {
+	// Gemini's ADVISORY safety flags ("violence", "hate_speech"). Shown in
+	// the inbox so the publisher's accept/reject is informed. These used to
+	// remove the creative from this queue entirely, which took the decision
+	// away from the publisher and told nobody (2026-07-27). Only adult
+	// content hard-blocks now, and it never reaches this list.
+	SafetyAdvisories  []string
 	CreativeID        string
 	CPM               string
 	Category          string
@@ -1125,26 +1135,27 @@ func (h *Handler) loadPending(siteID string, claims *model.Claims) []pendingCrea
 	pendBody, _ := h.coreGet(fmt.Sprintf("/v1/publishers/me/sites/%s/approval/pending?limit=50", siteID), claims)
 	var pendResp struct {
 		Data []struct {
-			CreativeID            string  `json:"creativeId"`
-			CPM                   string  `json:"cpm"`
-			Category              string  `json:"category"`
-			CategoryName          *string `json:"categoryName"`
-			AssetURL              *string `json:"assetUrl"`
-			Width                 *int    `json:"width"`
-			Height                *int    `json:"height"`
-			AdProductCategory     *string `json:"adProductCategory"`
-			AdProductCategoryName *string `json:"adProductCategoryName"`
-			CampaignID            *string `json:"campaignId"`
-			AdvertiserID          *string `json:"advertiserId"`
-			LandingDomain         *string `json:"landingDomain"`
-			LandingURL            *string `json:"landingUrl"`
-			PagesJSON             *string `json:"pagesJson"`
-			Filler                bool    `json:"filler"`
-			CreatedAt             string  `json:"createdAt"`
-			FirstSeenAt           *int64  `json:"firstSeenAt"`
-			RequeueCount          *int    `json:"requeueCount"`
-			BannerConfigJSON      *string `json:"bannerConfigJson"`
-			CreativeName          *string `json:"creativeName"`
+			CreativeID            string   `json:"creativeId"`
+			CPM                   string   `json:"cpm"`
+			Category              string   `json:"category"`
+			CategoryName          *string  `json:"categoryName"`
+			AssetURL              *string  `json:"assetUrl"`
+			Width                 *int     `json:"width"`
+			Height                *int     `json:"height"`
+			AdProductCategory     *string  `json:"adProductCategory"`
+			AdProductCategoryName *string  `json:"adProductCategoryName"`
+			CampaignID            *string  `json:"campaignId"`
+			AdvertiserID          *string  `json:"advertiserId"`
+			LandingDomain         *string  `json:"landingDomain"`
+			LandingURL            *string  `json:"landingUrl"`
+			PagesJSON             *string  `json:"pagesJson"`
+			Filler                bool     `json:"filler"`
+			CreatedAt             string   `json:"createdAt"`
+			FirstSeenAt           *int64   `json:"firstSeenAt"`
+			RequeueCount          *int     `json:"requeueCount"`
+			BannerConfigJSON      *string  `json:"bannerConfigJson"`
+			CreativeName          *string  `json:"creativeName"`
+			SafetyAdvisories      []string `json:"safetyAdvisories"`
 			Placements            []struct {
 				URL          string  `json:"url"`
 				SlotID       string  `json:"slotId"`
@@ -1159,12 +1170,13 @@ func (h *Handler) loadPending(siteID string, claims *model.Claims) []pendingCrea
 	var pending []pendingCreative
 	for _, p := range pendResp.Data {
 		pc := pendingCreative{
-			CreativeID: p.CreativeID,
-			CPM:        money(p.CPM),
-			Category:   p.Category,
-			SiteID:     siteID,
-			Filler:     p.Filler,
-			CreatedAt:  p.CreatedAt,
+			CreativeID:       p.CreativeID,
+			SafetyAdvisories: p.SafetyAdvisories,
+			CPM:              money(p.CPM),
+			Category:         p.Category,
+			SiteID:           siteID,
+			Filler:           p.Filler,
+			CreatedAt:        p.CreatedAt,
 		}
 		if p.CreativeName != nil {
 			pc.CreativeName = *p.CreativeName

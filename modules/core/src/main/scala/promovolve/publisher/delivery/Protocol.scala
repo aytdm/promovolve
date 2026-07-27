@@ -292,7 +292,12 @@ object Protocol {
       firstSeenEpochMs: Option[Long] = None,
       // Re-auction waves survived unreviewed since first seen (debounced
       // per wave, not per placement upsert).
-      requeueCount: Option[Int] = None
+      requeueCount: Option[Int] = None,
+      // Gemini's ADVISORY safety flags ("violence", "hate_speech") — shown so
+      // the publisher decides with the reason in hand. Not a veto: only
+      // adultContent hard-blocks, and that never reaches this queue.
+      safetyAdvisories: Vector[String] = Vector.empty,
+      safetyScore: Option[Double] = None
   )
 
   // Reply to ListPending — crosses nodes (AdServer is sharded by siteId, the

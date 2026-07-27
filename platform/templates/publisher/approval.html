@@ -437,6 +437,12 @@ document.body.addEventListener('inboxActed', function(){
              classifications. Filler path gets its own copy because
              the answer is "no contextual match — advertiser opted in
              to unmatched traffic", not a topic classification. -->
+        {{if $c.SafetyAdvisories}}
+        <div class="bg-amber-50 rounded-lg p-3 mb-6 text-sm ring-1 ring-inset ring-amber-200">
+          <p class="font-medium text-amber-900 mb-1">{{t "Content flagged: %s" (join $c.SafetyAdvisories ", ")}}</p>
+          <p class="text-amber-800">{{t "Our automated review flagged this creative's imagery. It is your call — approve it if it suits your audience, or reject it. Advertisers see the same note."}}</p>
+        </div>
+        {{end}}
         {{if $c.Filler}}
         <div class="bg-amber-50 rounded-lg p-3 mb-6 text-sm ring-1 ring-inset ring-amber-200">
           <p class="font-medium text-amber-900 mb-1">{{t "Why this ad was matched"}}</p>

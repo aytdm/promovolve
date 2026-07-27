@@ -1955,7 +1955,9 @@ class EndpointRoutes(
                   updatedAt = c.createdAt.toString,
                   matchConfidence = c.matchConfidence,
                   verificationReason = c.verificationReason,
-                  brokenImages = c.brokenImages
+                  brokenImages = c.brokenImages,
+                  safetyAdvisories = c.safetyAdvisories.toVector,
+                  safetyScore = c.safetyScore
                 )
               }
             }.map { allCreatives =>
@@ -2637,7 +2639,11 @@ class EndpointRoutes(
               // Honest queue age: earliest first-seen across placements,
               // largest re-queue count as the "cycles ignored" hint.
               firstSeenAt = items.flatMap(_.firstSeenEpochMs).minOption,
-              requeueCount = items.flatMap(_.requeueCount).maxOption
+              requeueCount = items.flatMap(_.requeueCount).maxOption,
+              // Advisory only — the publisher decides. Union across placements
+              // (they are the same creative, so in practice identical).
+              safetyAdvisories = items.flatMap(_.safetyAdvisories).distinct,
+              safetyScore = items.flatMap(_.safetyScore).minOption
             )
           }
         // Enrich with pagesJson so the approval UI can render the

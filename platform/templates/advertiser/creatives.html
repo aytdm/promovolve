@@ -181,6 +181,13 @@
         <span>{{t "%d images couldn’t load" .BrokenImages}}</span>
       </div>
       {{end}}
+      {{if .SafetyAdvisories}}
+      <div class="flex items-center gap-1.5 mt-2 text-xs text-amber-700"
+           title="{{t "Our automated review flagged this creative's imagery. It does not stop delivery — publishers see the same note and decide whether to accept it — but some may decline, so it can reduce where the ad runs. Regenerate the creative with different imagery if you would rather avoid the flag."}}">
+        <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
+        <span>{{t "Content flagged: %s" (join .SafetyAdvisories ", ")}}</span>
+      </div>
+      {{end}}
       {{if or .Impressions .Clicks .CTAClicks}}
       <div class="flex items-center gap-3 mt-2 text-xs text-gray-500">
         <span title="{{t "Impressions"}}">{{t "%d imp" .Impressions}}</span>

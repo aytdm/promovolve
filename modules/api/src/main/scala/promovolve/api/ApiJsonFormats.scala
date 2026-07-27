@@ -30,7 +30,7 @@ trait ApiJsonFormats extends DefaultJsonProtocol {
   // Creative
   given RootJsonFormat[CreativeAsset] = jsonFormat2(CreativeAsset.apply)
   given RootJsonFormat[CreativeContent] = jsonFormat5(CreativeContent.apply)
-  given RootJsonFormat[Creative] = jsonFormat13(Creative.apply)
+  given RootJsonFormat[Creative] = jsonFormat15(Creative.apply)
   given RootJsonFormat[CreativeList] = jsonFormat2(CreativeList.apply)
 
   // Publisher
@@ -207,7 +207,7 @@ trait ApiJsonFormats extends DefaultJsonProtocol {
   given RootJsonFormat[PendingCreative] = jsonFormat12(PendingCreative.apply)
   given RootJsonFormat[PendingCreativeList] = jsonFormat2(PendingCreativeList.apply)
   given RootJsonFormat[PendingPlacement] = jsonFormat6(PendingPlacement.apply)
-  given RootJsonFormat[PendingCreativeGroup] = jsonFormat19(PendingCreativeGroup.apply)
+  given RootJsonFormat[PendingCreativeGroup] = jsonFormat21(PendingCreativeGroup.apply)
   given RootJsonFormat[PendingCreativeGroupList] = jsonFormat2(PendingCreativeGroupList.apply)
   given RootJsonFormat[ServingPlacement] = jsonFormat5(ServingPlacement.apply)
   given RootJsonFormat[ServingCreativeGroup] = jsonFormat16(ServingCreativeGroup.apply)
