@@ -12,6 +12,7 @@ package i18n
 //     精算, クリアリング価格.
 //   - Tone: です・ます調.
 var ja = map[string]string{
+	"unset": "未設定",
 	"Currency changed — the amounts above were cleared. Enter them in the currency you just chose.": "通貨を変更しました。上の金額はクリアされました。選択した通貨で入力してください。",
 	"Currency":           "通貨",
 	"Starting floor CPM": "開始フロアCPM",
@@ -872,11 +873,11 @@ var ja = map[string]string{
 	"a request for %s is already awaiting approval":                               "%s の申請はすでに承認待ちです",
 	"could not remove the site":                                                   "サイトを削除できませんでした",
 	"site request not found":                                                      "サイト申請が見つかりません",
-	"probing candidate %d/%d at $%.2f — decision in ~%dm":                         "候補 %d/%d を $%.2f で試行中 — 決定まで約%d分",
-	"holding at $%.2f — next probe cycle in ~%dm":                                 "$%.2f を保持中 — 次のプローブサイクルまで約%d分",
+	"probing candidate %d/%d at %s — decision in ~%dm":                            "候補 %d/%d を %s で試行中 — 決定まで約%d分",
+	"holding at %s — next probe cycle in ~%dm":                                    "%s を保持中 — 次のプローブサイクルまで約%d分",
 	"sweep cycle starting":                                                        "スイープサイクルを開始中",
-	"1 bidder — pegged to bid ($%.2f)":                                            "入札者 1 者 — 入札額に釘付け($%.2f)",
-	"%d bidders — sweep-governed (top $%.2f)":                                     "入札者 %d 者 — スイープ管理(最高 $%.2f)",
+	"1 bidder — pegged to bid (%s)":                                               "入札者 1 者 — 入札額に釘付け(%s)",
+	"%d bidders — sweep-governed (top %s)":                                        "入札者 %d 者 — スイープ管理(最高 %s)",
 	"no current bidders — historical":                                             "現在入札者なし — 過去の値",
 	"Only one completed cycle so far (picked %s)":                                 "完了したサイクルはまだ1つです(%s を選択)",
 	"Last %d cycles all within %s of %s":                                          "直近 %d サイクルはすべて %s 以内(基準 %s)",

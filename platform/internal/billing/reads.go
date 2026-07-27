@@ -182,10 +182,21 @@ func (s *Service) floorSetting(ctx context.Context, key string, fallback int64) 
 	err := s.pool.QueryRow(ctx,
 		`SELECT value::bigint FROM platform_settings WHERE key = $1`, key,
 	).Scan(&v)
-	if errors.Is(err, pgx.ErrNoRows) || v <= 0 {
+	// Order matters: a failed Scan leaves v at zero, so testing `v <= 0` first
+	// would turn any database error into a silent dollar-scale default. Only a
+	// genuinely missing row degrades to the fallback; a real error propagates,
+	// and the caller keeps the site's floors rather than seeding 0.50/0.10 on
+	// a currency where that is no reserve at all.
+	if errors.Is(err, pgx.ErrNoRows) {
 		return fallback, nil
 	}
-	return v, err
+	if err != nil {
+		return 0, err
+	}
+	if v <= 0 {
+		return fallback, nil
+	}
+	return v, nil
 }
 
 // Dollar-scale last-resort fallbacks, matching the constants the Scala core

@@ -77,7 +77,11 @@ func (req *setupBeginRequest) validate() (*model.User, setup.InstallParams, erro
 	}
 	amount := func(s, label string) (int64, error) {
 		v, err := cur.Parse(s)
-		if err != nil || v <= 0 {
+		// Same ceiling parseDollars applies. Without it a slipped decimal at
+		// install time reaches currency.FromMajor's int64(v*Micro), which is
+		// undefined past int64 range — and unlike every other setting there is
+		// no edit path for the currency these amounts are denominated in.
+		if err != nil || v <= 0 || v > maxAmountMicros {
 			return 0, errors.New("the " + label + " must be a positive amount in " + cur.Code)
 		}
 		return v, nil

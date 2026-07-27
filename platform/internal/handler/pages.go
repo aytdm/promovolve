@@ -232,10 +232,10 @@ func (h *Handler) renderPublisherSites(w http.ResponseWriter, r *http.Request, e
 			prevVal, _ := strconv.ParseFloat(siteEv.PreviousBestFloor, 64)
 			diff := bestVal - prevVal
 			switch {
-			case diff > 0.005:
+			case diff > deltaEpsilon():
 				sites[i].OptimizedFloorDelta = fmtMoneySigned(diff)
 				sites[i].OptimizedFloorTrend = "▲"
-			case diff < -0.005:
+			case diff < -deltaEpsilon():
 				sites[i].OptimizedFloorDelta = fmtMoneySigned(diff)
 				sites[i].OptimizedFloorTrend = "▼"
 			default:
@@ -1652,6 +1652,14 @@ type yAxisTick struct {
 // niceCeiling rounds a value up to a readable axis maximum — 1, 2 or 5 times
 // a power of ten — so gridline labels land on round numbers in any currency
 // ($10, ¥2,000) instead of whatever the data happened to peak at.
+// deltaEpsilon is the smallest change worth calling a change: half of one
+// displayed unit in the base currency. An absolute 0.005 was right only in
+// dollars — on a zero-decimal currency it let a ¥0.40 move through, which the
+// formatter then rendered as a signed zero next to a trend arrow.
+func deltaEpsilon() float64 {
+	return math.Pow(10, -float64(baseCurrency.Decimals)) / 2
+}
+
 func niceCeiling(v float64) float64 {
 	if v <= 0 {
 		return 1
@@ -1882,10 +1890,10 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 		trend := "="
 		if bestVal >= 0 && prevBestVal >= 0 {
 			diff := bestVal - prevBestVal
-			if diff > 0.005 {
+			if diff > deltaEpsilon() {
 				bestDelta = fmtMoneySigned(diff)
 				trend = "▲"
-			} else if diff < -0.005 {
+			} else if diff < -deltaEpsilon() {
 				bestDelta = fmtMoneySigned(diff)
 				trend = "▼"
 			} else {
@@ -1929,10 +1937,10 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 			if prevRev, ok := prevByFloor[c.Floor]; ok {
 				prevRevStr = fmtMoneyPrec(prevRev, 2)
 				diff := rev - prevRev
-				if diff > 0.005 {
+				if diff > deltaEpsilon() {
 					deltaStr = fmtMoneySignedPrec(diff, 2)
 					deltaSign = 1
-				} else if diff < -0.005 {
+				} else if diff < -deltaEpsilon() {
 					deltaStr = fmtMoneySignedPrec(diff, 2)
 					deltaSign = -1
 				} else {
@@ -2096,10 +2104,10 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 					ticksLeft = 0
 				}
 				mins := (ticksLeft*obsInterval + 59) / 60
-				return i18n.T(obsLang, "probing candidate %d/%d at $%.2f — decision in ~%dm", sw.Cursor+1, sw.CandidateCount, sw.CurrentFloor, mins)
+				return i18n.T(obsLang, "probing candidate %d/%d at %s — decision in ~%dm", sw.Cursor+1, sw.CandidateCount, fmtMoney(sw.CurrentFloor), mins)
 			case "exploit":
 				mins := (sw.ExploitTicksRemaining*obsInterval + 59) / 60
-				return i18n.T(obsLang, "holding at $%.2f — next probe cycle in ~%dm", sw.CurrentFloor, mins)
+				return i18n.T(obsLang, "holding at %s — next probe cycle in ~%dm", fmtMoney(sw.CurrentFloor), mins)
 			default:
 				return i18n.T(obsLang, "sweep cycle starting")
 			}
@@ -2120,9 +2128,9 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 			if d, ok := demand[cat]; ok && d.Bidders > 0 {
 				row.Bidders = d.Bidders
 				if d.Bidders == 1 {
-					row.DemandNow = i18n.T(obsLang, "1 bidder — pegged to bid ($%.2f)", d.TopBid)
+					row.DemandNow = i18n.T(obsLang, "1 bidder — pegged to bid (%s)", fmtMoney(d.TopBid))
 				} else {
-					row.DemandNow = i18n.T(obsLang, "%d bidders — sweep-governed (top $%.2f)", d.Bidders, d.TopBid)
+					row.DemandNow = i18n.T(obsLang, "%d bidders — sweep-governed (top %s)", d.Bidders, fmtMoney(d.TopBid))
 				}
 				row.SweepStatus = sweepStatus(d)
 				// Prefer the LIVE enforced floor over the last journaled one
@@ -2172,9 +2180,9 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 			}
 			row.SweepStatus = sweepStatus(d)
 			if d.Bidders == 1 {
-				row.DemandNow = i18n.T(obsLang, "1 bidder — pegged to bid ($%.2f)", d.TopBid)
+				row.DemandNow = i18n.T(obsLang, "1 bidder — pegged to bid (%s)", fmtMoney(d.TopBid))
 			} else {
-				row.DemandNow = i18n.T(obsLang, "%d bidders — sweep-governed (top $%.2f)", d.Bidders, d.TopBid)
+				row.DemandNow = i18n.T(obsLang, "%d bidders — sweep-governed (top %s)", d.Bidders, fmtMoney(d.TopBid))
 			}
 			categoryFloors = append(categoryFloors, row)
 		}
@@ -2182,7 +2190,7 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 			return categoryFloors[i].Category < categoryFloors[j].Category
 		})
 		if activeCats > 0 && !math.IsInf(minFloor, 1) {
-			if math.Abs(maxFloor-minFloor) < 0.005 {
+			if math.Abs(maxFloor-minFloor) < deltaEpsilon() {
 				floorRange = fmtMoney(minFloor)
 			} else {
 				floorRange = fmtMoney(minFloor) + " – " + fmtMoney(maxFloor)
@@ -2238,6 +2246,14 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 		// Round the ceiling up to something legible and leave headroom, so a
 		// series sitting at its own maximum isn't drawn along the top edge.
 		top = niceCeiling(top * 1.15)
+		// Five ticks are drawn at top*4/4 … top*0/4, each formatted at the
+		// currency's precision. If a quarter-step is finer than one display
+		// unit the labels collide (¥2, ¥2, ¥1, ¥1, ¥0 — two gridlines at
+		// different heights carrying the same number), so lift the ceiling to
+		// a multiple of four units.
+		if unit := math.Pow(10, -float64(baseCurrency.Decimals)); top < 4*unit {
+			top = 4 * unit
+		}
 		for j := range argmaxHistory {
 			if n == 1 {
 				argmaxHistory[j].X = 50
@@ -4582,9 +4598,16 @@ func computeArgmaxStability(lang string, history []argmaxHistoryPoint) *argmaxSt
 	// always be zero. As fractions of the mean these bands are scale-free —
 	// and at a typical dollar floor they land close to where the old absolute
 	// ones did.
+	// Calibrated against the absolute bands these replaced, at the floor levels
+	// they were tuned for: a series clustered inside ~10% of its mean is what
+	// the old σ < $0.50 meant on a typical low-single-digit floor. The first
+	// pass used 0.25/1.00, which was far too loose — a $6-$10 oscillation
+	// (σ ≈ $2.00 about a $8 mean, CV 0.25) would have been labelled a stable
+	// optimum while swinging ±25% cycle to cycle, and that badge is exactly
+	// what a publisher reads to decide whether to trust the floor.
 	const (
-		stableCV = 0.25 // σ under a quarter of the mean → converged
-		mildCV   = 1.00 // σ under the mean itself → noisy but not wild
+		stableCV = 0.10 // σ within a tenth of the mean → converged
+		mildCV   = 0.35 // σ within about a third → noisy but trending
 	)
 	spread := 1.0 // no meaningful mean → treat as maximally variable
 	if mean > 0 {
@@ -4623,7 +4646,7 @@ func computeArgmaxStability(lang string, history []argmaxHistoryPoint) *argmaxSt
 
 	// Special-case n==2 with same value: very obviously stable but
 	// std-dev gates above require n≥3. Override label here.
-	if n == 2 && stddev < 0.50 {
+	if n == 2 && spread < stableCV {
 		status = "Converging"
 		color = "bg-blue-100 text-blue-800"
 		summary = i18n.T(lang, "2 consecutive cycles agree on %s (collect more cycles to confirm stability)", history[n-1].Label)
