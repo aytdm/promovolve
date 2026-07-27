@@ -4152,6 +4152,19 @@ private[delivery] class AdServer(
         creativeRepo.get(c.creativeId.value).map { creativeOpt =>
           log.info("  Pending item: url={} slot={} creative={} inCreativeRepo={}",
             u, s, c.creativeId.value, creativeOpt.isDefined)
+          // Say WHY an item vanishes. This filter used to be silent, and the
+          // line above reports inCreativeRepo=true just before it — so the
+          // queue logged "found 19 pending items" while the endpoint returned
+          // an empty list, and the publisher's inbox showed nothing with no
+          // trace anywhere of the 19 that were dropped (2026-07-27; a
+          // safety-flagged creative, back when any flag hard-blocked).
+          creativeOpt.filterNot(_.canParticipate).foreach { cr =>
+            log.info(
+              "  Pending item DROPPED (not servable): url={} slot={} creative={} active={} hardBlocked={} advisories=[{}]",
+              u, s, c.creativeId.value, cr.isActive, cr.isSafetyBlocked,
+              cr.safetyAdvisories.mkString(",")
+            )
+          }
           creativeOpt.filter(_.canParticipate).map { cr =>
             val age = firstSeen.get(c.creativeId.value)
             PendingItem(
@@ -4174,7 +4187,14 @@ private[delivery] class AdServer(
             )
           }
         }
-      }.map(_.flatten)
+      }.map(_.flatten).map { items =>
+        // Both numbers on one line: the queue size and what actually reaches
+        // the publisher. They diverged silently for hours before this.
+        if (items.size != queue.size)
+          log.info("ListPending: site={} returning {} of {} queued (rest not servable — see DROPPED above)",
+            siteId.value, items.size, queue.size)
+        items
+      }
     }
     ctx.pipeToSelf(resultFuture) {
       case Success(items) => ListPendingResult(items, replyTo)
