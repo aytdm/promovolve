@@ -33,6 +33,8 @@ import (
 // honest — every entry should name where the dynamic lookup happens.
 var dynamicKeys = map[string]string{
 	"advertiser":                     "account-preferences.html landing-side radios ({{t .}})",
+	"violence":                       "creatives.html / approval.html safety flags ({{t $a}})",
+	"hate_speech":                    "creatives.html / approval.html safety flags ({{t $a}})",
 	"publisher":                      "account-preferences.html landing-side radios ({{t .}})",
 	"7d":                             "report-range-picker preset labels ({{t .Label}}, report.go reportPresets)",
 	"30d":                            "report-range-picker preset labels ({{t .Label}}, report.go reportPresets)",
