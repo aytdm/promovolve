@@ -84,7 +84,7 @@ final class CreativeSafetySpec extends AnyWordSpec with Matchers {
   "several advisory flags" should {
     "all be reported, so the publisher sees the whole picture" in {
       creative(violence = true, hate = true).safetyAdvisories should
-        contain theSameElementsAs List("violence", "hate_speech")
+      contain theSameElementsAs List("violence", "hate_speech")
     }
   }
 
