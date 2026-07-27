@@ -65,7 +65,10 @@ CLUSTER="${CLUSTER:-promovolve}"
 MACHINE="${MACHINE:-c4a-standard-4}"
 NS=promovolve
 IP_NAME=promovolve-ingress
-CTX="gke_${PROJECT_ID}_${ZONE}_${CLUSTER}"
+# Overridable so a caller that already knows its context (scripts/gke-factory-reset.sh
+# takes one as a flag) can delegate the apply here without the two derivations
+# drifting apart.
+CTX="${CTX:-gke_${PROJECT_ID}_${ZONE}_${CLUSTER}}"
 
 # Where the images live. The default is the maintainer's private Docker Hub —
 # the STAGING deployment, whose digests CI pins in k8s/kustomization.yaml.
@@ -76,9 +79,14 @@ REGISTRY="${REGISTRY:-docker.io/hanishi}"
 BUILD_IMAGES=0
 
 DEPLOY_ONLY=0
+APPLY_ONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --deploy-only)  DEPLOY_ONLY=1; shift ;;
+    # Stop after the manifests are applied: no rollout waits, no epilogue.
+    # For callers driving their own scale-up sequence — scripts/gke-factory-reset.sh
+    # applies while Postgres is deliberately at zero, so waiting here would hang.
+    --apply-only)   APPLY_ONLY=1; DEPLOY_ONLY=1; shift ;;
     --pin-images)   PIN_IMAGES=1; shift ;;
     --build-images) BUILD_IMAGES=1; shift ;;
     -h|--help) sed -n '2,52p' "$0"; exit 0 ;;
@@ -269,6 +277,11 @@ if [ "${PIN_IMAGES:-0}" -ne 1 ]; then
   [ -n "$LIVE_API" ]       && kc set image statefulset/promovolve-api       api="$LIVE_API"             >/dev/null
   [ -n "$LIVE_SINGLETON" ] && kc set image statefulset/promovolve-singleton singleton="$LIVE_SINGLETON" >/dev/null
   [ -n "$LIVE_PLATFORM" ]  && kc set image deployment/promovolve-platform   platform="$LIVE_PLATFORM"   >/dev/null
+fi
+
+if [ "$APPLY_ONLY" -eq 1 ]; then
+  echo "==> --apply-only: manifests applied; the caller owns scale-up and verification"
+  exit 0
 fi
 
 # --- 5. wait + verify -----------------------------------------------------------

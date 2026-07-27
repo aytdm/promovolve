@@ -117,12 +117,26 @@ else
   # without pub_day_bucket, which killed the dashboard projection on its first
   # envelope every 30s and left campaign_stats permanently empty. A reset must
   # restore the schema the REPO describes, not the one the cluster remembers.
-  echo "== re-applying overlay so init-db.sql is current"
-  # LoadRestrictionsNone is required: the base configMapGenerator single-sources
-  # ../docker/init-db.sql, which kustomize refuses to read from outside the
-  # overlay directory by default (k8s-local/up.sh carries the same flag).
-  kubectl kustomize --load-restrictor LoadRestrictionsNone "$(dirname "$0")/../k8s-gke" \
-    | kubectl --context "$CTX" apply -f -
+  #
+  # DELEGATED, not re-implemented. This script twice grew its own copy of the
+  # apply and twice lost a lesson the original already carried: first
+  # --load-restrictor LoadRestrictionsNone (the base configMapGenerator
+  # single-sources ../docker/init-db.sql from outside the overlay), then the
+  # live-image preservation — which reverted api + singleton to a four-day-old
+  # build and silently took every /v1/internal/* route with it. setup.sh owns
+  # both, plus the $REGISTRY substitution an open-source install needs, so call
+  # it rather than copying it a third time.
+  #
+  # CTX is exported because setup.sh derives its context from
+  # PROJECT_ID/ZONE/CLUSTER; passing ours keeps --context honoured end to end.
+  echo "== re-applying overlay so init-db.sql is current (via k8s-gke/setup.sh)"
+  CTX="$CTX" "$(dirname "$0")/../k8s-gke/setup.sh" --apply-only
+
+  # The apply restores the manifests' replica counts, so api and singleton would
+  # come back now — before Postgres has re-initialised. Put them back to zero and
+  # keep the original ordering: database first, then the JVMs that depend on it.
+  kc scale statefulset promovolve-api --replicas=0
+  kc scale statefulset promovolve-singleton --replicas=0
 
   echo "== scaling back up (Postgres re-inits from the configMap)"
   kc scale statefulset promovolve-db --replicas=1
