@@ -98,6 +98,13 @@ func (s *Service) CreateAdmin(ctx context.Context, admin *model.User, cred *weba
 
 	admin.Role = model.RoleAdmin
 	admin.Status = model.StatusActive
+	// The installer just told us the platform runs in this zone; defaulting
+	// the admin's own display timezone to it saves them setting the same
+	// thing twice on /account/preferences, where an empty value silently
+	// means UTC. Only a default — they can change it there afterwards.
+	if admin.Timezone == "" {
+		admin.Timezone = p.DefaultTimezone
+	}
 	if err := s.userRepo.CreateTx(ctx, tx, admin); err != nil {
 		return err
 	}

@@ -135,6 +135,10 @@ func main() {
 		os.Exit(1)
 	}
 	handler.SetBaseCurrency(baseCur)
+	// The platform's own timezone, same shape as the currency above: a
+	// deployment-level fact read once, and the fallback for any account that
+	// has expressed no preference of its own.
+	model.SetSystemTimezone(orgRepo.DefaultTimezone(context.Background()))
 	slog.Info("base currency", "code", baseCur.Code, "symbol", baseCur.Symbol, "decimals", baseCur.Decimals)
 
 	h := handler.New(handler.Deps{

@@ -158,15 +158,42 @@ type Org struct {
 	Timezone string `json:"timezone,omitempty"`
 }
 
-// Location resolves the user's timezone preference; unset or invalid
-// zones fall back to UTC so a bad value can never break a render.
+// systemLocation is the platform's own timezone — the one chosen at /setup.
+// A user who has expressed no preference reads the dashboard in it rather than
+// in UTC: an operator who installs the platform as Asia/Tokyo means the
+// platform runs in Tokyo, and making every account restate that on
+// /account/preferences is asking the same question twice.
+//
+// Process-wide because it is a deployment-level fact, like the base currency.
+// Bound once at boot; UTC until then, which is also the correct answer for a
+// deployment that never set one.
+var systemLocation = time.UTC
+
+// SetSystemTimezone binds the platform default. Call once at startup with the
+// operator's configured IANA zone; an empty or unloadable name leaves UTC.
+func SetSystemTimezone(name string) {
+	if name == "" {
+		return
+	}
+	if loc, err := time.LoadLocation(name); err == nil {
+		systemLocation = loc
+	}
+}
+
+// SystemLocation is the platform timezone, for callers that render a time with
+// no user in hand.
+func SystemLocation() *time.Location { return systemLocation }
+
+// Location resolves the user's timezone preference, falling back to the
+// platform's own zone. An invalid stored value degrades the same way, so a bad
+// preference can never break a render.
 func (u *User) Location() *time.Location {
 	if u == nil || u.Timezone == "" {
-		return time.UTC
+		return systemLocation
 	}
 	loc, err := time.LoadLocation(u.Timezone)
 	if err != nil {
-		return time.UTC
+		return systemLocation
 	}
 	return loc
 }

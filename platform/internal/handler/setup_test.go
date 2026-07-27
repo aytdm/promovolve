@@ -167,3 +167,23 @@ func TestSetupRejectsDollarMagnitudesInZeroDecimalCurrency(t *testing.T) {
 		t.Errorf("USD defaults rejected: %v", err)
 	}
 }
+
+// The installer states the platform's timezone once; the admin should not have
+// to set the same thing again on /account/preferences, where blank silently
+// means UTC. Reported from a real GKE install: "TimeZone was not set" after
+// picking Asia/Tokyo in the wizard.
+func TestInstallParamsCarryTimezoneForAdminDefault(t *testing.T) {
+	req := setupBeginRequest{
+		Email: "admin@example.com", DisplayName: "Admin",
+		Currency: "JPY", MarginPercent: "15",
+		PayoutFloor: "5000", FloorCpm: "80", MinFloorCpm: "20",
+		Timezone: "Asia/Tokyo",
+	}
+	_, p, err := req.validate()
+	if err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+	if p.DefaultTimezone != "Asia/Tokyo" {
+		t.Fatalf("DefaultTimezone = %q", p.DefaultTimezone)
+	}
+}

@@ -98,6 +98,18 @@ else
   kc scale statefulset promovolve-singleton --replicas=1
 fi
 
+# scripts/migrations/ has no runner — those files were applied BY HAND to the
+# old volume. A fresh volume runs only docker/init-db.sql, so without this the
+# schema comes back OLDER than the code: fraud_flags and campaign_dim_daily_stats
+# missing, tracking_events.suspect_reason missing, and the Fraud Review page
+# erroring with "could not load fraud flags". Every file is CREATE/ADD ... IF
+# NOT EXISTS, so re-running them is safe in either mode.
+echo "== applying hand-migrations (no runner exists for these)"
+for f in "$(dirname "$0")"/migrations/*.sql; do
+  echo "   $(basename "$f")"
+  kc exec -i promovolve-db-0 -- psql -U promovolve -d promovolve -v ON_ERROR_STOP=1 < "$f" >/dev/null
+done
+
 # The gate caches "an admin exists" in an atomic that never re-checks, so the
 # wipe alone does NOT unlock the wizard. This restart is not optional.
 echo "== restarting platform to clear the cached Initialized() flag"
