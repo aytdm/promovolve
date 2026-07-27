@@ -26,13 +26,30 @@
 #   • gcloud auth login done (interactive), and a billing account you can link
 #   • docker login done (regcred is minted from the keychain, like up.sh)
 #   • k8s/secrets.env + k8s/platform-secrets.env filled in
-#   • images pushed to Docker Hub at the digests pinned in k8s/kustomization.yaml
+#   • images available at the digests pinned in k8s/kustomization.yaml — true
+#     for the maintainer's staging cluster (CI pushes them). Running your own?
+#     use --build-images below; you do not need access to those repos.
 #
 # USAGE
 #   k8s-gke/setup.sh                 # full provision + deploy + verify
 #   k8s-gke/setup.sh --deploy-only   # skip GCP provisioning, just (re)apply
 #   PROJECT_ID=promovolve-xyz k8s-gke/setup.sh   # if `promovolve` ID is taken
 #   BILLING_ACCOUNT=XXXXXX-... k8s-gke/setup.sh  # pick a billing account
+#
+# RUNNING YOUR OWN DEPLOYMENT (the open-source path)
+#   The digests pinned in k8s/kustomization.yaml live in PRIVATE Docker Hub
+#   repos under `hanishi` — you cannot pull them. Build and push your own:
+#
+#     REGISTRY=ghcr.io/you k8s-gke/setup.sh --build-images
+#
+#   --build-images builds Dockerfile.api + Dockerfile.platform for linux/arm64
+#   (the c4a nodes are ARM), pushes them to $REGISTRY, and deploys exactly the
+#   digests it just pushed — so a first install never depends on someone else's
+#   registry or on the pins in this repo being fresh. Re-run it to redeploy
+#   after code changes. `docker login <your registry>` first.
+#
+#   REGISTRY alone (no --build-images) deploys the repo's pinned digests from
+#   your registry — only useful if you have already pushed those exact images.
 set -euo pipefail
 
 # ARM (Axion) NODES, NOT x86: images are built on the Apple-silicon dev Mac
@@ -50,12 +67,21 @@ NS=promovolve
 IP_NAME=promovolve-ingress
 CTX="gke_${PROJECT_ID}_${ZONE}_${CLUSTER}"
 
+# Where the images live. The default is the maintainer's private Docker Hub —
+# the STAGING deployment, whose digests CI pins in k8s/kustomization.yaml.
+# Anyone else running PromoVolve for their own business overrides this and
+# builds their own (see --build-images in the header). Left at the default
+# with no --build-images, this script behaves exactly as it always has.
+REGISTRY="${REGISTRY:-docker.io/hanishi}"
+BUILD_IMAGES=0
+
 DEPLOY_ONLY=0
 while [ $# -gt 0 ]; do
   case "$1" in
-    --deploy-only) DEPLOY_ONLY=1; shift ;;
-    --pin-images)  PIN_IMAGES=1; shift ;;
-    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    --deploy-only)  DEPLOY_ONLY=1; shift ;;
+    --pin-images)   PIN_IMAGES=1; shift ;;
+    --build-images) BUILD_IMAGES=1; shift ;;
+    -h|--help) sed -n '2,52p' "$0"; exit 0 ;;
     *) echo "unknown arg: $1 (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -66,6 +92,67 @@ BASEDIR="$(cd "$KDIR/../k8s" && pwd)"           # k8s (base + secrets.env)
 # deploy in the docker-desktop context (the inverse of up.sh's guard).
 kc()  { kubectl --context "$CTX" -n "$NS" "$@"; }
 kcg() { kubectl --context "$CTX" "$@"; }
+REPO="$(cd "$KDIR/.." && pwd)"                  # repo root (docker build context)
+
+# The image ref the BASE renders for one component, read out of
+# k8s/kustomization.yaml rather than hardcoded a second time here — the whole
+# point of this exercise is that the registry is stated in ONE place.
+base_ref() {  # $1 = api|platform  ->  docker.io/hanishi/promovolve-api@sha256:...
+  awk -v want="name: promovolve/$1" '
+    index($0, want) { f = 1 }
+    f && /newName:/         { n = $2 }
+    f && /digest: sha256:/  { print n "@" $2; exit }
+  ' "$BASEDIR/kustomization.yaml"
+}
+
+# Render the overlay, then point the two workload images at $REGISTRY (and, if
+# we just built them, at the digests we pushed). Substituting the rendered
+# output rather than nesting another kustomize overlay is deliberate: an
+# overlay's `images:` transformer matches the name AFTER the base has already
+# rewritten it, so a parent overlay would have to name `docker.io/hanishi/...`
+# literally — re-hardcoding the registry it is supposed to remove.
+#
+# With REGISTRY unset and no --build-images, both sides are identical and this
+# is a byte-for-byte no-op (verified against the pre-change render).
+render() {
+  local from_api to_api from_plt to_plt
+  from_api="$(base_ref api)";      from_plt="$(base_ref platform)"
+  to_api="${REGISTRY}/promovolve-api@${API_DIGEST:-${from_api##*@}}"
+  to_plt="${REGISTRY}/promovolve-platform@${PLATFORM_DIGEST:-${from_plt##*@}}"
+  kubectl kustomize --load-restrictor LoadRestrictionsNone "$KDIR" \
+    | sed -e "s#${from_api}#${to_api}#g" -e "s#${from_plt}#${to_plt}#g"
+}
+
+# Build + push both images to $REGISTRY and remember the digests, so a first
+# install deploys what it just built instead of depending on someone else's
+# registry (or on this repo's pins being fresh). linux/arm64 ONLY — see the
+# c4a note above; an amd64 image dies with `exec format error` on these nodes.
+build_and_push() {
+  command -v docker >/dev/null || die "docker not found (needed for --build-images)"
+  local tag; tag="$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null || echo manual)"
+  # file AND context differ per component — these mirror deploy.yml's two
+  # build-push steps exactly, so a local build produces the same image CI does.
+  local c file ctx
+  for c in api platform; do
+    case "$c" in
+      api)      file="$REPO/Dockerfile.api";     ctx="$REPO" ;;
+      platform) file="$REPO/platform/Dockerfile"; ctx="$REPO/platform" ;;
+    esac
+    echo "==> building $c (linux/arm64) -> ${REGISTRY}/promovolve-${c}:${tag}"
+    docker buildx build \
+      --platform linux/arm64 \
+      --file "$file" \
+      --tag "${REGISTRY}/promovolve-${c}:${tag}" \
+      --push "$ctx" \
+      || die "docker buildx build failed for $c — is 'docker login ${REGISTRY%%/*}' done?"
+  done
+  API_DIGEST="$(docker buildx imagetools inspect "${REGISTRY}/promovolve-api:${tag}" \
+    --format '{{.Manifest.Digest}}' 2>/dev/null)" || die "could not read the pushed api digest"
+  PLATFORM_DIGEST="$(docker buildx imagetools inspect "${REGISTRY}/promovolve-platform:${tag}" \
+    --format '{{.Manifest.Digest}}' 2>/dev/null)" || die "could not read the pushed platform digest"
+  echo "==> pushed  api=${API_DIGEST}"
+  echo "==> pushed  platform=${PLATFORM_DIGEST}"
+}
 die() { echo "ERROR: $*" >&2; exit 1; }
 
 command -v gcloud  >/dev/null || die "gcloud not found"
@@ -118,7 +205,21 @@ kcg cluster-info >/dev/null 2>&1 || die "cluster not reachable via context $CTX 
 echo "==> namespace '$NS'"
 kcg create namespace "$NS" --dry-run=client -o yaml | kcg apply -f - >/dev/null
 
-if kc get secret regcred >/dev/null 2>&1; then
+if [ "${REGISTRY}" != "docker.io/hanishi" ]; then
+  # Your own registry: we cannot mint a pull secret from the maintainer's
+  # Docker Hub keychain entry, and a PUBLIC registry needs none at all. Create
+  # regcred yourself if your images are private:
+  #   kubectl -n promovolve create secret docker-registry regcred \
+  #     --docker-server=<host> --docker-username=<u> --docker-password=<token>
+  # The workloads reference it via imagePullSecrets; an absent secret is fine
+  # for public images (kubelet just pulls anonymously).
+  if kc get secret regcred >/dev/null 2>&1; then
+    echo "==> regcred present — using it for ${REGISTRY}"
+  else
+    echo "==> no regcred (REGISTRY=${REGISTRY}) — assuming public images"
+    echo "    if they are private, create regcred and re-run (see comment in this script)"
+  fi
+elif kc get secret regcred >/dev/null 2>&1; then
   echo "==> regcred already present — skipping"
 else
   echo "==> creating regcred from your keychain Docker login (private Docker Hub repos)"
@@ -135,14 +236,24 @@ else
   echo "    regcred created for docker user: $DUSER"
 fi
 
-# Preserve CI-deployed images across manifest applies. The kustomize render
-# carries the digest pins from k8s/kustomization.yaml, which go stale the
-# moment CI deploys (CI rolls images by digest, never the pins) — a naive
-# apply therefore ROLLS THE APP BACK (happened live 2026-07-12: an
-# infra-only deploy reverted four shipped fixes). Default: capture the live
-# images before the apply and restore them after, so manual deploys are
-# infra/config-only. Pass --pin-images to deliberately deploy the pinned
-# digests (the pre-CI manual flow).
+# Preserve CI-deployed images across manifest applies. deploy.yml now writes
+# each rolled digest back to k8s/kustomization.yaml (its pin-images job), so
+# the pins should already match what is running and this step is belt-and-
+# braces. It stays because it is the cheap guard against the case that bit
+# twice while the pins were hand-maintained: the render carries whatever is
+# pinned, so a naive apply ROLLS THE APP BACK (2026-07-12: an infra-only
+# deploy reverted four shipped fixes; 2026-07-27: gke-factory-reset.sh took
+# api + singleton back four days and every /v1/internal/* route with them).
+# Default: capture the live images before the apply and restore them after,
+# so manual deploys are infra/config-only. Pass --pin-images to deliberately
+# deploy the pinned digests.
+# --build-images just pushed the images we want live, so preserving whatever
+# is running would throw them away — it takes the same path as --pin-images.
+if [ "$BUILD_IMAGES" -eq 1 ]; then
+  build_and_push
+  PIN_IMAGES=1
+fi
+
 LIVE_API=""; LIVE_SINGLETON=""; LIVE_PLATFORM=""
 if [ "${PIN_IMAGES:-0}" -ne 1 ]; then
   LIVE_API=$(kc get statefulset promovolve-api -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
@@ -150,8 +261,8 @@ if [ "${PIN_IMAGES:-0}" -ne 1 ]; then
   LIVE_PLATFORM=$(kc get deployment promovolve-platform -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
 fi
 
-echo "==> applying manifests (kustomize overlay k8s-gke)"
-kubectl kustomize --load-restrictor LoadRestrictionsNone "$KDIR" | kcg apply -f -
+echo "==> applying manifests (kustomize overlay k8s-gke, registry ${REGISTRY})"
+render | kcg apply -f -
 
 if [ "${PIN_IMAGES:-0}" -ne 1 ]; then
   echo "==> restoring live (CI-deployed) images over the manifest pins"

@@ -25,14 +25,72 @@ k8s-gke/setup.sh                  # idempotent: project → IP → cluster → d
 Then follow the printed next steps: grey-cloud A records at Cloudflare,
 wait for the managed cert, register the first account at `/setup`.
 
-## Redeploys
+## Running your own deployment (open source)
 
-Same flow as dev: push images, pin the new digests in
-`k8s/kustomization.yaml` (the base — the overlay inherits them), then:
+The digests pinned in `k8s/kustomization.yaml` point at **private** Docker
+Hub repos under `hanishi` — this cluster is the maintainer's staging
+deployment, and those images are not pullable by anyone else. Build and
+push your own instead:
+
+```sh
+docker login ghcr.io                                   # your registry
+REGISTRY=ghcr.io/you k8s-gke/setup.sh --build-images
+```
+
+`--build-images` builds `Dockerfile.api` and `Dockerfile.platform` for
+**linux/arm64** (the c4a nodes are ARM — an amd64 image dies with `exec
+format error`), pushes both to `$REGISTRY`, and deploys exactly the digests
+it just pushed. A first install therefore never depends on someone else's
+registry, nor on this repo's pins being fresh. Re-run it to redeploy after
+code changes.
+
+Everything else is already parameterised — pick your own project, zone and
+machine type:
+
+```sh
+PROJECT_ID=acme-ads ZONE=us-central1-a MACHINE=c4a-standard-4 \
+  REGISTRY=ghcr.io/you k8s-gke/setup.sh --build-images
+```
+
+If your images are **private**, create the pull secret yourself first (the
+script only mints `regcred` for the maintainer's Docker Hub account):
+
+```sh
+kubectl -n promovolve create secret docker-registry regcred \
+  --docker-server=ghcr.io --docker-username=you --docker-password=<token>
+```
+
+Public images need no secret. You will also want your own hostnames — see
+`RP_ID` and the ingress hosts below, since `RP_ID` binds passkeys to a host
+permanently.
+
+## Redeploys (maintainer / staging)
+
+CI builds and rolls images by digest on every push to `main`; that is the
+normal path and needs nothing here. For an infra/config-only change:
 
 ```sh
 k8s-gke/setup.sh --deploy-only
 ```
+
+which preserves the running CI-deployed images across the apply. To
+deliberately deploy the digests pinned in `k8s/kustomization.yaml` instead,
+add `--pin-images`.
+
+> **The pins are written back by CI** (`deploy.yml`'s `pin-images` job, via
+> `scripts/pin-image-digest.sh`), so `k8s/kustomization.yaml` describes what
+> is actually deployed. Do not hand-edit them.
+>
+> They used to be hand-maintained, and drifted permanently behind `main`.
+> That is why `--deploy-only` preserves the running images across an apply:
+> a plain apply deploys the pins, which rolled the app backwards twice —
+> four shipped fixes reverted on 2026-07-12, and on 2026-07-27
+> `scripts/gke-factory-reset.sh` reverted api + singleton to a four-day-old
+> build, taking every `/v1/internal/*` route with it. That preserve step is
+> now belt-and-braces rather than load-bearing.
+>
+> It matters most on a **clean** install: there is nothing running to
+> preserve, so the pins are simply what deploys.
 
 The kubectl context is `gke_promovolve_asia-northeast1-b_promovolve`; the
 script always passes `--context` explicitly, so it can't land in
