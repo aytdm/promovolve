@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -170,6 +171,22 @@ var funcMap = template.FuncMap{
 	// sym is the bare currency symbol, for input prefixes and field labels
 	// where the amount itself is typed by the operator.
 	"sym": func() string { return baseCurrency.Symbol },
+	// moneyhint scales a placeholder amount to the currency's own magnitude,
+	// via the static Currency.HintScale. Placeholders only — never a value
+	// that gets stored. Rounded to two significant figures so the hint reads
+	// as an example ("1,500") rather than a computed rate ("1,487.32").
+	"moneyhint": func(usd float64) string {
+		c := baseCurrency
+		scale := c.HintScale
+		if scale <= 0 {
+			scale = 1
+		}
+		v := usd * scale
+		if mag := math.Pow(10, math.Floor(math.Log10(v))-1); mag > 0 {
+			v = math.Round(v/mag) * mag
+		}
+		return c.Plain(currency.FromMajor(v))
+	},
 	// moneystep is the granularity of a money <input type="number">: whole
 	// units on a zero-decimal currency, hundredths elsewhere. A yen field
 	// stepping by 0.01 offers sub-yen precision nobody wants.

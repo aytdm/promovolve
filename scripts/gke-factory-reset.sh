@@ -91,6 +91,17 @@ else
   kc delete pvc -l app=promovolve-api --ignore-not-found
   kc delete pvc ddata-promovolve-singleton-0 --ignore-not-found
 
+  # Re-apply the overlay BEFORE Postgres comes back. init-db.sql is mounted
+  # from a kustomize-generated configMap, and deploy.yml rolls images by digest
+  # without ever re-applying it — so that configMap holds whatever was last
+  # applied by hand, which was 15 days stale. Deleting the volume then gave a
+  # database built from a fortnight-old schema: campaign_dim_daily_stats
+  # without pub_day_bucket, which killed the dashboard projection on its first
+  # envelope every 30s and left campaign_stats permanently empty. A reset must
+  # restore the schema the REPO describes, not the one the cluster remembers.
+  echo "== re-applying overlay so init-db.sql is current"
+  kubectl --context "$CTX" apply -k "$(dirname "$0")/../k8s-gke"
+
   echo "== scaling back up (Postgres re-inits from the configMap)"
   kc scale statefulset promovolve-db --replicas=1
   kc rollout status statefulset/promovolve-db --timeout=300s

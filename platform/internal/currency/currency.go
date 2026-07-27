@@ -30,26 +30,36 @@ type Currency struct {
 	Code     string
 	Symbol   string
 	Decimals int
+	// HintScale is roughly how many units of this currency a dollar is worth.
+	// It exists ONLY to scale placeholder text — a greyed "10.00" in a yen box
+	// suggests ¥10 is a sensible top-up when the real figure is nearer ¥1,500,
+	// and a hint that misleads is worse than none.
+	//
+	// Deliberately a static, approximate constant rather than a rate: the
+	// platform holds no exchange rate anywhere, by design, and nothing that
+	// gets STORED may pass through this. Stale by a factor of two is fine for
+	// an order-of-magnitude hint; being wrong by 150x is not.
+	HintScale float64
 }
 
 // USD is the fallback for any deployment installed before the base currency
 // became configurable: an unset setting must keep meaning exactly what those
 // ledgers were booked in.
-var USD = Currency{Code: "USD", Symbol: "$", Decimals: 2}
+var USD = Currency{Code: "USD", Symbol: "$", Decimals: 2, HintScale: 1}
 
 // Supported is the setup wizard's list, deliberately curated rather than the
 // full ISO set — each entry is a currency someone has to be able to read
 // correctly, not merely name.
 var Supported = []Currency{
 	USD,
-	{Code: "JPY", Symbol: "¥", Decimals: 0},
-	{Code: "EUR", Symbol: "€", Decimals: 2},
-	{Code: "GBP", Symbol: "£", Decimals: 2},
-	{Code: "AUD", Symbol: "A$", Decimals: 2},
-	{Code: "CAD", Symbol: "C$", Decimals: 2},
-	{Code: "KRW", Symbol: "₩", Decimals: 0},
-	{Code: "INR", Symbol: "₹", Decimals: 2},
-	{Code: "BRL", Symbol: "R$", Decimals: 2},
+	{Code: "JPY", Symbol: "¥", Decimals: 0, HintScale: 150},
+	{Code: "EUR", Symbol: "€", Decimals: 2, HintScale: 0.95},
+	{Code: "GBP", Symbol: "£", Decimals: 2, HintScale: 0.8},
+	{Code: "AUD", Symbol: "A$", Decimals: 2, HintScale: 1.5},
+	{Code: "CAD", Symbol: "C$", Decimals: 2, HintScale: 1.4},
+	{Code: "KRW", Symbol: "₩", Decimals: 0, HintScale: 1350},
+	{Code: "INR", Symbol: "₹", Decimals: 2, HintScale: 85},
+	{Code: "BRL", Symbol: "R$", Decimals: 2, HintScale: 5.5},
 }
 
 // ErrUnknown is returned for a code outside Supported. Callers seeding the

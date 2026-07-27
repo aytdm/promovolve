@@ -234,7 +234,7 @@
       <div>
         <label class="form-label">{{t "Daily Budget"}} ({{sym}})</label>
         <div >
-        <input type="number" name="budget" step="{{moneystep}}" min="{{moneystep}}" required placeholder="25.00"
+        <input type="number" name="budget" step="{{moneystep}}" min="{{moneystep}}" required placeholder="{{moneyhint 25.0}}"
                 class="form-input">
         
         </div>
@@ -242,7 +242,7 @@
       <div>
         <label class="form-label">{{t "Max CPM"}} ({{sym}})</label>
         <div >
-        <input type="number" name="maxCpm" step="{{moneystep}}" min="{{moneystep}}" required placeholder="5.00"
+        <input type="number" name="maxCpm" step="{{moneystep}}" min="{{moneystep}}" required placeholder="{{moneyhint 5.0}}"
                 class="form-input">
         
         </div>

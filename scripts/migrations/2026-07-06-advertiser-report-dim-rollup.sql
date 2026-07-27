@@ -20,6 +20,9 @@
 CREATE TABLE IF NOT EXISTS campaign_dim_daily_stats (
     campaign_id  VARCHAR(100) NOT NULL,
     day_bucket   DATE NOT NULL,
+    -- The publisher's local day. Advertiser and publisher settle on their own
+    -- zones, so a row is only attributable to each side with both buckets.
+    pub_day_bucket DATE NOT NULL,
     site_id      VARCHAR(100) NOT NULL,
     category     VARCHAR(100) NOT NULL DEFAULT '',
     impressions  BIGINT NOT NULL DEFAULT 0,
@@ -28,7 +31,7 @@ CREATE TABLE IF NOT EXISTS campaign_dim_daily_stats (
     spend        DECIMAL(18, 4) NOT NULL DEFAULT 0,
     dogeared_impressions BIGINT NOT NULL DEFAULT 0,
     updated_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (campaign_id, day_bucket, site_id, category)
+    PRIMARY KEY (campaign_id, day_bucket, pub_day_bucket, site_id, category)
 );
 
 CREATE INDEX IF NOT EXISTS idx_campaign_dim_daily_stats_day ON campaign_dim_daily_stats(day_bucket);
