@@ -440,7 +440,7 @@ document.body.addEventListener('inboxActed', function(){
         {{if $c.SafetyAdvisories}}
         <div class="bg-amber-50 rounded-lg p-3 mb-6 text-sm ring-1 ring-inset ring-amber-200">
           <p class="font-medium text-amber-900 mb-1">{{t "Content flagged: %s" (join $c.SafetyAdvisories ", ")}}</p>
-          <p class="text-amber-800">{{t "Our automated review flagged this creative's text. It is your call — approve it if it suits your audience, or reject it. Advertisers see the same note."}}</p>
+          <p class="text-amber-800">{{t "Our automated review flagged this ad's wording — from the creative's copy, or from its landing page. It usually reflects the subject being advertised (a drama's plot, a game's setting) rather than the ad itself. It is your call: approve it if it suits your audience, or reject it. Advertisers see the same note."}}</p>
         </div>
         {{end}}
         {{if $c.Filler}}

@@ -183,7 +183,7 @@
       {{end}}
       {{if .SafetyAdvisories}}
       <div class="flex items-center gap-1.5 mt-2 text-xs text-amber-700"
-           title="{{t "Our automated review flagged this creative's text. It does not stop delivery — publishers see the same note and decide whether to accept it — but some may decline, so it can reduce where the ad runs. The check reads your designer copy and landing-page text, not the image, so reword those if you would rather avoid the flag."}}">
+           title="{{t "Our automated review flagged this ad's wording. It usually reflects the subject being advertised — a drama's plot, a game's setting — rather than the ad itself. It does not stop delivery: publishers see the same note and decide whether to accept it, though some may decline, so it can narrow where the ad runs. The check reads the copy in your creative, or your landing page when the creative carries none. It never reads the image, so a different picture will not clear it — and if the flag came from a landing page you do not control, you may not be able to clear it at all."}}">
         <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v4m0 4h.01M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/></svg>
         <span>{{t "Content flagged: %s" (join .SafetyAdvisories ", ")}}</span>
       </div>
