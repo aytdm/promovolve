@@ -51,6 +51,12 @@ func main() {
 	// re-settles and testing the billing loop before a window naturally
 	// closes. Run inside the pod:
 	//   kubectl exec deploy/promovolve-platform -- /server settle-entity --type advertiser --id <id> [--now]
+	// Seed a fully-formed advertiser/publisher (user + core entity + org +
+	// membership) so guarded dashboard pages are reachable in dev — the
+	// register hatch alone creates no org, and Role derives from membership.
+	if len(os.Args) > 1 && os.Args[1] == "seed-account" {
+		os.Exit(runSeedAccount(cfg, os.Args[2:]))
+	}
 	if len(os.Args) > 1 && os.Args[1] == "settle-entity" {
 		os.Exit(runSettleEntity(cfg, os.Args[2:]))
 	}

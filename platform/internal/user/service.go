@@ -95,7 +95,7 @@ func (s *Service) ensureOrgSide(ctx context.Context, email, name string, side mo
 		}
 		return o, *o.PublisherID, nil
 	}
-	entityID, err := s.provisionEntity(email, side)
+	entityID, err := s.ProvisionEntity(email, side)
 	if err != nil {
 		return nil, "", fmt.Errorf("provision %s: %w", side, err)
 	}
@@ -209,7 +209,7 @@ func (s *Service) ApproveOrgSide(ctx context.Context, requestID, reviewerID stri
 			// org-scoped address instead.
 			email = "org+" + o.ID + "@" + o.Domain
 		}
-		entityID, err := s.provisionEntity(email, sr.Side)
+		entityID, err := s.ProvisionEntity(email, sr.Side)
 		if err != nil {
 			return fmt.Errorf("provision %s: %w", sr.Side, err)
 		}
@@ -245,9 +245,12 @@ func (s *Service) ListAll(ctx context.Context) ([]model.User, error) {
 	return s.repo.ListAll(ctx)
 }
 
-// provisionEntity creates an advertiser or publisher on the core API using the
-// email-based login endpoints which auto-create entities if new.
-func (s *Service) provisionEntity(email string, role model.Role) (string, error) {
+// ProvisionEntity creates an advertiser or publisher on the core API using the
+// email-based login endpoints which auto-create entities if new. Exported so
+// the seed-account subcommand builds accounts through the same path a real
+// signup takes, rather than inventing an entity ID the auction side has never
+// heard of.
+func (s *Service) ProvisionEntity(email string, role model.Role) (string, error) {
 	var endpoint string
 
 	if role == model.RoleAdvertiser {
