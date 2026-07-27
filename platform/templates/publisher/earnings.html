@@ -8,12 +8,12 @@
   <div class="grid grid-cols-3 gap-6 mt-6">
     <div class="bg-white p-6 rounded-lg border" title="{{t "Settled net earnings not yet paid out"}}">
       <p class="text-sm text-gray-500">{{t "Balance owed"}}</p>
-      <p class="text-3xl font-semibold mt-2">{{cur $.Cur .Accrued}}</p>
+      <p class="text-3xl font-semibold mt-2">{{money .Accrued}}</p>
       <p class="text-xs text-gray-400 mt-1">{{t "settled through yesterday, after platform fee"}}</p>
     </div>
     <div class="bg-white p-6 rounded-lg border">
       <p class="text-sm text-gray-500">{{t "Lifetime paid"}}</p>
-      <p class="text-3xl font-semibold mt-2">{{cur $.Cur .LifetimePaid}}</p>
+      <p class="text-3xl font-semibold mt-2">{{money .LifetimePaid}}</p>
     </div>
   </div>
 
@@ -37,7 +37,7 @@
           <td class="px-6 py-2 text-gray-500">{{.Period}}</td>
           <td class="px-6 py-2"><span class="badge {{.StatusBadge}}">{{t .Status}}</span></td>
           <td class="px-6 py-2 text-gray-500">{{.ExternalRef}}</td>
-          <td class="px-6 py-2 text-right font-medium">{{cur $.Cur .Amount}}</td>
+          <td class="px-6 py-2 text-right font-medium">{{money .Amount}}</td>
         </tr>
         {{else}}
         <tr><td class="px-6 py-4 text-gray-400" colspan="5">{{t "No payouts yet — they appear once your settled balance passes your minimum payout."}}</td></tr>
@@ -64,9 +64,9 @@
         <tr class="border-b last:border-0">
           <td class="px-6 py-2 font-medium">{{.Month}}</td>
           <td class="px-6 py-2 text-gray-500">{{.Impressions}}</td>
-          <td class="px-6 py-2 text-right text-gray-500">{{cur $.Cur .Gross}}</td>
-          <td class="px-6 py-2 text-right text-gray-500">−{{cur $.Cur .Fee}}</td>
-          <td class="px-6 py-2 text-right font-medium">{{cur $.Cur .Net}}</td>
+          <td class="px-6 py-2 text-right text-gray-500">{{money .Gross}}</td>
+          <td class="px-6 py-2 text-right text-gray-500">−{{money .Fee}}</td>
+          <td class="px-6 py-2 text-right font-medium">{{money .Net}}</td>
         </tr>
         {{else}}
         <tr><td class="px-6 py-4 text-gray-400" colspan="5">{{t "Nothing settled yet."}}</td></tr>
@@ -86,9 +86,9 @@
           <input name="method" class="form-input w-48" value="{{.Method}}" placeholder="{{t "bank transfer"}}">
         </div>
         <div>
-          <label class="form-label">{{t "Minimum payout ($)"}}</label>
+          <label class="form-label">{{t "Minimum payout"}} ({{sym}})</label>
           <input name="minPayout" class="form-input w-36" value="{{.MinPayout}}">
-          <p class="form-hint">{{t "payouts are offered once your balance passes this — platform minimum $%s" .PayoutFloor}}</p>
+          <p class="form-hint">{{t "payouts are offered once your balance passes this — platform minimum %s" (money .PayoutFloor)}}</p>
         </div>
       </div>
       <div>

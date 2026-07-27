@@ -66,8 +66,8 @@ type siteData struct {
 	// Sweep-optimizer summary. Shown next to "Floor CPM" so publishers
 	// can see what the optimizer actually chose vs the manually-set
 	// value. Empty strings until the first cycle produces an argmax.
-	OptimizedFloor      string // "$X.XX" or "" if no argmax yet
-	OptimizedFloorDelta string // "+$0.50" / "-$0.20" / "" / "$0.00"
+	OptimizedFloor      string // base-currency formatted, "" if no argmax yet
+	OptimizedFloorDelta string // "+$0.50" / "-$0.20" / "" / fmtMoney(0)
 	OptimizedFloorTrend string // "▲" / "▼" / "=" / ""
 	// Integration health from the ad tag's mount heartbeat, trailing 7
 	// days. HealthKnown=false (no heartbeats or endpoint unavailable)
@@ -227,19 +227,19 @@ func (h *Handler) renderPublisherSites(w http.ResponseWriter, r *http.Request, e
 			continue
 		}
 		bestVal, _ := strconv.ParseFloat(siteEv.BestFloor, 64)
-		sites[i].OptimizedFloor = fmt.Sprintf("$%.2f", bestVal)
+		sites[i].OptimizedFloor = fmtMoney(bestVal)
 		if siteEv.PreviousBestFloor != "" {
 			prevVal, _ := strconv.ParseFloat(siteEv.PreviousBestFloor, 64)
 			diff := bestVal - prevVal
 			switch {
 			case diff > 0.005:
-				sites[i].OptimizedFloorDelta = fmt.Sprintf("+$%.2f", diff)
+				sites[i].OptimizedFloorDelta = fmtMoneySigned(diff)
 				sites[i].OptimizedFloorTrend = "▲"
 			case diff < -0.005:
-				sites[i].OptimizedFloorDelta = fmt.Sprintf("-$%.2f", -diff)
+				sites[i].OptimizedFloorDelta = fmtMoneySigned(diff)
 				sites[i].OptimizedFloorTrend = "▼"
 			default:
-				sites[i].OptimizedFloorDelta = "$0.00"
+				sites[i].OptimizedFloorDelta = fmtMoney(0)
 				sites[i].OptimizedFloorTrend = "="
 			}
 		}
@@ -710,7 +710,7 @@ type campaignData struct {
 	Clicks            int
 	CTR               string
 	ECPM              string // effective CPM: spend / impressions * 1000
-	LifetimeSpend     string // projection totalSpend, formatted "$X.XX"
+	LifetimeSpend     string // projection totalSpend, base-currency formatted
 	BidsToday         int
 	WinRate           string // e.g. "45.2%"
 	WinRateClass      string // CSS class: text-red-600, text-amber-600, text-green-600
@@ -838,7 +838,7 @@ func (h *Handler) AdvertiserCampaigns(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Load campaigns (enriched with RL stats + budget inline)
+	// Load campaigns (enriched with delivery stats + budget inline)
 	var campaigns []campaignData
 	campBody, _ := h.coreGet("/v1/advertisers/me/campaigns?limit=50", claims)
 	var campResp struct {
@@ -1051,7 +1051,7 @@ func (h *Handler) AdvertiserCampaigns(w http.ResponseWriter, r *http.Request) {
 			sumClicks += ps.Clicks
 			if ps.Impressions > 0 {
 				cd.CTR = fmt.Sprintf("%.1f%%", ps.CTR*100)
-				cd.ECPM = fmt.Sprintf("$%.2f", ps.TotalSpend/float64(ps.Impressions)*1000)
+				cd.ECPM = fmtMoney(ps.TotalSpend / float64(ps.Impressions) * 1000)
 			}
 		}
 		// Win rate
@@ -1641,13 +1641,41 @@ type xAxisTick struct {
 	Label string
 }
 
+// yAxisTick is one gridline label on the argmax chart. The values are derived
+// from the observed floor range rather than fixed, so the chart reads
+// correctly whatever the deployment's currency and price level.
+type yAxisTick struct {
+	Y     int
+	Label string
+}
+
+// niceCeiling rounds a value up to a readable axis maximum — 1, 2 or 5 times
+// a power of ten — so gridline labels land on round numbers in any currency
+// ($10, ¥2,000) instead of whatever the data happened to peak at.
+func niceCeiling(v float64) float64 {
+	if v <= 0 {
+		return 1
+	}
+	mag := math.Pow(10, math.Floor(math.Log10(v)))
+	switch n := v / mag; {
+	case n <= 1:
+		return mag
+	case n <= 2:
+		return 2 * mag
+	case n <= 5:
+		return 5 * mag
+	default:
+		return 10 * mag
+	}
+}
+
 // argmaxHistoryPoint is one completed cycle's pick, sourced from the
 // persistent /sweep-history endpoint. Renders as a simple SVG chart of
 // "optimized floor over time".
 type argmaxHistoryPoint struct {
 	TS    string  // ISO timestamp, for tooltip and X-axis label
 	Floor float64 // argmax value picked at this cycle
-	Label string  // formatted "$X.XX"
+	Label string  // base-currency formatted
 	X     int     // SVG x coordinate (computed; viewBox uses 0–100)
 	Y     int     // SVG y coordinate (computed; viewBox uses 0–100, inverted)
 }
@@ -1661,7 +1689,7 @@ type argmaxStability struct {
 	Status      string // "Stable" / "Mildly variable" / "Highly variable" / "Insufficient data"
 	StatusColor string // tailwind color class for the badge
 	Summary     string // e.g. "Last 5 cycles agreed on $4.50" or "Last 5 picks ranged $1.20 - $5.60"
-	StdDev      string // formatted "$X.XX"
+	StdDev      string // base-currency formatted
 	Recent      string // e.g. "$4.50, $4.50, $3.40" — comma-separated recent picks
 	N           int    // count of cycles considered
 }
@@ -1689,6 +1717,7 @@ type floorObservationsData struct {
 	ArgmaxStability *argmaxStability     // nil if no data
 	ArgmaxNav       *argmaxHistoryNav    // date picker state
 	ArgmaxXTicks    []xAxisTick          // X-axis time labels for the chart
+	ArgmaxYTicks    []yAxisTick          // Y-axis money labels, derived from the data
 	// Sweep evidence table — nil only before the entity has finished
 	// recovery and installed its optimizer.
 	Sweep *floorSweepEvidence
@@ -1716,7 +1745,7 @@ type floorObservationsData struct {
 type categoryFloorRow struct {
 	Category     string // demand category id
 	CategoryName string // resolved taxonomy name; falls back to the id
-	Floor        string // live enforced floor when known, else latest journaled, "$X.XX"
+	Floor        string // live enforced floor when known, else latest journaled, base-currency formatted
 	LastUpdate   string // timestamp of the latest journaled decision
 	// Live demand context (from /category-demand): what's happening NOW,
 	// as opposed to SetBy/LastUpdate which describe the last decision.
@@ -1837,13 +1866,13 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 		bestVal := -1.0
 		if evResp.BestFloor != "" {
 			bestVal, _ = strconv.ParseFloat(evResp.BestFloor, 64)
-			bestStr = fmt.Sprintf("$%.2f", bestVal)
+			bestStr = fmtMoney(bestVal)
 		}
 		prevBestStr := "—"
 		prevBestVal := -1.0
 		if evResp.PreviousBestFloor != "" {
 			prevBestVal, _ = strconv.ParseFloat(evResp.PreviousBestFloor, 64)
-			prevBestStr = fmt.Sprintf("$%.2f", prevBestVal)
+			prevBestStr = fmtMoney(prevBestVal)
 		}
 
 		// Best-floor delta vs previous cycle. Only meaningful when both
@@ -1854,13 +1883,13 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 		if bestVal >= 0 && prevBestVal >= 0 {
 			diff := bestVal - prevBestVal
 			if diff > 0.005 {
-				bestDelta = fmt.Sprintf("+$%.2f", diff)
+				bestDelta = fmtMoneySigned(diff)
 				trend = "▲"
 			} else if diff < -0.005 {
-				bestDelta = fmt.Sprintf("-$%.2f", -diff)
+				bestDelta = fmtMoneySigned(diff)
 				trend = "▼"
 			} else {
-				bestDelta = "$0.00"
+				bestDelta = fmtMoney(0)
 				trend = "="
 			}
 		}
@@ -1898,16 +1927,16 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 			deltaStr := "—"
 			deltaSign := 0
 			if prevRev, ok := prevByFloor[c.Floor]; ok {
-				prevRevStr = fmt.Sprintf("$%.4f", prevRev)
+				prevRevStr = fmtMoneyPrec(prevRev, 2)
 				diff := rev - prevRev
 				if diff > 0.005 {
-					deltaStr = fmt.Sprintf("+$%.4f", diff)
+					deltaStr = fmtMoneySignedPrec(diff, 2)
 					deltaSign = 1
 				} else if diff < -0.005 {
-					deltaStr = fmt.Sprintf("-$%.4f", -diff)
+					deltaStr = fmtMoneySignedPrec(diff, 2)
 					deltaSign = -1
 				} else {
-					deltaStr = "$0.0000"
+					deltaStr = fmtMoneyPrec(0, 2)
 					deltaSign = 0
 				}
 			} else if len(evResp.PreviousCandidates) > 0 {
@@ -1928,8 +1957,8 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 			}
 
 			rows = append(rows, floorSweepCandidateRow{
-				Floor:           fmt.Sprintf("$%.2f", f),
-				Revenue:         fmt.Sprintf("$%.4f", rev),
+				Floor:           fmtMoney(f),
+				Revenue:         fmtMoneyPrec(rev, 2),
 				Impressions:     c.Impressions,
 				IsCurrent:       math.Abs(f-curFloor) < 1e-6,
 				IsBest:          bestVal >= 0 && math.Abs(f-bestVal) < 1e-6,
@@ -1943,7 +1972,7 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 
 		sweep = &floorSweepEvidence{
 			Phase:                 evResp.Phase,
-			CurrentFloor:          fmt.Sprintf("$%.2f", curFloor),
+			CurrentFloor:          fmtMoney(curFloor),
 			BestFloor:             bestStr,
 			PreviousBestFloor:     prevBestStr,
 			BestFloorDelta:        bestDelta,
@@ -1962,6 +1991,7 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 	// If ?date=YYYY-MM-DD is set, scope the chart to that UTC calendar day
 	// (the date-picker case). Otherwise return the most-recent 200 cycles.
 	var argmaxHistory []argmaxHistoryPoint
+	var argmaxYTicks []yAxisTick
 	var argmaxNav *argmaxHistoryNav
 	var categoryFloors []categoryFloorRow
 	var floorRange string
@@ -1992,7 +2022,7 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 			pt := argmaxHistoryPoint{
 				TS:    d.TS,
 				Floor: floor,
-				Label: fmt.Sprintf("$%.2f", floor),
+				Label: fmtMoney(floor),
 			}
 			if d.Category == nil || *d.Category == "" {
 				argmaxHistory = append(argmaxHistory, pt)
@@ -2098,7 +2128,7 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 				// Prefer the LIVE enforced floor over the last journaled one
 				// when they disagree (the journal lags mid-cycle).
 				if d.Floor != nil {
-					row.Floor = fmt.Sprintf("$%.2f", *d.Floor)
+					row.Floor = fmtMoney(*d.Floor)
 				}
 			} else {
 				row.DemandNow = i18n.T(obsLang, "no current bidders — historical")
@@ -2138,7 +2168,7 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 				Bidders:      d.Bidders,
 			}
 			if d.Floor != nil {
-				row.Floor = fmt.Sprintf("$%.2f", *d.Floor)
+				row.Floor = fmtMoney(*d.Floor)
 			}
 			row.SweepStatus = sweepStatus(d)
 			if d.Bidders == 1 {
@@ -2153,9 +2183,9 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 		})
 		if activeCats > 0 && !math.IsInf(minFloor, 1) {
 			if math.Abs(maxFloor-minFloor) < 0.005 {
-				floorRange = fmt.Sprintf("$%.2f", minFloor)
+				floorRange = fmtMoney(minFloor)
 			} else {
-				floorRange = fmt.Sprintf("$%.2f – $%.2f", minFloor, maxFloor)
+				floorRange = fmtMoney(minFloor) + " – " + fmtMoney(maxFloor)
 			}
 		} else if activeCats > 0 {
 			floorRange = "measuring"
@@ -2187,21 +2217,34 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 		argmaxNav = nav
 
 		// Compute SVG coords: X spans 0–100 across all points, Y inverts
-		// (0 = top of chart = $10, 100 = bottom = $0). Y scale uses the
-		// 0–10 floor range hard-coded (matches sweep's default maxFloor).
-		// If there's only one point we put it dead center horizontally.
-		// Y coordinates map to a 0-40 range in viewBox units (instead of
-		// 0-100) so the chart's viewBox can be wide-aspect (~3:1) without
-		// preserveAspectRatio stretching. Template gridlines + labels use
-		// matching 0-40 Y positions: $10=0, $7.50=10, $5=20, $2.50=30, $0=40.
+		// (0 = top of chart, 40 = bottom = zero). If there's only one point we
+		// put it dead center horizontally. Y coordinates map to a 0-40 range
+		// in viewBox units (instead of 0-100) so the chart's viewBox can be
+		// wide-aspect (~3:1) without preserveAspectRatio stretching.
+		//
+		// The top of the scale is DERIVED from the data, not fixed. It used to
+		// be a hard-coded $10, which silently made the chart useless in any
+		// currency whose floors are numerically larger: every yen floor
+		// (¥79-¥1600) exceeded the ceiling, clamped, and drew a flat line
+		// pinned to the top forever. The axis labels are emitted alongside so
+		// the template no longer hardcodes them either.
 		n := len(argmaxHistory)
+		top := 0.0
+		for j := range argmaxHistory {
+			if argmaxHistory[j].Floor > top {
+				top = argmaxHistory[j].Floor
+			}
+		}
+		// Round the ceiling up to something legible and leave headroom, so a
+		// series sitting at its own maximum isn't drawn along the top edge.
+		top = niceCeiling(top * 1.15)
 		for j := range argmaxHistory {
 			if n == 1 {
 				argmaxHistory[j].X = 50
 			} else {
 				argmaxHistory[j].X = int(float64(j) / float64(n-1) * 100)
 			}
-			yf := argmaxHistory[j].Floor / 10.0
+			yf := argmaxHistory[j].Floor / top
 			if yf < 0 {
 				yf = 0
 			}
@@ -2209,6 +2252,14 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 				yf = 1
 			}
 			argmaxHistory[j].Y = int((1.0 - yf) * 40)
+		}
+		// Five gridline labels top to bottom, matching the 0-40 Y positions
+		// the template draws lines at.
+		for i := 0; i <= 4; i++ {
+			argmaxYTicks = append(argmaxYTicks, yAxisTick{
+				Y:     i * 10,
+				Label: fmtMoney(top * float64(4-i) / 4),
+			})
 		}
 	}
 
@@ -2251,6 +2302,7 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 		ArgmaxStability:      stabilityPtr,
 		ArgmaxNav:            argmaxNav,
 		ArgmaxXTicks:         argmaxXTicks,
+		ArgmaxYTicks:         argmaxYTicks,
 		Sweep:                sweep,
 		CategoryFloors:       categoryFloors,
 		FloorRange:           floorRange,
@@ -2364,7 +2416,7 @@ func (h *Handler) ResetFloorAgent(w http.ResponseWriter, r *http.Request) {
 
 // UpdateSlotFloorOverride sets or clears the admin per-slot floor.
 // Empty floorCpm clears the override; the slot then falls back to the
-// RL-learned floor or the slot-quality-prior-scaled site floor.
+// slot-quality-prior-scaled site floor.
 func (h *Handler) UpdateSlotFloorOverride(w http.ResponseWriter, r *http.Request) {
 	_, claims := h.sessionUser(r)
 	if claims == nil {
@@ -2376,7 +2428,7 @@ func (h *Handler) UpdateSlotFloorOverride(w http.ResponseWriter, r *http.Request
 	// Batch save: the form submits one (slotId, floorCpm) pair per slot
 	// row as parallel arrays, so all overrides save in a single request.
 	// Empty floorCpm clears that slot's override (it then falls back to
-	// the RL-learned floor / slot-quality-prior-scaled site floor).
+	// the slot-quality-prior-scaled site floor).
 	slotIDs := r.Form["slotId"]
 	floors := r.Form["floorCpm"]
 	for i, slotID := range slotIDs {
@@ -2689,7 +2741,7 @@ type creativeMediaRow struct {
 	Clicks      int64
 	CTAClicks   int64
 	CTR         string // "" when no clicks (see the CTR note on creativeData)
-	Spend       string // "$X.XX"
+	Spend       string // base-currency formatted
 }
 
 // One site row of the going-rate view shown beside the Max CPM inputs.
@@ -2906,7 +2958,7 @@ func (h *Handler) AdvertiserCreatives(w http.ResponseWriter, r *http.Request) {
 					Impressions: m.Impressions,
 					Clicks:      m.Clicks,
 					CTAClicks:   m.CTAClicks,
-					Spend:       fmt.Sprintf("$%.2f", m.Spend),
+					Spend:       fmtMoney(m.Spend),
 				}
 				// CTR only with at least one click — same rule as the card totals.
 				if m.Clicks > 0 {
@@ -3168,10 +3220,10 @@ func (h *Handler) AdvertiserStats(w http.ResponseWriter, r *http.Request) {
 			cd.Clicks = ps.Clicks
 			if ps.Impressions > 0 {
 				cd.CTR = fmt.Sprintf("%.1f%%", ps.CTR*100)
-				cd.ECPM = fmt.Sprintf("$%.2f", ps.Spend/float64(ps.Impressions)*1000)
+				cd.ECPM = fmtMoney(ps.Spend / float64(ps.Impressions) * 1000)
 			}
 			if ps.Spend > 0 {
-				cd.LifetimeSpend = fmt.Sprintf("$%.2f", ps.Spend)
+				cd.LifetimeSpend = fmtMoney(ps.Spend)
 			}
 		}
 		campaigns = append(campaigns, cd)
@@ -3207,11 +3259,11 @@ func (h *Handler) AdvertiserStats(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		for hr := 0; hr < 24; hr++ {
-			b := hourlyBar{Hour: hr, Spend: "$0.00"}
+			b := hourlyBar{Hour: hr, Spend: fmtMoney(0)}
 			if v, ok := byHour[hr]; ok {
 				b.Imps = v.Imps
 				if sv, err := strconv.ParseFloat(v.Spend, 64); err == nil {
-					b.Spend = fmt.Sprintf("$%.2f", sv)
+					b.Spend = fmtMoney(sv)
 				}
 				if maxImps > 0 {
 					b.HeightPct = int(float64(v.Imps) / float64(maxImps) * 100)
@@ -3248,7 +3300,7 @@ func (h *Handler) AdvertiserStats(w http.ResponseWriter, r *http.Request) {
 type hourlyBar struct {
 	Hour      int
 	Imps      int64
-	Spend     string // "$X.XX"
+	Spend     string // base-currency formatted
 	HeightPct int
 }
 
@@ -4522,13 +4574,31 @@ func computeArgmaxStability(lang string, history []argmaxHistoryPoint) *argmaxSt
 	}
 	recent := strings.Join(recentLabels, ", ")
 
-	// Count how many of the last `tailLen` picks fall within $0.50 of
-	// the most recent pick. Catches the "stable but with one outlier"
-	// case better than a pure std-dev threshold would.
+	// Spread is judged RELATIVE to the floor level, not against an absolute
+	// band. The thresholds used to be a flat $0.50 and $2.00, which is the
+	// only formulation that cannot survive a currency change: a yen floor
+	// series oscillating around ¥800 has a standard deviation in the tens, so
+	// every site would read "Highly variable" forever and `agreed` would
+	// always be zero. As fractions of the mean these bands are scale-free —
+	// and at a typical dollar floor they land close to where the old absolute
+	// ones did.
+	const (
+		stableCV = 0.25 // σ under a quarter of the mean → converged
+		mildCV   = 1.00 // σ under the mean itself → noisy but not wild
+	)
+	spread := 1.0 // no meaningful mean → treat as maximally variable
+	if mean > 0 {
+		spread = stddev / mean
+	}
+
+	// Count how many of the last `tailLen` picks sit close to the most recent
+	// one. Catches the "stable but with one outlier" case better than a pure
+	// std-dev threshold would.
 	latest := history[n-1].Floor
+	band := math.Abs(mean) * stableCV
 	agreed := 0
 	for i := n - tailLen; i < n; i++ {
-		if math.Abs(history[i].Floor-latest) < 0.5 {
+		if math.Abs(history[i].Floor-latest) < band {
 			agreed++
 		}
 	}
@@ -4537,18 +4607,18 @@ func computeArgmaxStability(lang string, history []argmaxHistoryPoint) *argmaxSt
 	color := ""
 	summary := ""
 	switch {
-	case stddev < 0.50 && n >= 3:
+	case spread < stableCV && n >= 3:
 		status = "Stable optimum"
 		color = "bg-green-100 text-green-800"
-		summary = i18n.T(lang, "Last %d cycles all within $0.50 of $%.2f", agreed, latest)
-	case stddev < 2.00:
+		summary = i18n.T(lang, "Last %d cycles all within %s of %s", agreed, fmtMoney(band), fmtMoney(latest))
+	case spread < mildCV:
 		status = "Mildly variable"
 		color = "bg-yellow-100 text-yellow-800"
-		summary = i18n.T(lang, "Recent picks: %s (σ=$%.2f)", recent, stddev)
+		summary = i18n.T(lang, "Recent picks: %s (σ=%s)", recent, fmtMoney(stddev))
 	default:
 		status = "Highly variable"
 		color = "bg-red-100 text-red-700"
-		summary = i18n.T(lang, "Recent picks: %s (σ=$%.2f over %d cycles)", recent, stddev, n)
+		summary = i18n.T(lang, "Recent picks: %s (σ=%s over %d cycles)", recent, fmtMoney(stddev), n)
 	}
 
 	// Special-case n==2 with same value: very obviously stable but
@@ -4563,7 +4633,7 @@ func computeArgmaxStability(lang string, history []argmaxHistoryPoint) *argmaxSt
 		Status:      status,
 		StatusColor: color,
 		Summary:     summary,
-		StdDev:      fmt.Sprintf("$%.2f", stddev),
+		StdDev:      fmtMoney(stddev),
 		Recent:      recent,
 		N:           n,
 	}

@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS campaign_dim_daily_stats (
     impressions  BIGINT NOT NULL DEFAULT 0,
     clicks       BIGINT NOT NULL DEFAULT 0,
     cta_clicks   BIGINT NOT NULL DEFAULT 0,
-    spend        DECIMAL(12, 4) NOT NULL DEFAULT 0,
+    spend        DECIMAL(18, 4) NOT NULL DEFAULT 0,
     dogeared_impressions BIGINT NOT NULL DEFAULT 0,
     updated_at   TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
     PRIMARY KEY (campaign_id, day_bucket, site_id, category)

@@ -1120,7 +1120,7 @@ func (h *Handler) renderAdminSettings(w http.ResponseWriter, r *http.Request, er
 
 	payoutFloor := ""
 	if floor, err := h.billingSvc.PayoutFloorMicros(r.Context()); err == nil {
-		payoutFloor = usd(floor)
+		payoutFloor = usdPlain(floor) // form input value: bare number only
 	}
 
 	// Timezone dropdown: the curated preference list, plus the (possibly
@@ -1210,7 +1210,7 @@ func (h *Handler) UpdatePayoutFloor(w http.ResponseWriter, r *http.Request) {
 	r.ParseForm()
 	micros, err := parseDollars(r.FormValue("payoutFloor"))
 	if err != nil {
-		h.renderAdminSettings(w, r, "payout floor must be a positive dollar amount")
+		h.renderAdminSettings(w, r, "payout floor must be a positive amount")
 		return
 	}
 	if err := h.billingSvc.SetPayoutFloorMicros(r.Context(), micros, admin.ID); err != nil {

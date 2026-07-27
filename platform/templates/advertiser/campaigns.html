@@ -16,7 +16,7 @@
 <!-- Budget info line -->
 {{if .AdvBudget}}
 <div class="flex items-center justify-between mb-6 text-sm text-gray-500">
-  <span>{{t "Account budget: $%s/day ($%s remaining, $%s spent today)" .AdvBudget.DailyBudget .AdvBudget.Remaining .AdvBudget.SpendToday}}</span>
+  <span>{{t "Account budget: %s/day (%s remaining, %s spent today)" (money .AdvBudget.DailyBudget) (money .AdvBudget.Remaining) (money .AdvBudget.SpendToday)}}</span>
   <a href="/advertiser/account" class="text-brand hover:underline">{{t "Edit"}}</a>
 </div>
 {{end}}
@@ -25,7 +25,7 @@
 <div class="grid grid-cols-4 gap-4 mb-6">
   <div class="bg-white p-4 rounded-lg border">
     <p class="text-xs text-gray-500 uppercase tracking-wide">{{t "Today's Spend"}}</p>
-    <p class="text-2xl font-semibold mt-1">{{if .AdvBudget}}{{cur $.Cur .AdvBudget.SpendToday}}{{else}}{{cur $.Cur 0.0}}{{end}}</p>
+    <p class="text-2xl font-semibold mt-1">{{if .AdvBudget}}{{money .AdvBudget.SpendToday}}{{else}}{{money 0.0}}{{end}}</p>
   </div>
   <div class="bg-white p-4 rounded-lg border">
     <p class="text-xs text-gray-500 uppercase tracking-wide">{{t "Campaigns"}}</p>
@@ -232,19 +232,19 @@
     </div>
     <div class="grid grid-cols-2 gap-4 mb-4">
       <div>
-        <label class="form-label">{{t "Daily Budget ($)"}}</label>
-        <div {{if and $.Cur $.Cur.Convert}}x-data="{fxb:''}"{{end}}>
-        <input type="number" name="budget" step="0.01" min="0.01" required placeholder="25.00"
-               {{if and $.Cur $.Cur.Convert}}x-model="fxb"{{end}} class="form-input">
-        {{if and $.Cur $.Cur.Convert}}<p class="text-xs text-gray-400 mt-1" x-show="fxb>0" x-text="'≈{{$.Cur.Symbol}}'+(fxb*{{$.Cur.Rate}}).toLocaleString(undefined,{maximumFractionDigits:{{if $.Cur.ZeroDec}}0{{else}}2{{end}}})"></p>{{end}}
+        <label class="form-label">{{t "Daily Budget"}} ({{sym}})</label>
+        <div >
+        <input type="number" name="budget" step="{{moneystep}}" min="0.01" required placeholder="25.00"
+                class="form-input">
+        
         </div>
       </div>
       <div>
-        <label class="form-label">{{t "Max CPM ($)"}}</label>
-        <div {{if and $.Cur $.Cur.Convert}}x-data="{fxc:''}"{{end}}>
-        <input type="number" name="maxCpm" step="0.01" min="0.01" required placeholder="5.00"
-               {{if and $.Cur $.Cur.Convert}}x-model="fxc"{{end}} class="form-input">
-        {{if and $.Cur $.Cur.Convert}}<p class="text-xs text-gray-400 mt-1" x-show="fxc>0" x-text="'≈{{$.Cur.Symbol}}'+(fxc*{{$.Cur.Rate}}).toLocaleString(undefined,{maximumFractionDigits:{{if $.Cur.ZeroDec}}0{{else}}2{{end}}})"></p>{{end}}
+        <label class="form-label">{{t "Max CPM"}} ({{sym}})</label>
+        <div >
+        <input type="number" name="maxCpm" step="{{moneystep}}" min="0.01" required placeholder="5.00"
+                class="form-input">
+        
         </div>
         <span data-hint-slot>{{template "market-rates-hint" $.MarketRates}}</span>
       </div>
@@ -307,8 +307,8 @@
       <!-- Budget bar -->
       <div class="w-32">
         <div class="flex justify-between text-xs text-gray-500 mb-1">
-          <span>{{cur $.Cur .SpendToday}}</span>
-          <span>{{cur $.Cur .DailyBudget}}</span>
+          <span>{{money .SpendToday}}</span>
+          <span>{{money .DailyBudget}}</span>
         </div>
         <div class="h-1.5 bg-gray-200 rounded-full">
           <div class="h-full rounded-full {{if gt .BudgetPct 90.0}}bg-red-500{{else if gt .BudgetPct 70.0}}bg-amber-500{{else}}bg-green-500{{end}}"
@@ -336,11 +336,11 @@
 
       <!-- CPM -->
       <div class="text-right text-sm w-20">
-        <p class="font-medium">{{if .MaxCPM}}${{.MaxCPM}}{{if and $.Cur $.Cur.Convert}} <span class="font-normal text-gray-400 text-xs">({{cur $.Cur .MaxCPM}})</span>{{end}}{{else}}&mdash;{{end}}</p>
+        <p class="font-medium">{{if .MaxCPM}}{{money .MaxCPM}}{{else}}&mdash;{{end}}</p>
         <p class="text-xs text-gray-500">{{t "max CPM"}}</p>
       </div>
       <div class="text-right text-sm w-20">
-        <p class="font-medium">{{if .ECPM}}{{cur $.Cur .ECPM}}{{else}}&mdash;{{end}}</p>
+        <p class="font-medium">{{if .ECPM}}{{money .ECPM}}{{else}}&mdash;{{end}}</p>
         <p class="text-xs text-gray-500">{{t "eCPM"}}</p>
       </div>
 
@@ -406,8 +406,8 @@
           <p class="text-gray-500 text-xs uppercase mb-2">{{t "Max Bid"}}</p>
           <form method="POST" action="/advertiser/campaigns/cpm" class="flex items-center gap-2 mt-1">
             <input type="hidden" name="campaignId" value="{{.ID}}">
-            <span class="text-gray-500">$</span>
-            <input type="number" name="maxCpm" step="0.01" min="0.01" value="{{.MaxCPM}}"
+            <span class="text-gray-500">{{sym}}</span>
+            <input type="number" name="maxCpm" step="{{moneystep}}" min="0.01" value="{{.MaxCPM}}"
                    class="w-24 px-2 py-1 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand">
             <button type="submit" class="btn btn-primary btn-sm">{{t "Update"}}</button>
           </form>
@@ -615,19 +615,19 @@
 
           <div class="grid grid-cols-2 gap-4 mb-4">
             <div>
-              <label class="form-label">{{t "Daily Budget ($)"}}</label>
-              <div {{if and $.Cur $.Cur.Convert}}x-data="{fxb:'{{.DailyBudget}}'}"{{end}}>
-              <input type="number" name="budget" step="0.01" min="0.01" value="{{.DailyBudget}}"
-                     {{if and $.Cur $.Cur.Convert}}x-model="fxb"{{end}} class="form-input">
-              {{if and $.Cur $.Cur.Convert}}<p class="text-xs text-gray-400 mt-1" x-show="fxb>0" x-text="'≈{{$.Cur.Symbol}}'+(fxb*{{$.Cur.Rate}}).toLocaleString(undefined,{maximumFractionDigits:{{if $.Cur.ZeroDec}}0{{else}}2{{end}}})"></p>{{end}}
+              <label class="form-label">{{t "Daily Budget"}} ({{sym}})</label>
+              <div >
+              <input type="number" name="budget" step="{{moneystep}}" min="0.01" value="{{.DailyBudget}}"
+                      class="form-input">
+              
               </div>
             </div>
             <div>
-              <label class="form-label">{{t "Max CPM ($)"}}</label>
-              <div {{if and $.Cur $.Cur.Convert}}x-data="{fxc:'{{.MaxCPM}}'}"{{end}}>
-              <input type="number" name="maxCpm" step="0.01" min="0.01" value="{{.MaxCPM}}"
-                     {{if and $.Cur $.Cur.Convert}}x-model="fxc"{{end}} class="form-input">
-              {{if and $.Cur $.Cur.Convert}}<p class="text-xs text-gray-400 mt-1" x-show="fxc>0" x-text="'≈{{$.Cur.Symbol}}'+(fxc*{{$.Cur.Rate}}).toLocaleString(undefined,{maximumFractionDigits:{{if $.Cur.ZeroDec}}0{{else}}2{{end}}})"></p>{{end}}
+              <label class="form-label">{{t "Max CPM"}} ({{sym}})</label>
+              <div >
+              <input type="number" name="maxCpm" step="{{moneystep}}" min="0.01" value="{{.MaxCPM}}"
+                      class="form-input">
+              
               </div>
               <span data-hint-slot>{{template "market-rates-hint" $.MarketRates}}</span>
             </div>
@@ -758,7 +758,7 @@
     {{end}}
   {{end}}
   {{if .OverallMedian}}
-  <p title="{{t "Computed from the price every billed impression actually cleared at across the whole network — all advertisers, all sites. Median: half of all impressions were won at or below this. Typical range: the middle half of impressions cleared inside this band. Bids stay private; only charged prices are counted, and unbilled pin re-views are excluded."}}">{{t "Going rate (last %d days): median %s, typical range %s–%s" .Days .OverallMedian .OverallP25 .OverallP75}}</p>
+  <p title="{{t "Computed from the price every billed impression actually cleared at across the whole network — all advertisers, all sites. Median: half of all impressions were won at or below this. Typical range: the middle half of impressions cleared inside this band. Bids stay private; only charged prices are counted, and unbilled pin re-views are excluded."}}">{{t "Going rate (last %d days): median %s, typical range %s–%s" .Days (money .OverallMedian) (money .OverallP25) (money .OverallP75)}}</p>
   {{else}}
   <p>{{t "No cleared impressions in this context yet — the going rate appears once ads serve here."}}</p>
   {{end}}
@@ -768,7 +768,7 @@
   <p data-reach class="hidden font-medium text-gray-600"
      data-fmt="{{t "A bid this high reaches roughly %s of all network impressions (last %d days)" "%s" .Days}}"></p>
   {{if .FloorFrom}}
-  <p class="text-gray-400">{{t "Entry floors from %s" .FloorFrom}}</p>
+  <p class="text-gray-400">{{t "Entry floors from %s" (money .FloorFrom)}}</p>
   {{end}}
 </div>
 {{end}}

@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+
+	"github.com/hanishi/promovolve/platform/internal/currency"
 )
 
 // SettlementCursorHealth is one entity's settlement cursor as shown on the
@@ -124,9 +126,78 @@ type PayoutQueueEntry struct {
 	OverThreshold   bool
 }
 
-// DefaultMinPayoutMicros applies when a publisher has no payout_methods row
-// and the operator has not configured a platform floor.
-const DefaultMinPayoutMicros = 50_000_000 // $50
+// BaseCurrencyKey is the platform_settings row holding the deployment's
+// currency code, seeded by the setup wizard inside its guarded install
+// transaction. There is deliberately no setter: a ledger amount is a bare
+// int64 with no currency attached, so it only means anything in the currency
+// it was booked in, and changing this after any money has moved would
+// silently reinterpret history.
+const BaseCurrencyKey = "base_currency"
+
+// BaseCurrency is the currency every amount in this deployment is
+// denominated in. A missing row means USD — that is what every deployment
+// installed before this setting existed has in its ledger.
+//
+// An unrecognised stored code is returned as an error rather than degraded to
+// USD: rendering a yen ledger with a dollar sign is worse than refusing to
+// start.
+func (s *Service) BaseCurrency(ctx context.Context) (currency.Currency, error) {
+	var code string
+	err := s.pool.QueryRow(ctx,
+		`SELECT value FROM platform_settings WHERE key = $1`, BaseCurrencyKey,
+	).Scan(&code)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return currency.USD, nil
+	}
+	if err != nil {
+		return currency.USD, err
+	}
+	return currency.Get(code)
+}
+
+// Starting-floor settings. These exist because a floor is the one number
+// that cannot be given a currency-neutral default: $0.50 is a sensible CPM
+// reserve and ¥0.50 is no reserve at all, 157x below market. Rather than ship
+// a table of per-currency guesses, the setup wizard asks the operator — who
+// knows their own market's rates — and every new site is seeded from these.
+const (
+	FloorCpmKey    = "floor_cpm_micros"
+	MinFloorCpmKey = "min_floor_cpm_micros"
+)
+
+// FloorCpmMicros / MinFloorCpmMicros are the seeds for a newly registered
+// site: where its floor starts, and the level the sweep may never probe
+// below. Unset degrades to the dollar-scale defaults the core already uses,
+// which is correct for a USD deployment and the only safe guess otherwise.
+func (s *Service) FloorCpmMicros(ctx context.Context) (int64, error) {
+	return s.floorSetting(ctx, FloorCpmKey, DefaultFloorCpmMicros)
+}
+
+func (s *Service) MinFloorCpmMicros(ctx context.Context) (int64, error) {
+	return s.floorSetting(ctx, MinFloorCpmKey, DefaultMinFloorCpmMicros)
+}
+
+func (s *Service) floorSetting(ctx context.Context, key string, fallback int64) (int64, error) {
+	var v int64
+	err := s.pool.QueryRow(ctx,
+		`SELECT value::bigint FROM platform_settings WHERE key = $1`, key,
+	).Scan(&v)
+	if errors.Is(err, pgx.ErrNoRows) || v <= 0 {
+		return fallback, nil
+	}
+	return v, err
+}
+
+// Dollar-scale last-resort fallbacks, matching the constants the Scala core
+// falls back to (FloorSweepOptimizer's _currentFloor / _minFloor). Correct
+// for USD, and only ever reached when the setting is missing.
+const (
+	// DefaultMinPayoutMicros applies when a publisher has no payout_methods
+	// row and the operator has not configured a platform floor.
+	DefaultMinPayoutMicros   = 50_000_000 // $50
+	DefaultFloorCpmMicros    = 500_000    // $0.50
+	DefaultMinFloorCpmMicros = 100_000    // $0.10
+)
 
 // PayoutFloorKey is the platform_settings row holding the floor; exported
 // so the setup wizard can seed it inside its guarded install transaction.

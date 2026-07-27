@@ -60,11 +60,24 @@ func (s *Service) Initialized(ctx context.Context) bool {
 	return exists
 }
 
+// InstallParams is the initial platform economics the wizard collects. Every
+// money field is in the operator's own currency — baseCurrency is what those
+// micros mean, and it is written here and never again (see
+// billing.BaseCurrencyKey).
+type InstallParams struct {
+	MarginBps         int
+	PayoutFloorMicros int64
+	FloorCpmMicros    int64 // starting floor for new sites
+	MinFloorCpmMicros int64 // floor the sweep may never go below
+	DefaultTimezone   string
+	BaseCurrency      string // ISO code; "" means USD
+}
+
 // CreateAdmin creates the one admin account, its passkey (nil for the
-// DEV_AUTH password variant), and the initial platform economics — margin,
-// minimum payout floor, and the default advertiser timezone for new orgs —
-// in a single transaction guarded against concurrent setup attempts.
-func (s *Service) CreateAdmin(ctx context.Context, admin *model.User, cred *webauthn.Credential, credName string, marginBps int, payoutFloorMicros int64, defaultTimezone string) error {
+// DEV_AUTH password variant), and the initial platform economics — currency,
+// margin, floors, and the default advertiser timezone for new orgs — in a
+// single transaction guarded against concurrent setup attempts.
+func (s *Service) CreateAdmin(ctx context.Context, admin *model.User, cred *webauthn.Credential, credName string, p InstallParams) error {
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -95,23 +108,31 @@ func (s *Service) CreateAdmin(ctx context.Context, admin *model.User, cred *weba
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO platform_margin_history (margin_bps, created_by) VALUES ($1, $2)`,
-		marginBps, admin.ID,
+		p.MarginBps, admin.ID,
 	); err != nil {
 		return err
 	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO platform_settings (key, value, updated_by) VALUES ($1, $2, $3)
-		ON CONFLICT (key) DO UPDATE SET value = $2, updated_by = $3, updated_at = NOW()`,
-		billing.PayoutFloorKey, strconv.FormatInt(payoutFloorMicros, 10), admin.ID,
-	); err != nil {
+
+	// Currency first, conceptually: it is what every other amount written
+	// below is denominated in.
+	setting := func(key, value string) error {
+		_, err := tx.Exec(ctx, `
+			INSERT INTO platform_settings (key, value, updated_by) VALUES ($1, $2, $3)
+			ON CONFLICT (key) DO UPDATE SET value = $2, updated_by = $3, updated_at = NOW()`,
+			key, value, admin.ID,
+		)
 		return err
 	}
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO platform_settings (key, value, updated_by) VALUES ($1, $2, $3)
-		ON CONFLICT (key) DO UPDATE SET value = $2, updated_by = $3, updated_at = NOW()`,
-		org.DefaultTimezoneKey, defaultTimezone, admin.ID,
-	); err != nil {
-		return err
+	for _, kv := range [][2]string{
+		{billing.BaseCurrencyKey, p.BaseCurrency},
+		{billing.PayoutFloorKey, strconv.FormatInt(p.PayoutFloorMicros, 10)},
+		{billing.FloorCpmKey, strconv.FormatInt(p.FloorCpmMicros, 10)},
+		{billing.MinFloorCpmKey, strconv.FormatInt(p.MinFloorCpmMicros, 10)},
+		{org.DefaultTimezoneKey, p.DefaultTimezone},
+	} {
+		if err := setting(kv[0], kv[1]); err != nil {
+			return err
+		}
 	}
 
 	if err := tx.Commit(ctx); err != nil {

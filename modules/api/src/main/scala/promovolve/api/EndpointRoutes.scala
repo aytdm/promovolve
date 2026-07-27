@@ -2193,9 +2193,30 @@ class EndpointRoutes(
                   // Set the publisher's minimum floor
                   siteRef(req.id).ask[SiteEntity.MinFloorCpmUpdated](SiteEntity.UpdateMinFloorCpm(minFloor, _))
                 }
+                .flatMap { _ =>
+                  // Then the starting floor, when the platform sent one.
+                  // UpdateMinFloorCpm only ever RAISES the current floor to
+                  // meet a new minimum, so it cannot seed a start above it —
+                  // that needs its own command.
+                  req.floorCpm.flatMap(v => scala.util.Try(BigDecimal(v).toDouble).toOption) match {
+                    case Some(start) if start > 0 =>
+                      siteRef(req.id)
+                        .ask[SiteEntity.FloorCpmUpdated](SiteEntity.UpdateFloorCpm(CPM(start), _))
+                        .map(_ => ())
+                    case _ => Future.successful(())
+                  }
+                }
                 .map { _ =>
                   upsertPublisherSite(req.id, publisherId, req.domain)
-                  Right(buildSiteResponse(req.id, publisherId, siteConfig, minFloorCpm = Some(req.minFloorCpm)))
+                  Right(
+                    buildSiteResponse(
+                      req.id,
+                      publisherId,
+                      siteConfig,
+                      floorCpm = req.floorCpm,
+                      minFloorCpm = Some(req.minFloorCpm)
+                    )
+                  )
                 }
             case PublisherEntity.SiteRegistrationFailed(_, _, reason) =>
               Future.successful(Left(ErrorResponse("site_registration_failed", reason)))
@@ -4811,7 +4832,9 @@ class EndpointRoutes(
             ladder <- db.run(ladderQ)
           } yield {
             val floorMap = floors.toMap
-            def money(v: Double): String = f"$$${v}%.2f"
+            // Plain decimal, no currency symbol: the base currency is a
+            // property of the deployment that renders this, not of the core.
+            def money(v: Double): String = f"${v}%.2f"
             val siteRows = perSite.toVector.map { case (siteId, host, imps, p25, p50, p75) =>
               val label = if (host.nonEmpty) host else siteId
               val enough = imps >= MinSample
@@ -6080,8 +6103,8 @@ class EndpointRoutes(
       createdAt = nowIso,
       updatedAt = nowIso,
       verificationStatus = verificationStatus,
-      floorCpm = floorCpm.getOrElse("0.50"),
-      minFloorCpm = minFloorCpm.getOrElse("0.10"),
+      floorCpm = floorCpm.getOrElse(f"${promovolve.publisher.FloorSweepOptimizer.DefaultFloor}%.2f"),
+      minFloorCpm = minFloorCpm.getOrElse(f"${promovolve.publisher.FloorSweepOptimizer.DefaultMinFloor}%.2f"),
       bidWeight = bidWeight.getOrElse("0.50"),
       acceptsFillerTraffic = acceptsFillerTraffic.getOrElse(true)
     )

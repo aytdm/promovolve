@@ -252,7 +252,7 @@ func (h *Handler) AdvertiserReport(w http.ResponseWriter, r *http.Request) {
 func cpaRoas(spend float64, conv, valueMicros int64) (cpa, roas string) {
 	cpa, roas = "—", "—"
 	if conv > 0 {
-		cpa = fmt.Sprintf("$%.2f", spend/float64(conv))
+		cpa = fmtMoney(spend / float64(conv))
 	}
 	if spend > 0 && valueMicros > 0 {
 		roas = fmt.Sprintf("%.1fx", (float64(valueMicros)/1e6)/spend)

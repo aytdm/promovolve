@@ -378,15 +378,15 @@ document.body.addEventListener('inboxActed', function(){
       {{/* WaitingFor is the honest queue age (survives the core's TTL
            purge/re-queue cycle) — surface it right in the row so stale
            items are visible without opening the detail pane. */}}
-      {{$sub := t "Max bid $%s" $c.CPM}}{{if $c.WaitingFor}}{{$sub = t "%s · waiting %s" $sub $c.WaitingFor}}{{end}}{{if $c.CreativeName}}{{$sub = printf "%s · %s" $c.CreativeName $sub}}{{end}}
+      {{$sub := t "Max bid %s" (money $c.CPM)}}{{if $c.WaitingFor}}{{$sub = t "%s · waiting %s" $sub $c.WaitingFor}}{{end}}{{if $c.CreativeName}}{{$sub = printf "%s · %s" $c.CreativeName $sub}}{{end}}
       {{template "inbox-row" dict "Key" (printf "pending-%s-%d" $group.Site.ID $i) "State" "pending" "Ts" $c.CreatedAt "Cid" $c.CreativeID "Label" (or $c.LandingDomain (slice $c.CreativeID 0 16)) "Sub" $sub "Asset" $c.AssetURL "Pages" $c.PagesJSON "Search" (printf "%s %s %s %s %s" $c.AdvertiserID $c.CampaignID $c.LandingDomain $c.AdvertiserName $c.CampaignName)}}
       {{end}}
       {{range $i, $c := $group.Serving}}
-      {{$servSub := t "Max bid $%s" $c.CPM}}{{if $c.Benched}}{{$servSub = t "%s · benched" $servSub}}{{end}}{{if $c.CreativeName}}{{$servSub = printf "%s · %s" $c.CreativeName $servSub}}{{end}}
+      {{$servSub := t "Max bid %s" (money $c.CPM)}}{{if $c.Benched}}{{$servSub = t "%s · benched" $servSub}}{{end}}{{if $c.CreativeName}}{{$servSub = printf "%s · %s" $c.CreativeName $servSub}}{{end}}
       {{template "inbox-row" dict "Key" (printf "serving-%s-%d" $group.Site.ID $i) "State" "serving" "Ts" "" "Cid" $c.CreativeID "Label" (or $c.LandingDomain (slice $c.CreativeID 0 16)) "Sub" $servSub "Asset" $c.AssetURL "Pages" $c.PagesJSON "Search" (printf "%s %s %s %s %s" $c.AdvertiserID $c.CampaignID $c.LandingDomain $c.AdvertiserName $c.CampaignName)}}
       {{end}}
       {{range $i, $c := $group.Flagged}}
-      {{template "inbox-row" dict "Key" (printf "flagged-%s-%d" $group.Site.ID $i) "State" "flagged" "Ts" "" "Cid" $c.CreativeID "Label" (or $c.LandingDomain (slice $c.CreativeID 0 16)) "Sub" (t "Max bid $%s" $c.CPM) "Asset" $c.AssetURL "Pages" $c.PagesJSON "Search" (printf "%s %s %s %s %s" $c.AdvertiserID $c.CampaignID $c.LandingDomain $c.AdvertiserName $c.CampaignName)}}
+      {{template "inbox-row" dict "Key" (printf "flagged-%s-%d" $group.Site.ID $i) "State" "flagged" "Ts" "" "Cid" $c.CreativeID "Label" (or $c.LandingDomain (slice $c.CreativeID 0 16)) "Sub" (t "Max bid %s" (money $c.CPM)) "Asset" $c.AssetURL "Pages" $c.PagesJSON "Search" (printf "%s %s %s %s %s" $c.AdvertiserID $c.CampaignID $c.LandingDomain $c.AdvertiserName $c.CampaignName)}}
       {{end}}
     </div>
     {{end}}
@@ -406,7 +406,7 @@ document.body.addEventListener('inboxActed', function(){
         <div class="grid grid-cols-2 gap-4 text-sm mb-6">
           <div><p class="text-gray-500">{{t "Advertiser"}}</p><p class="font-medium" title="{{$c.AdvertiserID}}">{{if $c.AdvertiserName}}{{$c.AdvertiserName}}{{else}}&mdash;{{end}}</p></div>
           <div><p class="text-gray-500">{{t "Campaign"}}</p><p class="font-medium" title="{{$c.CampaignID}}">{{if $c.CampaignName}}{{$c.CampaignName}}{{else}}&mdash;{{end}}</p></div>
-          <div><p class="text-gray-500">{{t "Max Bid"}}</p><p class="font-medium">${{$c.CPM}}{{curHint $.Cur $c.CPM}}</p></div>
+          <div><p class="text-gray-500">{{t "Max Bid"}}</p><p class="font-medium">{{money $c.CPM}}</p></div>
           <div><p class="text-gray-500">{{t "Landing Domain"}}</p><p class="font-medium">{{if $c.LandingDomain}}{{$c.LandingDomain}}{{else}}&mdash;{{end}}</p></div>
           {{/* Honest queue age — survives the pending row's TTL purge /
                re-queue churn on the core, unlike the row's created time.
@@ -423,7 +423,7 @@ document.body.addEventListener('inboxActed', function(){
               <span class="text-gray-400 text-xs w-5 shrink-0">{{$pi}}.</span>
               <div class="min-w-0 flex-1">
                 <p class="truncate text-gray-700">{{$p.URL}}</p>
-                <p class="text-xs text-gray-400">{{$p.SlotID}} &middot; {{t "Max bid $%s" $p.CPM}}{{if $p.Filler}} &middot; <span class="text-amber-700">{{t "Filler"}}</span>{{else if $p.CategoryName}} &middot; <span class="text-gray-600">{{$p.CategoryName}}</span>{{end}}</p>
+                <p class="text-xs text-gray-400">{{$p.SlotID}} &middot; {{t "Max bid %s" (money $p.CPM)}}{{if $p.Filler}} &middot; <span class="text-amber-700">{{t "Filler"}}</span>{{else if $p.CategoryName}} &middot; <span class="text-gray-600">{{$p.CategoryName}}</span>{{end}}</p>
               </div>
             </div>
             {{end}}
@@ -510,7 +510,7 @@ document.body.addEventListener('inboxActed', function(){
         <div class="grid grid-cols-2 gap-4 text-sm mb-6">
           <div><p class="text-gray-500">{{t "Advertiser"}}</p><p class="font-medium" title="{{$c.AdvertiserID}}">{{if $c.AdvertiserName}}{{$c.AdvertiserName}}{{else}}&mdash;{{end}}</p></div>
           <div><p class="text-gray-500">{{t "Campaign"}}</p><p class="font-medium" title="{{$c.CampaignID}}">{{if $c.CampaignName}}{{$c.CampaignName}}{{else}}&mdash;{{end}}</p></div>
-          <div><p class="text-gray-500">{{t "Max Bid"}}</p><p class="font-medium">${{$c.CPM}}{{curHint $.Cur $c.CPM}}{{if $c.BelowFloor}} <span class="text-amber-600 text-xs">{{t "(floor $%s)" $c.FloorCPM}}</span>{{end}}</p></div>
+          <div><p class="text-gray-500">{{t "Max Bid"}}</p><p class="font-medium">{{money $c.CPM}}{{if $c.BelowFloor}} <span class="text-amber-600 text-xs">{{t "(floor %s)" (money $c.FloorCPM)}}</span>{{end}}</p></div>
           <div><p class="text-gray-500">{{t "Landing Domain"}}</p><p class="font-medium">{{if $c.LandingDomain}}{{$c.LandingDomain}}{{else}}&mdash;{{end}}</p></div>
         </div>
         {{if $c.Placements}}
@@ -549,7 +549,7 @@ document.body.addEventListener('inboxActed', function(){
         <div class="grid grid-cols-2 gap-4 text-sm mb-4">
           <div><p class="text-gray-500">{{t "Advertiser"}}</p><p class="font-medium" title="{{$c.AdvertiserID}}">{{if $c.AdvertiserName}}{{$c.AdvertiserName}}{{else}}&mdash;{{end}}</p></div>
           <div><p class="text-gray-500">{{t "Campaign"}}</p><p class="font-medium" title="{{$c.CampaignID}}">{{if $c.CampaignName}}{{$c.CampaignName}}{{else}}&mdash;{{end}}</p></div>
-          <div><p class="text-gray-500">{{t "Max Bid"}}</p><p class="font-medium">${{$c.CPM}}{{curHint $.Cur $c.CPM}}</p></div>
+          <div><p class="text-gray-500">{{t "Max Bid"}}</p><p class="font-medium">{{money $c.CPM}}</p></div>
           <div><p class="text-gray-500">{{t "Landing Domain"}}</p><p class="font-medium">{{if $c.LandingDomain}}{{$c.LandingDomain}}{{else}}&mdash;{{end}}</p></div>
         </div>
         {{if $c.Reason}}

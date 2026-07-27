@@ -26,6 +26,15 @@
           <input type="email" id="setup-email" autocomplete="username" placeholder="you@company.com" class="form-input">
         </div>
         <div>
+          <label class="form-label">{{t "Currency"}}</label>
+          <select id="setup-currency" class="form-input">
+            {{range .Currencies}}<option value="{{.Code}}">{{.Code}} ({{.Symbol}})</option>{{end}}
+          </select>
+          <p class="form-hint">
+            {{t "Every amount in this deployment — bids, floors, budgets, the ledger, payouts — is denominated in this currency. There is no conversion. It CANNOT be changed after setup, because a stored amount only means anything in the currency it was booked in."}}
+          </p>
+        </div>
+        <div>
           <label class="form-label">{{t "Platform margin (%)"}}</label>
           <input type="number" id="setup-margin" min="0" max="99.99" step="0.01" value="15" class="form-input">
           <p class="form-hint">
@@ -33,12 +42,28 @@
           </p>
         </div>
         <div>
-          <label class="form-label">{{t "Minimum payout ($)"}}</label>
-          <input type="number" id="setup-payout-floor" min="0.01" step="0.01" value="50" class="form-input">
+          <label class="form-label">{{t "Minimum payout"}} (<span data-cur-sym>$</span>)</label>
+          <input type="number" id="setup-payout-floor" min="0" step="any" value="50" class="form-input">
           <p class="form-hint">
             {{t "Publisher earnings accrue until they pass this before a payout is offered — each payout costs you a transfer. Publishers can raise their own threshold above it, never below. Changeable in Settings."}}
           </p>
         </div>
+        <div class="grid grid-cols-2 gap-4">
+          <div>
+            <label class="form-label">{{t "Starting floor CPM"}} (<span data-cur-sym>$</span>)</label>
+            <input type="number" id="setup-floor-cpm" min="0" step="any" value="0.50" class="form-input">
+          </div>
+          <div>
+            <label class="form-label">{{t "Minimum floor CPM"}} (<span data-cur-sym>$</span>)</label>
+            <input type="number" id="setup-min-floor-cpm" min="0" step="any" value="0.10" class="form-input">
+          </div>
+        </div>
+        <p class="form-hint">
+          {{t "What a newly registered site's price floor starts at, and the level the optimizer may never probe below. These are the one setting with no sensible cross-currency default — a floor that reads right in dollars is 157x too low in yen — so enter what a thousand impressions is actually worth in your market."}}
+        </p>
+        <p id="setup-currency-changed" class="form-hint text-amber-700 hidden">
+          {{t "Currency changed — the amounts above were cleared. Enter them in the currency you just chose."}}
+        </p>
         <div>
           <label class="form-label">{{t "Default advertiser timezone"}}</label>
           <select id="setup-timezone" class="form-input">
@@ -69,8 +94,13 @@
           <input type="text" name="displayName" placeholder="Name" class="form-input" value="Dev Admin">
           <input type="email" name="email" placeholder="admin@example.com" class="form-input" value="admin@admin.com">
           <input type="password" name="password" placeholder="Password" class="form-input">
+          <select name="currency" class="form-input">
+            {{range .Currencies}}<option value="{{.Code}}">{{.Code}} ({{.Symbol}})</option>{{end}}
+          </select>
           <input type="number" name="marginPercent" min="0" max="99.99" step="0.01" value="15" class="form-input">
-          <input type="number" name="payoutFloor" min="0.01" step="0.01" value="50" class="form-input">
+          <input type="number" name="payoutFloor" min="0" step="any" value="50" class="form-input" placeholder="minimum payout">
+          <input type="number" name="floorCpm" min="0" step="any" value="0.50" class="form-input" placeholder="starting floor CPM">
+          <input type="number" name="minFloorCpm" min="0" step="any" value="0.10" class="form-input" placeholder="minimum floor CPM">
           <select name="timezone" class="form-input">
             <option value="">{{t "UTC (default)"}}</option>
             {{range .Timezones}}{{if ne . "UTC"}}<option value="{{.}}">{{.}}</option>{{end}}{{end}}
@@ -85,6 +115,37 @@
     <script>
       (function () {
         const errBox = document.getElementById('setup-error');
+        // The money fields below are denominated in whatever is selected
+        // above, so their labels track the dropdown rather than the (not yet
+        // written) stored currency.
+        const curSel = document.getElementById('setup-currency');
+        const MONEY_FIELDS = ['setup-payout-floor', 'setup-floor-cpm', 'setup-min-floor-cpm'];
+        // The pre-filled amounts are dollar magnitudes. Carrying them into
+        // another currency is the one mistake this page can make that is both
+        // silent and expensive: 0.50 reads as a floor in dollars and as no
+        // floor at all in yen, 157x under market, and the label flipping to ¥
+        // makes the stale number look deliberate. So on any change away from
+        // the currency a value was entered under, the money fields are cleared
+        // and the operator has to state them — which is exactly what the hint
+        // under them asks for.
+        let valuesEnteredFor = curSel.value;
+        const syncSym = () => {
+          const m = /\(([^)]+)\)/.exec(curSel.options[curSel.selectedIndex].text);
+          document.querySelectorAll('[data-cur-sym]').forEach(el => { el.textContent = m ? m[1] : ''; });
+        };
+        const clearMoney = () => {
+          if (curSel.value === valuesEnteredFor) return;
+          MONEY_FIELDS.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = '';
+          });
+          valuesEnteredFor = curSel.value;
+          const hint = document.getElementById('setup-currency-changed');
+          if (hint) hint.classList.remove('hidden');
+        };
+        curSel.addEventListener('change', () => { syncSym(); clearMoney(); });
+        syncSym();
+
         const form = document.getElementById('setup-form');
         const submit = document.getElementById('setup-submit');
 
@@ -95,8 +156,11 @@
             const res = await Passkey.register('/webauthn/setup/begin', '/webauthn/setup/finish', {
               displayName: document.getElementById('setup-name').value,
               email: document.getElementById('setup-email').value,
+              currency: document.getElementById('setup-currency').value,
               marginPercent: document.getElementById('setup-margin').value,
               payoutFloor: document.getElementById('setup-payout-floor').value,
+              floorCpm: document.getElementById('setup-floor-cpm').value,
+              minFloorCpm: document.getElementById('setup-min-floor-cpm').value,
               timezone: document.getElementById('setup-timezone').value,
             });
             if (res.redirect) window.location.href = res.redirect;

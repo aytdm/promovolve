@@ -29,8 +29,8 @@
     </p>
     <form method="POST" action="/admin/settings/payout-floor" class="flex items-end gap-3">
       <div>
-        <label class="form-label">{{t "Floor ($)"}}</label>
-        <input type="number" name="payoutFloor" min="0.01" step="0.01"
+        <label class="form-label">{{t "Floor"}} ({{sym}})</label>
+        <input type="number" name="payoutFloor" min="0.01" step="{{moneystep}}"
           value="{{.PayoutFloor}}" class="form-input w-32">
       </div>
       <button type="submit" class="btn btn-primary">{{t "Update floor"}}</button>

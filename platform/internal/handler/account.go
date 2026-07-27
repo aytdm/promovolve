@@ -8,7 +8,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hanishi/promovolve/platform/internal/fx"
 	"github.com/hanishi/promovolve/platform/internal/i18n"
 	"github.com/hanishi/promovolve/platform/internal/model"
 )
@@ -80,7 +79,6 @@ func (h *Handler) renderPreferences(w http.ResponseWriter, r *http.Request, errM
 		Error:        errMsg,
 		Saved:        saved,
 		Timezones:    zones,
-		Currencies:   fx.SupportedCurrencies,
 		LandingSide:  landingSide,
 		LandingSides: landingSides,
 	})
@@ -120,28 +118,9 @@ func (h *Handler) SavePreferences(w http.ResponseWriter, r *http.Request) {
 		locale = ""
 	}
 
-	// Display currency: "" = USD (no conversion). Must be curated.
-	displayCurrency := r.FormValue("displayCurrency")
-	if displayCurrency != "" && displayCurrency != "USD" {
-		valid := false
-		for _, c := range fx.SupportedCurrencies {
-			if c == displayCurrency {
-				valid = true
-				break
-			}
-		}
-		if !valid {
-			displayCurrency = ""
-		}
-	}
-	if displayCurrency == "USD" {
-		displayCurrency = ""
-	}
-
 	user.DisplayName = displayName
 	user.Timezone = tz
 	user.Locale = locale
-	user.DisplayCurrency = displayCurrency
 	if err := h.userSvc.Update(r.Context(), user); err != nil {
 		slog.Error("save preferences failed", "user", user.ID, "error", err)
 		h.renderPreferences(w, r, i18n.T(lang, "could not save preferences — try again"), false)

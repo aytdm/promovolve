@@ -27,21 +27,16 @@ const (
 )
 
 type User struct {
-	ID           string  `json:"id"`
-	Email        string  `json:"email"`
-	PasswordHash string  `json:"-"` // empty for passkey-only users
-	Role         Role    `json:"role"`
-	DisplayName  string  `json:"displayName"`
+	ID           string `json:"id"`
+	Email        string `json:"email"`
+	PasswordHash string `json:"-"` // empty for passkey-only users
+	Role         Role   `json:"role"`
+	DisplayName  string `json:"displayName"`
 	// IANA zone for rendering timestamps ("" = UTC). A per-user preference;
 	// stored data stays UTC, only display converts.
 	Timezone string `json:"timezone,omitempty"`
 	// Dashboard language ("en"/"ja"; "" = auto, follow Accept-Language).
-	Locale string `json:"locale,omitempty"`
-	// Display currency for money shown in dashboards ("" = USD). Purely a
-	// rendering preference: books, auctions, floors, and every input stay
-	// USD; conversion is informational, at the day's reference rate, and
-	// always labeled as approximate.
-	DisplayCurrency string `json:"displayCurrency,omitempty"`
+	Locale       string  `json:"locale,omitempty"`
 	AdvertiserID *string `json:"advertiserId,omitempty"`
 	PublisherID  *string `json:"publisherId,omitempty"`
 	// RequestedSide is the side a pending account request asked for — the

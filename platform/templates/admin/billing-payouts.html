@@ -29,12 +29,12 @@
         {{range .Queue}}
         <tr class="border-b last:border-0">
           <td class="px-6 py-2 font-medium"><a href="/admin/billing/accounts/publisher/{{.PublisherID}}" class="text-brand hover:underline" title="{{.PublisherID}}">{{.PublisherLabel}}</a></td>
-          <td class="px-6 py-2">${{.Payable}}{{curHint $.Cur .Payable}}</td>
-          <td class="px-6 py-2 text-gray-500">${{.MinPayout}}</td>
+          <td class="px-6 py-2">{{money .Payable}}</td>
+          <td class="px-6 py-2 text-gray-500">{{money .MinPayout}}</td>
           <td class="px-6 py-2 text-gray-500">{{if .Method}}{{.Method}}{{else}}<span class="text-gray-400">{{t "not set"}}</span>{{end}}</td>
           <td class="px-6 py-2 text-right">
             {{if .Over}}
-            <form method="POST" action="/admin/billing/payouts/create" class="inline" onsubmit="return confirm('{{t "Create a payout for the full $%s owed to %s?" .Payable .PublisherLabel}}')">
+            <form method="POST" action="/admin/billing/payouts/create" class="inline" onsubmit="return confirm('{{t "Create a payout for the full %s owed to %s?" (money .Payable) .PublisherLabel}}')">
               <input type="hidden" name="nonce" value="{{$.AdminPayouts.Nonce}}">
               <input type="hidden" name="publisherId" value="{{.PublisherID}}">
               <button type="submit" class="btn btn-secondary btn-sm">{{t "Create payout"}}</button>
@@ -70,7 +70,7 @@
         {{range .Payouts}}
         <tr class="border-b last:border-0">
           <td class="px-6 py-2 font-medium"><a href="/admin/billing/accounts/publisher/{{.PublisherID}}" class="text-brand hover:underline" title="{{.PublisherID}}">{{.PublisherLabel}}</a></td>
-          <td class="px-6 py-2">${{.Amount}}{{curHint $.Cur .Amount}}</td>
+          <td class="px-6 py-2">{{money .Amount}}</td>
           <td class="px-6 py-2 text-gray-500">{{.Period}}</td>
           <td class="px-6 py-2"><span class="badge {{.StatusBadge}}">{{t .Status}}</span></td>
           <td class="px-6 py-2 text-gray-500">{{.ExternalRef}}</td>

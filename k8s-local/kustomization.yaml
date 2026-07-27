@@ -49,3 +49,14 @@ patches:
       - op: replace
         path: /spec/template/spec/containers/0/imagePullPolicy
         value: IfNotPresent
+  # The singleton tier runs the same api image and so gets the `localhost/`
+  # retag above — but without this it keeps the base's `Always` policy and
+  # tries to PULL a side-loaded-only tag, landing in ImagePullBackOff. Missed
+  # when the dedicated singleton tier was split out of the api StatefulSet.
+  - target:
+      kind: StatefulSet
+      name: promovolve-singleton
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: IfNotPresent

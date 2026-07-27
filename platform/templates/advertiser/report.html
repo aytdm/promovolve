@@ -17,7 +17,7 @@
 <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 mb-6">
   <div class="card card-tight">
     <p class="text-xs text-gray-500">{{t "Spend"}}</p>
-    <p class="text-xl font-semibold mt-1">{{cur $.Cur $r.Totals.SpendDisp}}</p>
+    <p class="text-xl font-semibold mt-1">{{money $r.Totals.SpendDisp}}</p>
   </div>
   <div class="card card-tight">
     <p class="text-xs text-gray-500">{{t "Impressions"}}</p>
@@ -38,7 +38,7 @@
   </div>
   <div class="card card-tight">
     <p class="text-xs text-gray-500">{{t "eCPM"}}</p>
-    <p class="text-xl font-semibold mt-1">{{cur $.Cur $r.Totals.ECPM}}</p>
+    <p class="text-xl font-semibold mt-1">{{money $r.Totals.ECPM}}</p>
   </div>
 </div>
 
@@ -85,8 +85,8 @@
         <input type="number" name="conversions" min="0" step="1" class="form-input w-28" required>
       </div>
       <div>
-        <label class="form-label">{{t "Value ($, optional)"}}</label>
-        <input type="number" name="value" min="0" step="0.01" class="form-input w-32" placeholder="{{t "for ROAS"}}">
+        <label class="form-label">{{t "Value"}} ({{sym}}, {{t "optional"}})</label>
+        <input type="number" name="value" min="0" step="{{moneystep}}" class="form-input w-32" placeholder="{{t "for ROAS"}}">
       </div>
       <div class="grow">
         <label class="form-label">{{t "Note (optional)"}}</label>
@@ -114,7 +114,7 @@
     </div>
     <div>
       <p class="text-xs text-gray-500">{{t "Free re-exposure earned"}}</p>
-      <p class="text-sm mt-1">{{t "%d views · %d clicks · %d CTA clicks" $r.Totals.DogearedImps $r.Totals.DogearedClicks $r.Totals.DogearedCTAClicks}} <span class="text-gray-400">{{t "— $0, not in the totals above"}}</span></p>
+      <p class="text-sm mt-1">{{t "%d views · %d clicks · %d CTA clicks" $r.Totals.DogearedImps $r.Totals.DogearedClicks $r.Totals.DogearedCTAClicks}} <span class="text-gray-400">{{t "— %s, not in the totals above" (money 0.0)}}</span></p>
     </div>
   </div>
 </div>
@@ -172,8 +172,8 @@
           <td class="py-2 pr-4 text-right">{{$row.Clicks}}</td>
           <td class="py-2 pr-4 text-right">{{$row.CTR}}</td>
           <td class="py-2 pr-4 text-right">{{$row.CTAClicks}}</td>
-          <td class="py-2 pr-4 text-right">{{cur $.Cur $row.SpendDisp}}</td>
-          <td class="py-2 text-right">{{cur $.Cur $row.ECPM}}</td>
+          <td class="py-2 pr-4 text-right">{{money $row.SpendDisp}}</td>
+          <td class="py-2 text-right">{{money $row.ECPM}}</td>
         </tr>
         {{end}}
         {{if $g.ShowSubtotal}}
@@ -184,8 +184,8 @@
           <td class="py-1.5 pr-4 text-right text-xs font-medium">{{$g.Subtotal.Clicks}}</td>
           <td class="py-1.5 pr-4 text-right text-xs font-medium">{{$g.Subtotal.CTR}}</td>
           <td class="py-1.5 pr-4 text-right text-xs font-medium">{{$g.Subtotal.CTAClicks}}</td>
-          <td class="py-1.5 pr-4 text-right text-xs font-medium">{{cur $.Cur $g.Subtotal.SpendDisp}}</td>
-          <td class="py-1.5 text-right text-xs font-medium">{{cur $.Cur $g.Subtotal.ECPM}}</td>
+          <td class="py-1.5 pr-4 text-right text-xs font-medium">{{money $g.Subtotal.SpendDisp}}</td>
+          <td class="py-1.5 text-right text-xs font-medium">{{money $g.Subtotal.ECPM}}</td>
         </tr>
         {{end}}
         {{end}}
@@ -201,6 +201,11 @@
 
 <script src="{{asset "chart.umd.min.js"}}"></script>
 <script>
+      // Base currency, injected: chart axes and tooltips are the one place
+      // money is formatted client-side.
+      const CUR_SYM = {{sym | printf "%q"}};
+      const CUR_DEC = {{decimals}};
+
 (() => {
   const INK = '#7d7a75', GRID = '#eae7e4', SPEND = '#d35f00', IMPS = '#7d7a75';
 
@@ -233,8 +238,8 @@
     data: { labels, datasets: [line({{$r.ChartSpend}}, SPEND, 'rgba(211,95,0,0.10)')] },
     options: {
       ...base.options,
-      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => '$' + c.parsed.y.toFixed(2) } } },
-      scales: { ...base.options.scales, y: { ...base.options.scales.y, ticks: { color: INK, callback: v => '$' + v } } }
+      plugins: { legend: { display: false }, tooltip: { callbacks: { label: c => CUR_SYM + c.parsed.y.toFixed(CUR_DEC) } } },
+      scales: { ...base.options.scales, y: { ...base.options.scales.y, ticks: { color: INK, callback: v => CUR_SYM + v } } }
     }
   });
   new Chart(document.getElementById('report-chart-imps'), {
@@ -270,11 +275,11 @@
         maintainAspectRatio: false,
         plugins: {
           legend: { display: true, position: 'bottom', labels: { color: INK, usePointStyle: true, boxWidth: 8, boxHeight: 8 } },
-          tooltip: { callbacks: { label: c => c.dataset.label + ': ' + (money ? '$' + c.parsed.y.toFixed(2) : c.parsed.y.toLocaleString()) } }
+          tooltip: { callbacks: { label: c => c.dataset.label + ': ' + (money ? CUR_SYM + c.parsed.y.toFixed(CUR_DEC) : c.parsed.y.toLocaleString()) } }
         },
         scales: {
           x: { grid: { display: false }, ticks: { color: INK, maxRotation: 0, autoSkip: true } },
-          y: { beginAtZero: true, grid: { color: GRID }, ticks: money ? { color: INK, callback: v => '$' + v } : { color: INK } }
+          y: { beginAtZero: true, grid: { color: GRID }, ticks: money ? { color: INK, callback: v => CUR_SYM + v } : { color: INK } }
         }
       }
     });
@@ -337,8 +342,8 @@
         <td class="py-2 pr-4 text-right">{{$row.Clicks}}</td>
         <td class="py-2 pr-4 text-right">{{$row.CTR}}</td>
         <td class="py-2 pr-4 text-right">{{$row.CTAClicks}}</td>
-        <td class="py-2 pr-4 text-right">{{cur $.Cur $row.SpendDisp}}</td>
-        <td class="py-2 text-right">{{cur $.Cur $row.ECPM}}</td>
+        <td class="py-2 pr-4 text-right">{{money $row.SpendDisp}}</td>
+        <td class="py-2 text-right">{{money $row.ECPM}}</td>
         {{if $.CanBlock}}
         <td class="py-2 pl-4 text-right">
           {{if and (eq $i 0) $g.BlockDomain}}
@@ -359,8 +364,8 @@
         <td class="py-1.5 pr-4 text-right text-xs font-medium">{{$g.Subtotal.Clicks}}</td>
         <td class="py-1.5 pr-4 text-right text-xs font-medium">{{$g.Subtotal.CTR}}</td>
         <td class="py-1.5 pr-4 text-right text-xs font-medium">{{$g.Subtotal.CTAClicks}}</td>
-        <td class="py-1.5 pr-4 text-right text-xs font-medium">{{cur $.Cur $g.Subtotal.SpendDisp}}</td>
-        <td class="py-1.5 text-right text-xs font-medium">{{cur $.Cur $g.Subtotal.ECPM}}</td>
+        <td class="py-1.5 pr-4 text-right text-xs font-medium">{{money $g.Subtotal.SpendDisp}}</td>
+        <td class="py-1.5 text-right text-xs font-medium">{{money $g.Subtotal.ECPM}}</td>
         {{if $.CanBlock}}<td></td>{{end}}
       </tr>
       {{end}}
@@ -416,8 +421,8 @@
         <td class="py-2 pr-4 text-right">{{.Clicks}}</td>
         <td class="py-2 pr-4 text-right">{{.CTR}}</td>
         <td class="py-2 pr-4 text-right">{{.CTAClicks}}</td>
-        <td class="py-2 pr-4 text-right">{{cur $.Cur .SpendDisp}}</td>
-        <td class="py-2 {{if $.ShowConv}}pr-4 {{end}}text-right">{{cur $.Cur .ECPM}}</td>
+        <td class="py-2 pr-4 text-right">{{money .SpendDisp}}</td>
+        <td class="py-2 {{if $.ShowConv}}pr-4 {{end}}text-right">{{money .ECPM}}</td>
         {{if $.ShowConv}}
         <td class="py-2 pr-4 text-right">{{if .Conversions}}{{.Conversions}}{{else}}<span class="text-gray-300">—</span>{{end}}</td>
         <td class="py-2 pr-4 text-right">{{.CPA}}</td>

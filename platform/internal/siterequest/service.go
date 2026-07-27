@@ -19,10 +19,39 @@ var coreClient = &http.Client{Timeout: 30 * time.Second}
 type Service struct {
 	repo       *Repository
 	coreAPIURL string
+	// floors supplies the starting and minimum floor CPM a newly provisioned
+	// site opens at, in micros of the deployment's base currency. Set at
+	// install: a floor is the one setting with no sensible cross-currency
+	// default, since $0.50 reads as a reserve and ¥0.50 as none at all.
+	floors FloorDefaults
 }
 
-func NewService(repo *Repository, coreAPIURL string) *Service {
-	return &Service{repo: repo, coreAPIURL: coreAPIURL}
+// FloorDefaults reads the operator's configured floors. Satisfied by
+// *billing.Service; an interface so this package does not depend on billing.
+type FloorDefaults interface {
+	FloorCpmMicros(ctx context.Context) (int64, error)
+	MinFloorCpmMicros(ctx context.Context) (int64, error)
+}
+
+func NewService(repo *Repository, coreAPIURL string, floors FloorDefaults) *Service {
+	return &Service{repo: repo, coreAPIURL: coreAPIURL, floors: floors}
+}
+
+// floorStrings renders the configured floors as the decimal strings the core
+// API takes. Micros are the platform's storage unit; the core speaks decimal
+// strings, and %.4f is the precision its CPM columns keep.
+func floorStrings(ctx context.Context, f FloorDefaults) (start, min string) {
+	start, min = "0.50", "0.10"
+	if f == nil {
+		return start, min
+	}
+	if v, err := f.FloorCpmMicros(ctx); err == nil && v > 0 {
+		start = fmt.Sprintf("%.4f", float64(v)/1e6)
+	}
+	if v, err := f.MinFloorCpmMicros(ctx); err == nil && v > 0 {
+		min = fmt.Sprintf("%.4f", float64(v)/1e6)
+	}
+	return start, min
 }
 
 // Request records a publisher's intent to add a site. No core entity is
@@ -100,6 +129,12 @@ func (s *Service) ListPending(ctx context.Context) ([]PendingRow, error) {
 // admin context). The payload shape is code, not data: only the inputs
 // (site_id, domain, page_url) are stored on the request row.
 func (s *Service) provisionSite(req *model.SiteRequest) error {
+	// A site opens at the operator's configured floors rather than a literal.
+	// Failure here is not fatal: the core has its own seeds, and refusing to
+	// provision an approved site because a settings read blipped would be a
+	// worse outcome than opening at the fallback.
+	startFloor, minFloor := floorStrings(context.Background(), s.floors)
+
 	payload, _ := json.Marshal(map[string]any{
 		"id":     req.SiteID,
 		"domain": req.Domain,
@@ -115,7 +150,8 @@ func (s *Service) provisionSite(req *model.SiteRequest) error {
 		},
 		"slots":       []any{},
 		"taxonomyIds": []string{},
-		"minFloorCpm": "0.10",
+		"minFloorCpm": minFloor,
+		"floorCpm":    startFloor,
 	})
 
 	url := fmt.Sprintf("%s/v1/publishers/%s/sites", s.coreAPIURL, req.PublisherID)

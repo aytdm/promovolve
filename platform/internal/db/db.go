@@ -90,16 +90,6 @@ func Migrate(pool *pgxpool.Pool) error {
 		ALTER TABLE platform_users ADD CONSTRAINT platform_users_role_check
 			CHECK (role IN ('admin', 'user'));
 		ALTER TABLE platform_users ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'active';
-		-- Display currency preference ('' = USD). Rendering-only: every
-		-- stored amount is USD micros; conversion is informational at the
-		-- day's reference rate.
-		ALTER TABLE platform_users ADD COLUMN IF NOT EXISTS display_currency TEXT NOT NULL DEFAULT '';
-		-- Daily FX reference rates (USD base), refreshed by the fx service.
-		CREATE TABLE IF NOT EXISTS fx_rates (
-			currency   TEXT PRIMARY KEY,
-			rate       DOUBLE PRECISION NOT NULL,
-			fetched_at TIMESTAMPTZ NOT NULL
-		);
 		ALTER TABLE platform_users ADD COLUMN IF NOT EXISTS company_name TEXT NOT NULL DEFAULT '';
 		ALTER TABLE platform_users ADD COLUMN IF NOT EXISTS website_url TEXT NOT NULL DEFAULT '';
 		ALTER TABLE platform_users ADD COLUMN IF NOT EXISTS contact_name TEXT NOT NULL DEFAULT '';
@@ -531,6 +521,10 @@ func Migrate(pool *pgxpool.Pool) error {
 		-- Fraud clawback (L3.1) adds a ledger transaction kind; widen the
 		-- CHECK on existing databases (fresh installs get it inline above).
 		ALTER TABLE ledger_transactions DROP CONSTRAINT IF EXISTS ledger_transactions_kind_check;
+		-- The display-currency feature is retired: one base currency per
+		-- deployment, chosen at setup, no conversion. Fresh installs never
+		-- create this; existing ones shed it here.
+		DROP TABLE IF EXISTS fx_rates;
 		ALTER TABLE ledger_transactions ADD CONSTRAINT ledger_transactions_kind_check
 			CHECK (kind IN ('topup', 'settlement', 'payout', 'adjustment', 'refund', 'clawback'));
 	`)

@@ -112,7 +112,7 @@
           <td class="px-6 py-2 text-gray-400 whitespace-nowrap">{{.Window}}</td>
           <td class="px-6 py-2 text-gray-500">{{.Rows}}</td>
           <td class="px-6 py-2 {{if .Skipped}}text-red-600 font-medium{{else}}text-gray-500{{end}}">{{.Skipped}}</td>
-          <td class="px-6 py-2 text-gray-500">${{.Gross}}</td>
+          <td class="px-6 py-2 text-gray-500">{{money .Gross}}</td>
         </tr>
         {{else}}
         <tr><td class="px-6 py-4 text-gray-400" colspan="6">{{t "The settlement job has not completed a window yet."}}</td></tr>

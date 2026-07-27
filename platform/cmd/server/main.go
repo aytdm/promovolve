@@ -16,7 +16,6 @@ import (
 	"github.com/hanishi/promovolve/platform/internal/audit"
 	"github.com/hanishi/promovolve/platform/internal/auth"
 	"github.com/hanishi/promovolve/platform/internal/billing"
-	"github.com/hanishi/promovolve/platform/internal/fx"
 	"github.com/hanishi/promovolve/platform/internal/config"
 	"github.com/hanishi/promovolve/platform/internal/db"
 	"github.com/hanishi/promovolve/platform/internal/handler"
@@ -92,13 +91,15 @@ func main() {
 	setupSvc := setup.NewService(pool, userRepo, passkeyRepo)
 	settingsSvc := settings.NewService(pool)
 	siteReqRepo := siterequest.NewRepository(pool)
-	siteReqSvc := siterequest.NewService(siteReqRepo, cfg.CoreAPIURL)
 
 	// Billing settlement job: books each entity's closed local-day windows
 	// into the ledger and enforces the prepaid-wallet policy
 	// (docs/design/BILLING.md). Idempotent per window, catches up after
 	// downtime, single-pod by design.
 	billingSvc := billing.NewService(pool)
+	// Newly approved sites open at the floors the operator set at install,
+	// which billing owns (they are money, in the deployment's base currency).
+	siteReqSvc := siterequest.NewService(siteReqRepo, cfg.CoreAPIURL, billingSvc)
 	coreInternal := billing.NewHTTPCoreClient(cfg.CoreAPIURL, cfg.InternalAPIKey)
 	settler := billing.NewSettler(
 		billingSvc, pool,
@@ -118,8 +119,17 @@ func main() {
 	defer stopSettler()
 	go settler.Run(settleCtx)
 
-	fxSvc := fx.NewService(pool)
-	fxSvc.Start(context.Background())
+	// The deployment's currency is a setup-time constant. Read it once, before
+	// anything renders. An unreadable or unsupported stored code is fatal:
+	// booting anyway would render every amount in the system with the wrong
+	// symbol and decimal places, which is worse than not starting.
+	baseCur, err := billingSvc.BaseCurrency(context.Background())
+	if err != nil {
+		slog.Error("base currency unreadable — refusing to start", "error", err)
+		os.Exit(1)
+	}
+	handler.SetBaseCurrency(baseCur)
+	slog.Info("base currency", "code", baseCur.Code, "symbol", baseCur.Symbol, "decimals", baseCur.Decimals)
 
 	h := handler.New(handler.Deps{
 		CoreAPIURL:      cfg.CoreAPIURL,
@@ -135,7 +145,6 @@ func main() {
 		AuditRepo:       auditRepo,
 		Settler:         settler,
 		OrgCore:         coreInternal,
-		FxSvc:           fxSvc,
 		DevAuth:         cfg.DevAuth,
 		SecureCookies:   cfg.RPID != "localhost",
 	})

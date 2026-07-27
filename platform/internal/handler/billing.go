@@ -16,11 +16,11 @@ import (
 	"log/slog"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
 	"github.com/hanishi/promovolve/platform/internal/billing"
+	"github.com/hanishi/promovolve/platform/internal/currency"
 	"github.com/hanishi/promovolve/platform/internal/i18n"
 	"github.com/hanishi/promovolve/platform/internal/model"
 )
@@ -188,22 +188,35 @@ type earningsPageData struct {
 // ---------------------------------------------------------------------------
 // formatting helpers
 
-func usd(micros int64) string { return fmt.Sprintf("%.2f", billing.Dollars(micros)) }
+// usd renders an amount in the deployment's base currency, symbol included.
+// The name is historical; the unit is whatever the operator chose at setup.
+// Templates must not prepend a symbol of their own.
+func usd(micros int64) string { return BaseCurrency().Format(micros) }
 
-func signedUSD(micros int64) string {
-	if micros < 0 {
-		return "−$" + usd(-micros)
-	}
-	return "+$" + usd(micros)
-}
+// usdPlain is the bare number, for form input values where the symbol sits in
+// the label beside the box rather than inside it.
+func usdPlain(micros int64) string { return BaseCurrency().Plain(micros) }
 
-// parseDollars converts a positive dollar form value to micros.
+func signedUSD(micros int64) string { return BaseCurrency().FormatSigned(micros) }
+
+// maxAmountMicros is a fat-finger guard on hand-entered amounts — it catches a
+// slipped decimal point, not a large legitimate transfer.
+//
+// It has to be generous in EVERY supported currency, which rules out the old
+// 1e7 major-unit cap: that is $10M in dollars but only about $63k worth of
+// yen, so a mid-sized JPY top-up was rejected as malformed. A billion major
+// units is absurd as a single manual entry anywhere, and leaves four orders of
+// magnitude of headroom below int64 micros.
+const maxAmountMicros = 1e9 * currency.Micro
+
+// parseDollars converts a positive form amount, entered in the deployment's
+// base currency, to micros.
 func parseDollars(s string) (int64, error) {
-	v, err := strconv.ParseFloat(strings.TrimSpace(s), 64)
-	if err != nil || v <= 0 || v > 1e7 {
-		return 0, errors.New("amount must be a positive dollar value")
+	v, err := BaseCurrency().Parse(s)
+	if err != nil || v <= 0 || v > maxAmountMicros {
+		return 0, errors.New("amount must be a positive value")
 	}
-	return billing.DollarsToMicros(v), nil
+	return v, nil
 }
 
 // formNonce is embedded in mutating billing forms and becomes the ledger
@@ -221,12 +234,7 @@ func validNonce(n string) bool { return len(n) >= 16 }
 
 // usdTile formats a signed amount for the big dashboard tiles, keeping the
 // minus sign outside the currency symbol (−$12.34, not $-12.34).
-func usdTile(micros int64) string {
-	if micros < 0 {
-		return "−$" + usd(-micros)
-	}
-	return "$" + usd(micros)
-}
+func usdTile(micros int64) string { return BaseCurrency().Format(micros) }
 
 func kindBadge(k billing.TxnKind) string {
 	switch k {
@@ -431,7 +439,7 @@ func summarizeTxn(lang string, t billing.Transaction, labels map[string]string) 
 		if v < 0 {
 			v = -v
 		}
-		return "$" + usd(v)
+		return usd(v)
 	}
 	switch t.Kind {
 	case billing.TxnTopup:
@@ -693,7 +701,7 @@ func (h *Handler) AdminBillingAccount(w http.ResponseWriter, r *http.Request) {
 		Type:        string(ownerType),
 		ID:          ownerID,
 		Label:       labelOr(labels, ownerID),
-		Balance:     "$0.00",
+		Balance:     fmtMoney(0),
 		Status:      string(billing.StatusActive),
 		StatusBadge: "badge-neutral",
 		IsPublisher: ownerType == billing.OwnerPublisher,
@@ -1132,11 +1140,11 @@ func (h *Handler) ownerExists(ctx context.Context, ownerType billing.OwnerType, 
 // not silence.
 func (h *Handler) walletSummary(ctx context.Context, advertiserID string) (balance string, unfunded bool) {
 	if advertiserID == "" {
-		return "$0.00", true
+		return fmtMoney(0), true
 	}
 	acc, err := h.billingSvc.GetAccount(ctx, billing.OwnerAdvertiser, advertiserID)
 	if err != nil {
-		return "$0.00", true // no row yet = never funded
+		return fmtMoney(0), true // no row yet = never funded
 	}
 	return usdTile(acc.BalanceMicros), acc.BalanceMicros <= 0
 }
@@ -1171,7 +1179,7 @@ func (h *Handler) AdvertiserWallet(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	advertiserID := claims.AdvertiserID
-	data := &walletPageData{Balance: "$0.00", Status: string(billing.StatusActive)}
+	data := &walletPageData{Balance: fmtMoney(0), Status: string(billing.StatusActive)}
 	if tz, err := h.orgRepo.TimezoneByEntity(ctx, advertiserID); err == nil {
 		data.Timezone = tz
 	}
@@ -1256,7 +1264,9 @@ func (h *Handler) PublisherEarnings(w http.ResponseWriter, r *http.Request) {
 		data.MethodDetails = method.Details
 		// Display the effective threshold: the platform floor overrides a
 		// lower stored preference.
-		data.MinPayout = usd(max(method.MinPayoutMicros, floor))
+		// Form input value, so bare digits only — a number input discards
+		// anything carrying a symbol or separator and renders empty.
+		data.MinPayout = usdPlain(max(method.MinPayoutMicros, floor))
 	}
 
 	h.render(w, r, "publisher/earnings.html", pageData{

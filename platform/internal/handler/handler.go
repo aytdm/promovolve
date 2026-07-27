@@ -23,7 +23,7 @@ import (
 	"github.com/hanishi/promovolve/platform/internal/audit"
 	"github.com/hanishi/promovolve/platform/internal/auth"
 	"github.com/hanishi/promovolve/platform/internal/billing"
-	"github.com/hanishi/promovolve/platform/internal/fx"
+	"github.com/hanishi/promovolve/platform/internal/currency"
 	"github.com/hanishi/promovolve/platform/internal/i18n"
 	"github.com/hanishi/promovolve/platform/internal/model"
 	"github.com/hanishi/promovolve/platform/internal/org"
@@ -91,9 +91,6 @@ type Handler struct {
 	// orgCore reaches the core /v1/internal endpoints for the operator
 	// org suspend/resume cascade.
 	orgCore *billing.HTTPCoreClient
-	// fxSvc provides daily USD-base reference rates for DISPLAY-ONLY
-	// currency conversion (nil-safe: absent = everything renders USD).
-	fxSvc *fx.Service
 	// devAuth mirrors config.DevAuth: renders the legacy password forms and
 	// accepts password POSTs on /login. Never true in production.
 	devAuth bool
@@ -119,7 +116,6 @@ type Deps struct {
 	// OrgCore reaches the core's /v1/internal endpoints (X-Internal-Key) for
 	// the org suspend/resume cascade — the operator-privileged channel.
 	OrgCore       *billing.HTTPCoreClient
-	FxSvc         *fx.Service
 	DevAuth       bool
 	SecureCookies bool
 }
@@ -146,34 +142,50 @@ type UserService interface {
 }
 
 var funcMap = template.FuncMap{
-	// cur renders a USD amount in the request's display currency (see
-	// CurrencyCtx on pageData): {{cur $.Cur .SpendToday}}. Accepts float64
-	// or a numeric string (several handlers pre-format amounts as strings).
-	"cur": func(c *CurrencyCtx, v any) string {
-		f, ok := moneyToFloat(v)
-		if !ok {
-			if s, isStr := v.(string); isStr {
-				return s
-			}
-			return ""
-		}
-		return curFormat(c, f)
-	},
-	// curHint renders the grey parenthetical converted equivalent for a
-	// dollar-primary figure — "" when no display currency is active:
-	// ${{.MaxCPM}}{{curHint $.Cur .MaxCPM}} → $10.00 (≈¥1,638)
-	"curHint": func(c *CurrencyCtx, v any) template.HTML {
-		if c == nil || !c.Convert {
-			return ""
-		}
-		f, ok := moneyToFloat(v)
-		if !ok {
-			return ""
-		}
-		return template.HTML(` <span class="text-xs font-normal text-gray-400">(` +
-			template.HTMLEscapeString(curFormat(c, f)) + `)</span>`)
-	},
 	// asset builds a version-stamped /static URL (see staticVersion).
+	// money renders an amount in the deployment's base currency, symbol and
+	// decimal places included: {{money .SpendToday}} → "$8,120.50" or
+	// "¥1,277,355". Accepts micros (int64), a major-unit float, or the
+	// decimal strings the core returns ("0.50"); a non-numeric string —
+	// "measuring", "—" — passes through as itself so sentinel slots keep
+	// working. Templates must NOT prepend a currency symbol of their own.
+	"money": func(v any) string {
+		micros, ok := toMicros(v)
+		if !ok {
+			s, _ := v.(string)
+			return s
+		}
+		return baseCurrency.Format(micros)
+	},
+	// moneySigned always carries an explicit sign, for deltas and ledger
+	// movements where "+" is what makes the number readable as a change.
+	"moneySigned": func(v any) string {
+		micros, ok := toMicros(v)
+		if !ok {
+			s, _ := v.(string)
+			return s
+		}
+		return baseCurrency.FormatSigned(micros)
+	},
+	// sym is the bare currency symbol, for input prefixes and field labels
+	// where the amount itself is typed by the operator.
+	"sym": func() string { return baseCurrency.Symbol },
+	// moneystep is the granularity of a money <input type="number">: whole
+	// units on a zero-decimal currency, hundredths elsewhere. A yen field
+	// stepping by 0.01 offers sub-yen precision nobody wants.
+	"moneystep": func() string {
+		if baseCurrency.Decimals == 0 {
+			return "1"
+		}
+		return "0.01"
+	},
+	// decimals is the currency's conventional fractional digits, for the chart
+	// callbacks that format money client-side (toFixed(2) is wrong on a
+	// zero-decimal currency).
+	"decimals": func() int { return baseCurrency.Decimals },
+	// addf offsets an SVG coordinate — chart gridline labels sit a hair below
+	// their line.
+	"addf": func(a, b int) int { return a + b },
 	"asset": func(name string) string {
 		return "/static/" + name + "?v=" + staticVersion
 	},
@@ -230,85 +242,66 @@ var funcMap = template.FuncMap{
 	},
 }
 
-// currencyCtx resolves the display-currency context for a user. USD (or an
-// unavailable rate) yields Convert=false — amounts render exactly as booked.
-func (h *Handler) currencyCtx(u *model.User) *CurrencyCtx {
-	code := ""
-	if u != nil {
-		code = u.DisplayCurrency
-	}
-	if code == "" || code == "USD" || h.fxSvc == nil {
-		return &CurrencyCtx{Code: "USD", Rate: 1}
-	}
-	if r, ok := h.fxSvc.Get(code); ok && r.Rate > 0 {
-		return &CurrencyCtx{
-			Code: code, Rate: r.Rate, Date: r.FetchedAt.Format("2006-01-02"),
-			Symbol: fx.Symbol(code), ZeroDec: fx.ZeroDecimal(code), Convert: true,
-		}
-	}
-	return &CurrencyCtx{Code: "USD", Rate: 1}
+// baseCurrency is the deployment's currency. It is process-wide rather than
+// per-request because that is what it actually is: one operator, one country,
+// one currency, fixed at setup and immutable afterwards. Threading it through
+// every pageData would be ceremony around a constant. Written once at boot
+// (SetBaseCurrency) before any template renders, read-only thereafter.
+var baseCurrency = currency.USD
+
+// SetBaseCurrency binds the deployment currency for rendering. Call once at
+// startup, after reading the setting and before serving.
+func SetBaseCurrency(c currency.Currency) { baseCurrency = c }
+
+// BaseCurrency is the currency amounts are rendered in, for handlers that
+// need to parse operator input in the same unit.
+func BaseCurrency() currency.Currency { return baseCurrency }
+
+// fmtMoney renders a major-unit float in the base currency. The many callers
+// that build display strings from core JSON floats go through here rather
+// than Sprintf-ing a symbol, so a deployment's currency is honoured
+// everywhere without each site knowing about it.
+func fmtMoney(v float64) string { return baseCurrency.Format(currency.FromMajor(v)) }
+
+// fmtMoneyPrec is fmtMoney with extra decimals, for fine-resolution readouts
+// like the floor sweep's per-candidate revenue.
+func fmtMoneyPrec(v float64, extra int) string {
+	return baseCurrency.FormatPrec(currency.FromMajor(v), extra)
 }
 
-// curFormat renders a USD amount in the context's display currency: "$8.00"
-// untouched for USD, "≈¥1,258" for converted (the ≈ is load-bearing — the
-// booked value is the USD one). Pure function of (ctx, amount) so it lives
-// in the shared parse-time funcMap.
-func curFormat(c *CurrencyCtx, usd float64) string {
-	if c == nil || !c.Convert {
-		return "$" + groupThousands(usd, 2)
-	}
-	decimals := 2
-	if fx.ZeroDecimal(c.Code) {
-		decimals = 0
-	}
-	return "≈" + fx.Symbol(c.Code) + groupThousands(usd*c.Rate, decimals)
+// fmtMoneySigned renders a change with an explicit sign, so a delta column
+// reads as movement rather than as a level.
+func fmtMoneySigned(v float64) string {
+	return baseCurrency.FormatSigned(currency.FromMajor(v))
 }
 
-// moneyToFloat coerces the value shapes templates hand to cur/curHint:
-// numbers, or strings like "10.00" / "$10.00".
-func moneyToFloat(v any) (float64, bool) {
+func fmtMoneySignedPrec(v float64, extra int) string {
+	m := currency.FromMajor(v)
+	p := currency.Currency{Code: baseCurrency.Code, Symbol: baseCurrency.Symbol, Decimals: baseCurrency.Decimals + extra}
+	return p.FormatSigned(m)
+}
+
+// toMicros accepts the shapes templates and handlers hand to the money
+// helpers: int64 micros as stored, a major-unit float, or the decimal strings
+// the Scala core returns over JSON. Returns false for anything non-numeric so
+// callers can pass sentinels ("—", "measuring") through untouched.
+func toMicros(v any) (int64, bool) {
 	switch x := v.(type) {
-	case float64:
+	case int64:
 		return x, true
 	case int:
-		return float64(x), true
-	case int64:
-		return float64(x), true
+		return int64(x), true
+	case float64:
+		return currency.FromMajor(x), true
 	case string:
-		f, err := strconv.ParseFloat(strings.TrimPrefix(strings.TrimSpace(x), "$"), 64)
+		m, err := baseCurrency.Parse(x)
 		if err != nil {
 			return 0, false
 		}
-		return f, true
+		return m, true
 	default:
 		return 0, false
 	}
-}
-
-// groupThousands formats with comma separators and fixed decimals.
-func groupThousands(v float64, decimals int) string {
-	s := strconv.FormatFloat(v, 'f', decimals, 64)
-	intPart := s
-	frac := ""
-	if i := strings.IndexByte(s, '.'); i >= 0 {
-		intPart, frac = s[:i], s[i:]
-	}
-	neg := strings.HasPrefix(intPart, "-")
-	if neg {
-		intPart = intPart[1:]
-	}
-	var b strings.Builder
-	for i, ch := range intPart {
-		if i > 0 && (len(intPart)-i)%3 == 0 {
-			b.WriteByte(',')
-		}
-		b.WriteRune(ch)
-	}
-	out := b.String() + frac
-	if neg {
-		out = "-" + out
-	}
-	return out
 }
 
 func New(d Deps) *Handler {
@@ -326,7 +319,6 @@ func New(d Deps) *Handler {
 		auditRepo:       d.AuditRepo,
 		settler:         d.Settler,
 		orgCore:         d.OrgCore,
-		fxSvc:           d.FxSvc,
 		devAuth:         d.DevAuth,
 		secureCookies:   d.SecureCookies,
 	}
@@ -415,26 +407,11 @@ func (h *Handler) lang(r *http.Request, u *model.User) string {
 	return i18n.Resolve(pref, r.Header.Get("Accept-Language"))
 }
 
-// CurrencyCtx is the per-request display-currency context, computed in
-// renderStatus from the user's preference + the fx service and carried on
-// pageData (template caches are per-language, so per-user state cannot be
-// bound into the funcmap). Convert=false means "render USD as-is" — either
-// the user chose USD or no rate is available (honest fallback).
-type CurrencyCtx struct {
-	Code    string  // "USD", "JPY", …
-	Rate    float64 // USD → Code multiplier (1 for USD)
-	Date    string  // rate date (YYYY-MM-DD), "" for USD
-	Symbol  string  // display symbol ("¥"), for client-side live hints
-	ZeroDec bool    // currency conventionally shows no decimals (JPY, KRW)
-	Convert bool
-}
-
 type pageData struct {
 	Title string
 	Nav   string
 	User  *model.User
 	Error string
-	Cur   *CurrencyCtx
 	// Billing (docs/design/BILLING.md Phase 4)
 	AdminBilling  *adminBillingData
 	AdminTopups   *adminTopupsData
@@ -476,10 +453,10 @@ type pageData struct {
 	AdminFraudFlags []adminFraudFlagRow
 	// Live per-site suspect-marked traffic today (also /admin/fraud)
 	AdminSuspectSites []adminSuspectSiteRow
-	AdminUsers      []adminUserRow
-	AdminOrgs       []orgAdminRow
-	AdminOrgsNav    *listNav
-	AdminOrgsQ      string
+	AdminUsers        []adminUserRow
+	AdminOrgs         []orgAdminRow
+	AdminOrgsNav      *listNav
+	AdminOrgsQ        string
 	// Pending org side requests on /admin/requests (an existing org asking
 	// for its other side — advertiser or publisher).
 	AdminOrgSideRequests []model.OrgSideRequest
@@ -512,7 +489,7 @@ type pageData struct {
 	SitesData []siteData
 	// Pending/denied site requests (platform rows, no core entity yet)
 	SiteRequests []siteRequestRow
-	// Per-site floor-RL observation log (decision history)
+	// Per-site floor-sweep observation log (decision history)
 	FloorObservations *floorObservationsData
 	// Publisher stats
 	Stats *publisherStats
@@ -567,7 +544,7 @@ type pageData struct {
 	// Preferences page
 	Saved        bool // "saved ✓" banner after a successful POST-redirect
 	Timezones    []string
-	Currencies   []string
+	Currencies   []currency.Currency
 	LandingSide  string
 	LandingSides []string
 }
@@ -782,9 +759,6 @@ func (h *Handler) renderStatus(w http.ResponseWriter, r *http.Request, status in
 	// through untouched; already-translated strings miss the catalog and
 	// pass through unchanged, so this is safe to layer.
 	data.Title = i18n.T(lang, data.Title)
-	if data.Cur == nil {
-		data.Cur = h.currencyCtx(data.User)
-	}
 	t := getPage(lang, name)
 	if err := t.ExecuteTemplate(w, "layout", data); err != nil {
 		slog.Error("template render failed", "error", err, "template", name)

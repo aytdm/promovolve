@@ -153,11 +153,6 @@
     </aside>
     <main class="flex-1 min-w-0 overflow-x-auto p-8">
       {{template "content" .}}
-      {{if and .Cur .Cur.Convert}}
-      <p class="text-xs text-gray-400 mt-8">
-        {{t "Amounts marked ≈ are converted from USD at the daily reference rate of %s (1 USD = %s %s). All billing, budgets, and auction prices are in USD." .Cur.Date (printf "%.2f" .Cur.Rate) .Cur.Code}}
-      </p>
-      {{end}}
     </main>
   </div>
   {{else}}

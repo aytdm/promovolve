@@ -278,7 +278,7 @@
             {{end}}
           </div>
           <p class="text-xs text-gray-400 mt-1" title="{{t "Manually-set fallback floor. The optimizer overrides this within seconds of starting. Treat as a startup default only."}}">
-            {{t "Starting floor:"}} ${{if .FloorCpm}}{{.FloorCpm}}{{curHint $.Cur .FloorCpm}}{{else}}0.50{{end}}
+            {{t "Starting floor:"}} {{if .FloorCpm}}{{money .FloorCpm}}{{else}}&mdash;{{end}}
           </p>
         </div>
         {{if .HealthKnown}}
@@ -309,7 +309,7 @@
           <input type="hidden" name="siteId" value="{{.ID}}">
           <label class="text-xs text-gray-500">{{t "Min Floor:"}} $</label>
           <div class="flex items-center gap-2">
-            <input type="number" name="minFloorCpm" step="0.01" min="0.01" value="{{if .MinFloorCpm}}{{.MinFloorCpm}}{{else}}0.10{{end}}"
+            <input type="number" name="minFloorCpm" step="{{moneystep}}" min="0.01" value="{{if .MinFloorCpm}}{{.MinFloorCpm}}{{else}}0.10{{end}}"
                    class="w-24 px-2 py-1 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand">
             <button type="submit" class="btn btn-primary btn-sm">{{t "Set"}}</button>
           </div>
@@ -357,7 +357,7 @@
                 <th class="text-left py-1 font-normal" title="{{t "Top IAB content category of the page this slot was found on — determines which campaigns can bid"}}">{{t "Matched Category"}}</th>
                 <th class="text-left py-1 font-normal">{{t "Region"}}</th>
                 <th class="text-left py-1 font-normal" title="{{t "Slot quality score, 0..1"}}">{{t "Prior"}}</th>
-                <th class="text-left py-1 font-normal">{{t "Override ($)"}}</th>
+                <th class="text-left py-1 font-normal">{{t "Override"}} ({{sym}})</th>
               </tr>
             </thead>
             <tbody>
@@ -392,7 +392,7 @@
                 </td>
                 <td class="py-1">
                   <input type="hidden" name="slotId" value="{{.SlotID}}">
-                  <input type="number" name="floorCpm" step="0.01" min="0" value="{{.FloorOverride}}"
+                  <input type="number" name="floorCpm" step="{{moneystep}}" min="0" value="{{.FloorOverride}}"
                          placeholder="{{t "auto"}}"
                          class="w-20 px-2 py-0.5 border rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand">
                 </td>
