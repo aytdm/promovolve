@@ -1464,14 +1464,23 @@ func (h *Handler) UpdateCampaignSchedule(w http.ResponseWriter, r *http.Request)
 // settlement days follow. Used for schedule input/display and report
 // ranges. Unset or unloadable zones fall back to UTC, matching the
 // core's own Timezones.zoneOf fallback.
+// An org that has never stated a zone runs on the PLATFORM's zone, not UTC.
+// The operator states it once at /setup; making every advertiser and publisher
+// restate it is the same "asking twice" bug 2f259ad fixed — except that fix
+// only reached model.Location(), the preference/rendering path. This function
+// is the load-bearing one (daily budget rollover, bucketing) and kept its own
+// UTC fallback, so a Tokyo install silently rolled advertiser budgets at 09:00
+// JST. An unloadable stored value degrades the same way rather than breaking
+// the render.
 func (h *Handler) accountTimeContext(ctx context.Context, entityID string) (string, *time.Location) {
+	sys := model.SystemLocation()
 	tz, err := h.orgRepo.TimezoneByEntity(ctx, entityID)
 	if err != nil || tz == "" {
-		return "UTC", time.UTC
+		return sys.String(), sys
 	}
 	loc, lerr := time.LoadLocation(tz)
 	if lerr != nil {
-		return "UTC", time.UTC
+		return sys.String(), sys
 	}
 	return tz, loc
 }

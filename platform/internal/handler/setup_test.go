@@ -13,6 +13,7 @@ import (
 	platform "github.com/hanishi/promovolve/platform"
 	"github.com/hanishi/promovolve/platform/internal/currency"
 	"github.com/hanishi/promovolve/platform/internal/i18n"
+	"github.com/hanishi/promovolve/platform/internal/model"
 )
 
 func TestSetupValidateCarriesTimezone(t *testing.T) {
@@ -185,5 +186,37 @@ func TestInstallParamsCarryTimezoneForAdminDefault(t *testing.T) {
 	}
 	if p.DefaultTimezone != "Asia/Tokyo" {
 		t.Fatalf("DefaultTimezone = %q", p.DefaultTimezone)
+	}
+}
+
+// Same failure as the currency above, and it went unnoticed longer because the
+// wrong answer (UTC) looks like a deliberate default rather than a bug. main.go
+// binds the platform zone at boot from the database — but on a fresh install
+// that boot happened BEFORE /setup wrote the row, so the running process holds
+// UTC while the database says Asia/Tokyo. Every advertiser and publisher day
+// boundary is then wrong until someone restarts the pod: on the 2026-07-27 GKE
+// install, budgets would have rolled over at 09:00 JST.
+func TestSetupAppliesTimezoneImmediately(t *testing.T) {
+	orig := model.SystemLocation()
+	t.Cleanup(func() { model.SetSystemTimezone(orig.String()) })
+
+	model.SetSystemTimezone("UTC")
+	applyInstalledTimezone("Asia/Tokyo")
+	if got := model.SystemLocation().String(); got != "Asia/Tokyo" {
+		t.Errorf("after Asia/Tokyo install, SystemLocation() = %q", got)
+	}
+
+	// An unloadable zone must leave the installed value alone rather than
+	// silently dropping the deployment back to UTC.
+	applyInstalledTimezone("Mars/Olympus")
+	if got := model.SystemLocation().String(); got != "Asia/Tokyo" {
+		t.Errorf("bad zone clobbered the platform timezone: %q", got)
+	}
+
+	// Blank is how "the operator chose nothing" arrives; it must not clobber
+	// either, for the same reason.
+	applyInstalledTimezone("")
+	if got := model.SystemLocation().String(); got != "Asia/Tokyo" {
+		t.Errorf("empty zone clobbered the platform timezone: %q", got)
 	}
 }

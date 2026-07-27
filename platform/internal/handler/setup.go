@@ -164,6 +164,15 @@ func applyInstalledCurrency(code string) {
 	}
 }
 
+// applyInstalledTimezone does the same for the platform zone, and for the same
+// reason: main.go binds it at boot from the database, but the boot that matters
+// is the one BEFORE /setup ran, when the row did not exist. Without this a
+// fresh install reads UTC — every advertiser and publisher day boundary wrong —
+// until someone happens to restart the pod. Verified on the 2026-07-27 GKE
+// install: the wizard wrote Asia/Tokyo and the campaign page still said
+// "your account timezone (UTC)".
+func applyInstalledTimezone(name string) { model.SetSystemTimezone(name) }
+
 func (h *Handler) SetupBegin(w http.ResponseWriter, r *http.Request) {
 	if h.setupSvc.Initialized(r.Context()) {
 		h.jsonErrorT(w, r, http.StatusConflict, "platform is already initialized")
@@ -225,6 +234,7 @@ func (h *Handler) SetupFinish(w http.ResponseWriter, r *http.Request) {
 	}
 
 	applyInstalledCurrency(sp.Install.BaseCurrency)
+	applyInstalledTimezone(sp.Install.DefaultTimezone)
 
 	token, err := h.jwtSvc.Issue(sp.User)
 	if err != nil {
@@ -286,6 +296,7 @@ func (h *Handler) SetupDev(w http.ResponseWriter, r *http.Request) {
 	}
 
 	applyInstalledCurrency(install.BaseCurrency)
+	applyInstalledTimezone(install.DefaultTimezone)
 
 	token, err := h.jwtSvc.Issue(admin)
 	if err != nil {
