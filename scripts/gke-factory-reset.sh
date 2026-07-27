@@ -46,6 +46,24 @@ done
 
 kc() { kubectl --context "$CTX" -n "$NS" "$@"; }
 
+# A failure between "scale to zero" and "scale back up" leaves the deployment
+# DOWN — that happened on this script's first real run, when the overlay apply
+# errored after the volumes were already deleted. It cannot put the data back
+# (that is the point of the script), but it can always hand back a running,
+# empty cluster instead of a hole and a stack trace.
+recover() {
+  local rc=$?
+  echo
+  echo "!! failed (exit $rc) — scaling tiers back up so the cluster is not left down" >&2
+  kc scale statefulset promovolve-db --replicas=1 >/dev/null 2>&1 || true
+  kc scale statefulset promovolve-api --replicas=2 >/dev/null 2>&1 || true
+  kc scale statefulset promovolve-singleton --replicas=1 >/dev/null 2>&1 || true
+  kc rollout restart deploy/promovolve-platform >/dev/null 2>&1 || true
+  echo "!! tiers restarting. If the wipe had already run, re-run this script to finish." >&2
+  exit "$rc"
+}
+trap recover ERR
+
 kubectl --context "$CTX" cluster-info >/dev/null 2>&1 \
   || { echo "context '$CTX' unreachable — run: gcloud auth login" >&2; exit 1; }
 
@@ -100,7 +118,11 @@ else
   # envelope every 30s and left campaign_stats permanently empty. A reset must
   # restore the schema the REPO describes, not the one the cluster remembers.
   echo "== re-applying overlay so init-db.sql is current"
-  kubectl --context "$CTX" apply -k "$(dirname "$0")/../k8s-gke"
+  # LoadRestrictionsNone is required: the base configMapGenerator single-sources
+  # ../docker/init-db.sql, which kustomize refuses to read from outside the
+  # overlay directory by default (k8s-local/up.sh carries the same flag).
+  kubectl kustomize --load-restrictor LoadRestrictionsNone "$(dirname "$0")/../k8s-gke" \
+    | kubectl --context "$CTX" apply -f -
 
   echo "== scaling back up (Postgres re-inits from the configMap)"
   kc scale statefulset promovolve-db --replicas=1
