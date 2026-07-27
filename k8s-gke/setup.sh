@@ -330,6 +330,8 @@ Done. NEXT STEPS (manual, one-time):
 
   3. Fresh DB — register the first account at https://promovolve.programmer.llc/setup
 
-Redeploys after image pushes: update the digests in k8s/kustomization.yaml,
-then  k8s-gke/setup.sh --deploy-only
+Redeploys: CI builds and rolls by digest on every push to main, and writes the
+digests back to k8s/kustomization.yaml — nothing to do by hand. For an
+infra/config-only change, k8s-gke/setup.sh --deploy-only (it preserves the
+running images). Running your own? REGISTRY=... k8s-gke/setup.sh --build-images
 EOF
