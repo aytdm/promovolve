@@ -269,6 +269,24 @@ if [ "${PIN_IMAGES:-0}" -ne 1 ]; then
   LIVE_PLATFORM=$(kc get deployment promovolve-platform -o jsonpath='{.spec.template.spec.containers[0].image}' 2>/dev/null || true)
 fi
 
+# publish-banner points the cluster at a new bundle with `kubectl set env`,
+# which REPLACES the platform's `valueFrom: configMapKeyRef` with a literal
+# `value`. Applying the manifest then strategic-merges the valueFrom back on
+# top, and the API server rejects an env entry carrying both:
+#
+#   The Deployment "promovolve-platform" is invalid: …env[1].valueFrom:
+#   Invalid value: "": may not be specified when `value` is not empty
+#
+# So every apply after a banner publish failed on the platform tier — and
+# would have aborted a factory reset mid-wipe, since the reset delegates here.
+# Drop the literal and let the configMap be authoritative again. Safe because
+# CI now writes the published URL back into k8s/kustomization.yaml
+# (scripts/pin-banner-url.sh), so the configMap already holds what the
+# override was pinning. Harmless when there is no override to remove.
+if kc get deployment promovolve-platform >/dev/null 2>&1; then
+  kc set env deployment/promovolve-platform BANNER_SCRIPT_URL- >/dev/null 2>&1 || true
+fi
+
 echo "==> applying manifests (kustomize overlay k8s-gke, registry ${REGISTRY})"
 render | kcg apply -f -
 

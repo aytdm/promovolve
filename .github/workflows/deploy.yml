@@ -313,8 +313,15 @@ jobs:
       && needs.changes.outputs.banner == 'true'
       && needs.deploy.result != 'failure'
     runs-on: ubuntu-latest
+    permissions:
+      contents: write   # pins the published URL back. Job-level permissions
+      id-token: write   # REPLACE the top-level pair, so WIF's id-token must
+                        # be respelled here or the gcloud auth step breaks.
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: true   # the pin-back step pushes
       - uses: actions/setup-node@v4
         with:
           node-version: 22
@@ -360,6 +367,34 @@ jobs:
           done
           kubectl -n promovolve rollout status statefulset/promovolve-api --timeout=600s
           kubectl -n promovolve rollout status deployment/promovolve-platform --timeout=300s
+
+      # Write the published URL back to the repo, for the same reason
+      # pin-images writes the digests back: otherwise the configMapGenerator
+      # literal stays at whatever was last hand-edited while the cluster runs
+      # something newer. That drift is not cosmetic here — the `set env` above
+      # shadows the platform's configMapKeyRef with a literal, so a later
+      # manifest apply merges both and the API server rejects the Deployment.
+      # k8s-gke/setup.sh drops that literal before applying, which is only
+      # correct while this line is true.
+      - name: Pin the published URL back to the repo
+        run: |
+          set -euo pipefail
+          scripts/pin-banner-url.sh "${{ steps.publish.outputs.url }}"
+          if git diff --quiet -- k8s/kustomization.yaml; then
+            echo "banner url already current — nothing to commit"; exit 0
+          fi
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add k8s/kustomization.yaml
+          git commit -m "ci: pin published banner bundle url [skip ci]" \
+                     -m "Published by run ${GITHUB_RUN_ID} from ${GITHUB_SHA}."
+          for i in 1 2 3; do
+            if git push origin HEAD:main; then exit 0; fi
+            echo "push rejected (attempt $i) — rebasing on main"
+            git pull --rebase origin main
+          done
+          echo "could not push the updated banner url after 3 attempts" >&2
+          exit 1
 
   # The publisher ad tag. Bootstrap releases used to be MANUAL (npm run
   # release from a laptop with scripts/.env) — a merged tag fix that nobody
