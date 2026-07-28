@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  # Manual runs exist for the deploy gate: Deploy polls for a CI run on
+  # its commit, but a workflow_dispatch deploy from a "[skip ci]"
+  # digest-pin HEAD has none and would time out after 30 minutes.
+  # Dispatching CI on the same commit gives the gate something green.
+  workflow_dispatch:
 
 # Cancel superseded runs on the same ref (e.g. rapid pushes to a PR).
 concurrency:
