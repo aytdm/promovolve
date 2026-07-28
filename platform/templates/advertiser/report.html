@@ -78,7 +78,7 @@
       </div>
       <div>
         <label class="form-label">{{t "Date"}}</label>
-        <input type="date" name="date" value="{{$r.To}}" class="form-input" required>
+        {{template "date-picker" dict "Name" "date" "Value" $r.To "Max" $r.Today}}
       </div>
       <div>
         <label class="form-label">{{t "Conversions"}}</label>

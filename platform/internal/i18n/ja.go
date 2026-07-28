@@ -113,8 +113,12 @@ var ja = map[string]string{
 	"Sa":               "土",
 	"Pick a start day": "開始日を選んでください",
 	"Pick an end day":  "終了日を選んでください",
-	"Apply":            "適用",
-	"Download CSV":     "CSVをダウンロード",
+	// ── shared date-picker component (layout.html) ──
+	"Pick a date":  "日付を選択",
+	"Time":         "時刻",
+	"Clear":        "クリア",
+	"Apply":        "適用",
+	"Download CSV": "CSVをダウンロード",
 
 	// ── login ──
 	"Content-based ad serving platform": "コンテンツベースの広告配信プラットフォーム",

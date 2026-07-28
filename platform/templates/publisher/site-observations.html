@@ -310,9 +310,7 @@
         <a href="?date={{$nav.PrevDate}}" class="text-brand hover:underline whitespace-nowrap">← {{$nav.PrevDate}}</a>
         <form method="GET" class="flex items-center gap-2">
           <label class="text-xs text-gray-500">{{t "Date:"}}</label>
-          <input type="date" name="date" value="{{if $nav.SelectedDate}}{{$nav.SelectedDate}}{{else}}{{$nav.Today}}{{end}}" max="{{$nav.Today}}"
-                 onchange="this.form.submit()"
-                 class="px-2 py-1 border rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand">
+          {{template "date-picker" dict "Name" "date" "Value" (or $nav.SelectedDate $nav.Today) "Max" $nav.Today "Submit" "1" "Sm" "1"}}
           {{if $nav.SelectedDate}}
             <a href="?" class="text-brand hover:underline">{{t "recent"}} →</a>
           {{end}}

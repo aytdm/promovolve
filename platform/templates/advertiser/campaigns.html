@@ -261,14 +261,12 @@
     <div class="grid grid-cols-2 gap-4 mb-4">
       <div>
         <label class="form-label">{{t "Start date"}} <span class="font-normal text-gray-500">{{t "(optional — blank = start now)"}}</span></label>
-        <input type="datetime-local" name="startAt"
-               class="form-input">
+        {{template "date-picker" dict "Name" "startAt" "Time" "1" "Clear" "1"}}
         <p class="text-xs text-gray-500 mt-1">{{t "Campaign stays inactive (no bids) until this date."}}</p>
       </div>
       <div>
         <label class="form-label">{{t "End date"}} <span class="font-normal text-gray-500">{{t "(optional — blank = open-ended)"}}</span></label>
-        <input type="datetime-local" name="endAt"
-               class="form-input">
+        {{template "date-picker" dict "Name" "endAt" "Time" "1" "Clear" "1"}}
         <p class="text-xs text-gray-500 mt-1">{{t "Campaign stops bidding after this date. Dog-ear pins expire then."}}</p>
       </div>
     </div>
@@ -427,13 +425,11 @@
             <input type="hidden" name="campaignId" value="{{.ID}}">
             <div class="flex items-center gap-2">
               <label class="text-xs text-gray-500 w-10">{{t "Start"}}</label>
-              <input type="datetime-local" name="startAt" value="{{.StartAtLocal}}"
-                     class="px-2 py-1 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand">
+              {{template "date-picker" dict "Name" "startAt" "Value" .StartAtLocal "Time" "1" "Clear" "1" "Sm" "1"}}
             </div>
             <div class="flex items-center gap-2">
               <label class="text-xs text-gray-500 w-10">{{t "End"}}</label>
-              <input type="datetime-local" name="endAt" value="{{.EndAtLocal}}"
-                     class="px-2 py-1 border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand">
+              {{template "date-picker" dict "Name" "endAt" "Value" .EndAtLocal "Time" "1" "Clear" "1" "Sm" "1"}}
               <button type="submit" class="btn btn-primary btn-sm">{{t "Update"}}</button>
             </div>
             <p class="text-xs text-gray-400">{{t "Times are in your account timezone (%s) — the same boundary your daily budget resets at." $.ScheduleTz}}</p>
@@ -649,13 +645,11 @@
           <div class="grid grid-cols-2 gap-4 mb-4">
             <div>
               <label class="form-label">{{t "Start date"}} <span class="font-normal text-gray-500">({{$.ScheduleTz}})</span></label>
-              <input type="datetime-local" name="startAt" value="{{.StartAtLocal}}"
-                     class="form-input">
+              {{template "date-picker" dict "Name" "startAt" "Value" .StartAtLocal "Time" "1" "Clear" "1"}}
             </div>
             <div>
               <label class="form-label">{{t "End date"}} <span class="font-normal text-gray-500">{{t "(blank = open-ended)"}}</span></label>
-              <input type="datetime-local" name="endAt" value="{{.EndAtLocal}}"
-                     class="form-input">
+              {{template "date-picker" dict "Name" "endAt" "Value" .EndAtLocal "Time" "1" "Clear" "1"}}
             </div>
           </div>
 
