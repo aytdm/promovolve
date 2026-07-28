@@ -848,11 +848,12 @@ export class ExpandableMagazineBanner extends HTMLElement {
       rtl: resolveReadingRtl(this.configData, this.pagesData),
       springK: feel.springK,
       springC: feel.springC,
+      // The sheet stays retired where the flight ended (off-screen,
+      // hidden) — restoring it at center flashed the last frame for a
+      // compositor beat on iOS Safari before the re-hide painted.
+      retireOnCommit: true,
       onCommit: () => {
         this._peel = null;
-        // Teardown restored the sheet — re-hide it or it ghosts back
-        // at center for the collapse fade.
-        turning.style.opacity = "0";
         this._collapse();
       },
       onCancel: () => { this._peel = null; },
@@ -940,13 +941,15 @@ export class ExpandableMagazineBanner extends HTMLElement {
       rtl,
       springK: feel.springK,
       springC: feel.springC,
+      // Last sheet: the reader closes behind it — retire the sheet
+      // where the flight ended instead of restoring it (restoring
+      // flashed the last frame for a compositor beat on iOS Safari
+      // before the re-hide painted).
+      retireOnCommit: isLast,
       onCommit: () => {
         this._peel = null;
         if (isLast) {
           // The pile is empty — the last sheet sailed away; close.
-          // (Teardown just restored the sheet's transform: re-hide it
-          // or it ghosts back at center for the collapse fade.)
-          turning.style.opacity = "0";
           this._collapse();
           return;
         }

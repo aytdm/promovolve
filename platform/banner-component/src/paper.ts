@@ -854,8 +854,18 @@ export function createInteractivePeel(opts: {
   springC?: number;     // settle-spring damping (paper weight)
   onCommit: () => void; // reached t=1: swap in the next page (instant)
   onCancel: () => void; // returned to t=0: nothing turned, restore resting
+  /** Last-sheet flights (the reader is closing): on commit, leave the
+    * sheet exactly where the flight ended — off-screen, faded out — and
+    * pin it invisible instead of restoring its resting styles. The
+    * restore re-rasterizes the sheet at CENTER (removing the transform
+    * destroys its compositor layer), and on iOS Safari that layer
+    * teardown can reach the screen a frame before the style write that
+    * re-hides it — the "last frame flashes" close bug. Cancel is
+    * unaffected: a canceled grab must restore the resting sheet. */
+  retireOnCommit?: boolean;
 }): { scrubTo: (t: number) => void; release: (commit: boolean, v0?: number) => void } | null {
   const { turning, under, onCommit, onCancel } = opts;
+  const retireOnCommit = opts.retireOnCommit ?? false;
   const rtl = opts.rtl ?? false;
   const springK = opts.springK ?? PEEL_SPRING_K;
   const springC = opts.springC ?? PEEL_SPRING_C;
@@ -999,6 +1009,19 @@ export function createInteractivePeel(opts: {
     if (done) return;
     done = true;
     if (rafId !== null) cancelAnimationFrame(rafId);
+    if (commit && retireOnCommit) {
+      // Reader is closing behind this sheet: clean up only the helper
+      // nodes and pin the sheet dead where the flight left it. No
+      // transform/z restore — no frame may exist in which the sheet is
+      // back at center and paint-eligible (see retireOnCommit above).
+      flap.remove();
+      tube.remove();
+      shade.remove();
+      turning.style.opacity = "0";
+      turning.style.visibility = "hidden";
+      onCommit();
+      return;
+    }
     teardown();
     // Commit/cancel re-lays the resting state with transitions still off
     // (onCommit swaps the page, onCancel restores the stack z/offsets we
