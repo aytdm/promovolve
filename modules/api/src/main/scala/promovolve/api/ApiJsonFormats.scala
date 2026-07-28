@@ -41,7 +41,7 @@ trait ApiJsonFormats extends DefaultJsonProtocol {
 
   // Site
   given RootJsonFormat[SiteCrawlConfig] = jsonFormat6(SiteCrawlConfig.apply)
-  given RootJsonFormat[SiteSlotConfig] = jsonFormat8(SiteSlotConfig.apply)
+  given RootJsonFormat[SiteSlotConfig] = jsonFormat9(SiteSlotConfig.apply)
   given RootJsonFormat[Site] = new RootJsonFormat[Site] {
     def write(s: Site): JsValue = JsObject(
       "id" -> JsString(s.id),
