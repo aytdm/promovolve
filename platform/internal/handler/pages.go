@@ -1158,6 +1158,8 @@ func (h *Handler) AdvertiserCampaigns(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Query().Get("error") {
 	case "prohibited_ad_product":
 		formError = i18n.T(lang, "This ad product category is not accepted on this network")
+	case "invalid_ad_product":
+		formError = i18n.T(lang, "Pick your product category from the suggestions — the campaign was not created.")
 	case "create_failed":
 		formError = i18n.T(lang, "Could not create the campaign — try again")
 	}
@@ -1469,6 +1471,8 @@ func (h *Handler) CreateCampaign(w http.ResponseWriter, r *http.Request) {
 		code := "create_failed"
 		if bytes.Contains(respBody, []byte("prohibited_ad_product")) {
 			code = "prohibited_ad_product"
+		} else if bytes.Contains(respBody, []byte("invalid_ad_product")) {
+			code = "invalid_ad_product"
 		}
 		slog.Warn("create campaign rejected", "code", code, "error", err)
 		http.Redirect(w, r, "/advertiser/campaigns?error="+code, http.StatusSeeOther)

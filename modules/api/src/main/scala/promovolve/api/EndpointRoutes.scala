@@ -1740,6 +1740,29 @@ class EndpointRoutes(
       "This ad product category is not accepted on this network"
     )
 
+  /**
+   * Write-path validation for a campaign's ad-product category: it must
+   * exist in the taxonomy and not be operator-prohibited. Empty/unknown
+   * ids are rejected — a "no category" campaign would be invisible to
+   * the prohibition gate AND to publisher ad-product blocklists, so it
+   * is not representable on any write path. (Campaigns that predate the
+   * field stay readable — that tolerance lives on the READ path only.)
+   * Returns None when acceptable.
+   */
+  private def validateAdProductCategory(raw: String): Future[Option[ErrorResponse]] = {
+    val id = raw.trim
+    if (id.isEmpty)
+      Future.successful(Some(ErrorResponse("invalid_ad_product", "Ad product category is required")))
+    else if (promovolve.taxonomy.AdProductTaxonomy.get(id).isEmpty)
+      Future.successful(
+        Some(ErrorResponse("invalid_ad_product", s"Unknown ad product category id: $id"))
+      )
+    else
+      prohibitedAdProducts().map { prohibited =>
+        if (isProhibitedAdProduct(id, prohibited)) Some(prohibitedAdProductError) else None
+      }
+  }
+
   private val createCampaignLogic: ((String, CreateCampaignRequest)) => Future[Either[ErrorResponse, Campaign]] = {
     case (advertiserId, req) =>
       // Name is required server-side, not just by the form's `required`
@@ -1751,11 +1774,9 @@ class EndpointRoutes(
         validateLandingUrl(req.landingUrl) match {
           case Some(err) => Future.successful(Left(err))
           case None      =>
-            prohibitedAdProducts().flatMap { prohibited =>
-              if (isProhibitedAdProduct(req.adProductCategory, prohibited))
-                Future.successful(Left(prohibitedAdProductError))
-              else
-                createCampaignAfterChecks(advertiserId, req)
+            validateAdProductCategory(req.adProductCategory).flatMap {
+              case Some(err) => Future.successful(Left(err))
+              case None      => createCampaignAfterChecks(advertiserId, req)
             }
         }
   }
@@ -1814,16 +1835,13 @@ class EndpointRoutes(
   private val updateCampaignLogic
       : ((String, String, UpdateCampaignRequest)) => Future[Either[ErrorResponse, Campaign]] = {
     case (advertiserId, campaignId, req) =>
-      // Operator-prohibited categories gate the edit path too — the
-      // dashboard doesn't expose category on edit, but the API does.
+      // Category writes are validated on the edit path too (required +
+      // taxonomy-valid + not prohibited) — the dashboard doesn't expose
+      // category on edit, but the API does.
       val prohibitedCheckF: Future[Either[ErrorResponse, Unit]] =
         req.adProductCategory match {
-          case Some(apc) =>
-            prohibitedAdProducts().map { prohibited =>
-              if (isProhibitedAdProduct(apc, prohibited)) Left(prohibitedAdProductError)
-              else Right(())
-            }
-          case None => Future.successful(Right(()))
+          case Some(apc) => validateAdProductCategory(apc).map(_.toLeft(()))
+          case None      => Future.successful(Right(()))
         }
 
       // Handle budget update if provided. def, not val — a Future val
@@ -3190,35 +3208,43 @@ class EndpointRoutes(
   }
 
   // ----------------- Campaign Ad Product Category Logic -----------------
+  // This endpoint exists to BACKFILL legacy category-less campaigns; it
+  // can only SET a valid category, never clear one — a category-less
+  // campaign is invisible to the operator prohibition and to publisher
+  // ad-product blocklists, so "no category" is not writable anywhere.
   private val updateCampaignAdProductLogic: ((String, String, UpdateAdProductCategoryRequest)) => Future[Either[
     ErrorResponse, UpdateAdProductCategoryResponse]] = {
     case (advertiserId, campaignId, req) =>
-      prohibitedAdProducts().flatMap { prohibited =>
-        if (req.adProductCategory.exists(isProhibitedAdProduct(_, prohibited)))
-          Future.successful(Left(prohibitedAdProductError))
-        else {
-          val adProductCat = req.adProductCategory.map(AdProductCategoryId(_))
-          val updateF: Future[CampaignEntity.ConfigUpdated] =
-            campaignRef(advertiserId, campaignId).ask(replyTo =>
-              CampaignEntity.UpdateConfig(
-                maxCpm = None,
-                dailyBudget = None,
-                adProductCategory = Some(adProductCat), // Some(None) clears, Some(Some(x)) sets
-                replyTo = replyTo
-              )
-            )
+      req.adProductCategory match {
+        case None =>
+          Future.successful(
+            Left(ErrorResponse("invalid_ad_product", "Ad product category cannot be cleared"))
+          )
+        case Some(apc) =>
+          validateAdProductCategory(apc).flatMap {
+            case Some(err) => Future.successful(Left(err))
+            case None      =>
+              val updateF: Future[CampaignEntity.ConfigUpdated] =
+                campaignRef(advertiserId, campaignId).ask(replyTo =>
+                  CampaignEntity.UpdateConfig(
+                    maxCpm = None,
+                    dailyBudget = None,
+                    adProductCategory = Some(Some(AdProductCategoryId(apc.trim))),
+                    replyTo = replyTo
+                  )
+                )
 
-          updateF
-            .map { _ =>
-              Right(UpdateAdProductCategoryResponse(
-                campaignId = campaignId,
-                adProductCategory = req.adProductCategory
-              ))
-            }
-            .recover { case ex =>
-              Left(ErrorResponse("ad_product_update_failed", ex.getMessage))
-            }
-        }
+              updateF
+                .map { _ =>
+                  Right(UpdateAdProductCategoryResponse(
+                    campaignId = campaignId,
+                    adProductCategory = Some(apc.trim)
+                  ))
+                }
+                .recover { case ex =>
+                  Left(ErrorResponse("ad_product_update_failed", ex.getMessage))
+                }
+          }
       }
   }
 

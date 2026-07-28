@@ -80,13 +80,27 @@
       <input type="text" name="name" required placeholder="{{t "Summer sale - shoes"}}"
              class="form-input">
     </div>
-    <div class="mb-4" x-data="{ query: '', results: [], selectedId: '', selectedName: '', open: false,
+    <div class="mb-4" x-data="{ query: '', results: [], selectedId: '', selectedName: '', open: false, err: false,
         search() {
           if (this.query.length > 0) {
             fetch('/api/taxonomy/ad-products?q=' + encodeURIComponent(this.query))
               .then(r => r.json())
               .then(d => { this.results = d.data || []; this.open = this.results.length > 0; });
           } else { this.results = []; this.open = false; }
+        },
+        init() {
+          // A typed-but-unselected query satisfies the text input's
+          // `required` while the hidden field submits EMPTY — and the
+          // server rejects category-less campaigns (they would dodge the
+          // operator prohibition and publisher blocklists). Block submit
+          // until a suggestion is actually picked.
+          this.$el.closest('form')?.addEventListener('submit', (e) => {
+            if (!this.selectedId) {
+              e.preventDefault();
+              this.err = true;
+              this.$el.querySelector('input[type=text]')?.focus();
+            }
+          });
         }
       }">
       <label class="form-label">{{t "What are you advertising?"}}</label>
@@ -99,12 +113,13 @@
           @click.outside="open = false"
           placeholder="{{t "Search (e.g., Travel, Kitchen, Gym)"}}"
           class="form-input"
+          :class="err && !selectedId ? 'border-red-400' : ''"
           required>
         <div x-show="open" x-transition
           class="absolute z-10 w-full mt-1 bg-white border rounded-md shadow-lg max-h-48 overflow-y-auto">
           <template x-for="cat in results" :key="cat.id">
             <button type="button"
-              @click="selectedId = cat.id; selectedName = cat.name + ' (' + cat.id + ')'; open = false; query = '';"
+              @click="selectedId = cat.id; selectedName = cat.name + ' (' + cat.id + ')'; open = false; query = ''; err = false;"
               class="w-full text-left px-3 py-2 hover:bg-gray-50 text-sm">
               <span class="font-mono text-xs text-gray-400 mr-2" x-text="cat.id"></span>
               <span x-text="cat.name"></span>
@@ -112,6 +127,7 @@
           </template>
         </div>
       </div>
+      <p x-show="err && !selectedId" x-cloak class="text-xs text-red-600 mt-1">{{t "Pick a category from the suggestions — typing alone does not select one."}}</p>
       <p class="text-xs text-gray-400 mt-1">{{t "Search for your product category — used for verification and reporting. Matching topics are derived from your creative's landing page."}}</p>
     </div>
     <div class="mb-4" x-data="{
