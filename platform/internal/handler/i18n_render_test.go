@@ -99,8 +99,26 @@ func TestI18nResolve(t *testing.T) {
 		{"", "ja-JP;q=0.9,en-GB;q=1.0", "en"},
 	}
 	for _, c := range cases {
-		if got := i18n.Resolve(c.pref, c.accept); got != c.want {
-			t.Errorf("Resolve(%q, %q) = %q, want %q", c.pref, c.accept, got, c.want)
+		if got := i18n.Resolve(c.pref, c.accept, nil); got != c.want {
+			t.Errorf("Resolve(%q, %q, nil) = %q, want %q", c.pref, c.accept, got, c.want)
+		}
+	}
+
+	// Active-set gating: the deployment's offered languages bound both the
+	// preference and browser negotiation; active[0] is the default.
+	activeCases := []struct {
+		pref, accept string
+		active       []string
+		want         string
+	}{
+		{"ja", "ja", []string{"en"}, "en"},        // deactivated pref ignored
+		{"", "ja,en;q=0.5", []string{"en"}, "en"}, // browser ja not offered
+		{"", "fr", []string{"ja", "en"}, "ja"},    // default = first active
+		{"en", "ja", []string{"ja", "en"}, "en"},  // active pref wins
+	}
+	for _, c := range activeCases {
+		if got := i18n.Resolve(c.pref, c.accept, c.active); got != c.want {
+			t.Errorf("Resolve(%q, %q, %v) = %q, want %q", c.pref, c.accept, c.active, got, c.want)
 		}
 	}
 }

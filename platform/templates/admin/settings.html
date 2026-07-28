@@ -65,6 +65,27 @@
     </form>
   </div>
 
+  <div class="card mt-6">
+    <h2 class="font-semibold text-lg">{{t "Dashboard languages"}}</h2>
+    <p class="text-sm text-gray-500 mt-1 mb-4">{{t "Which languages this deployment offers. Users pick among these in their preferences; Auto follows the browser within this set. Purely presentational — switching never touches stored data. Adding a language the build does not ship means adding its catalog file and redeploying."}}</p>
+    <form method="POST" action="/admin/settings/languages" class="flex items-end gap-4 flex-wrap">
+      <div class="flex items-center gap-4 pb-2">
+        {{range .AllLanguages}}
+        <label class="flex items-center gap-1.5 text-sm">
+          <input type="checkbox" name="langs" value="{{.Tag}}" {{if .Active}}checked{{end}}> {{.Name}}
+        </label>
+        {{end}}
+      </div>
+      <div>
+        <label class="form-label">{{t "Default"}}</label>
+        <select name="defaultLang" class="form-input">
+          {{range .AllLanguages}}<option value="{{.Tag}}" {{if .Default}}selected{{end}}>{{.Name}}</option>{{end}}
+        </select>
+      </div>
+      <button type="submit" class="btn btn-primary">{{t "Update languages"}}</button>
+    </form>
+  </div>
+
   <div class="card mt-6 p-0 overflow-x-auto">
     <h2 class="font-semibold text-lg px-6 pt-6">{{t "History"}}</h2>
     <table class="w-full text-sm mt-3">

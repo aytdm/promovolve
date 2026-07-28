@@ -1,6 +1,9 @@
 package settings
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNet(t *testing.T) {
 	cases := []struct {
@@ -22,6 +25,25 @@ func TestNet(t *testing.T) {
 		}
 		if diff := fee - c.wantFee; diff > 1e-9 || diff < -1e-9 {
 			t.Errorf("Net(%v, %d) fee = %v, want %v", c.gross, c.bps, fee, c.wantFee)
+		}
+	}
+}
+
+func TestNormalizeLanguages(t *testing.T) {
+	cases := []struct {
+		in   []string
+		want string
+	}{
+		{[]string{"ja", "en"}, "ja,en"},         // order preserved (first = default)
+		{[]string{" EN ", "ja", "en"}, "en,ja"}, // trim, lowercase, dedupe
+		{[]string{"de", "fr"}, ""},              // nothing this build ships
+		{[]string{"de", "ja", "xx"}, "ja"},      // unknown dropped, known kept
+		{nil, ""},
+	}
+	for _, c := range cases {
+		got := strings.Join(normalizeLanguages(c.in), ",")
+		if got != c.want {
+			t.Errorf("normalizeLanguages(%v) = %q, want %q", c.in, got, c.want)
 		}
 	}
 }

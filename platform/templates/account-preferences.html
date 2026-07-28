@@ -43,8 +43,9 @@
       <label class="form-label">{{t "Language"}}</label>
       <select name="locale" class="form-input w-full">
         <option value="" {{if not .User.Locale}}selected{{end}}>{{t "Auto (follow browser)"}}</option>
-        <option value="en" {{if eq .User.Locale "en"}}selected{{end}}>English</option>
-        <option value="ja" {{if eq .User.Locale "ja"}}selected{{end}}>日本語</option>
+        {{range .Languages}}
+        <option value="{{.Tag}}" {{if eq $.User.Locale .Tag}}selected{{end}}>{{.Name}}</option>
+        {{end}}
       </select>
       <p class="text-xs text-gray-400 mt-1">
         {{t "Dashboard language. Auto follows your browser."}}

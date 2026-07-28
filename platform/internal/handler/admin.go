@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/mail"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -14,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/hanishi/promovolve/platform/internal/billing"
+	"github.com/hanishi/promovolve/platform/internal/i18n"
 	"github.com/hanishi/promovolve/platform/internal/model"
 )
 
@@ -1140,6 +1142,19 @@ func (h *Handler) renderAdminSettings(w http.ResponseWriter, r *http.Request, er
 		}
 	}
 
+	// Languages: everything the build ships, marked with the deployment's
+	// active set (first active = default).
+	active := h.activeLanguages(r)
+	var allLangs []adminLangOption
+	for _, l := range i18n.Available() {
+		allLangs = append(allLangs, adminLangOption{
+			Tag:     l,
+			Name:    i18n.NativeName(l),
+			Active:  slices.Contains(active, l),
+			Default: len(active) > 0 && active[0] == l,
+		})
+	}
+
 	h.render(w, r, "admin/settings.html", pageData{
 		Title:              "Platform Settings",
 		Nav:                "admin-settings",
@@ -1151,6 +1166,7 @@ func (h *Handler) renderAdminSettings(w http.ResponseWriter, r *http.Request, er
 		OrgMaxMembers:      h.orgRepo.MaxMembers(r.Context()),
 		DefaultOrgTimezone: defaultTZ,
 		Timezones:          zones,
+		AllLanguages:       allLangs,
 	})
 }
 
@@ -1171,6 +1187,36 @@ func (h *Handler) UpdateOrgMaxMembers(w http.ResponseWriter, r *http.Request) {
 	if err := h.orgRepo.SetMaxMembers(r.Context(), n, admin.ID); err != nil {
 		slog.Error("set org member cap failed", "error", err)
 		h.renderAdminSettings(w, r, "could not update the member cap")
+		return
+	}
+	http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+}
+
+// UpdateLanguages sets the deployment's offered dashboard languages.
+// Purely presentational — activating or deactivating a language never
+// touches stored data, and user preferences for a deactivated language
+// are ignored (not erased) until it comes back.
+func (h *Handler) UpdateLanguages(w http.ResponseWriter, r *http.Request) {
+	admin, _, ok := h.requireRole(w, r, model.RoleAdmin)
+	if !ok {
+		return
+	}
+	r.ParseForm()
+	checked := r.Form["langs"]
+	// Deployment default first (the admin's pick, if it's actually among
+	// the checked set), then the rest in build order.
+	ordered := make([]string, 0, len(checked))
+	if def := r.FormValue("defaultLang"); slices.Contains(checked, def) {
+		ordered = append(ordered, def)
+	}
+	for _, l := range checked {
+		if !slices.Contains(ordered, l) {
+			ordered = append(ordered, l)
+		}
+	}
+	if err := h.settingsSvc.SetActiveLanguages(r.Context(), ordered, admin.ID); err != nil {
+		slog.Error("set active languages failed", "error", err)
+		h.renderAdminSettings(w, r, "select at least one language")
 		return
 	}
 	http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)

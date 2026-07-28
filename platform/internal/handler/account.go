@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -72,6 +73,14 @@ func (h *Handler) renderPreferences(w http.ResponseWriter, r *http.Request, errM
 		}
 	}
 
+	// Language options: the deployment's active set. With a single active
+	// language the picker still renders (auto + that language) — harmless,
+	// and the admin turning a second one on needs no page change.
+	var langs []langOption
+	for _, l := range h.activeLanguages(r) {
+		langs = append(langs, langOption{Tag: l, Name: i18n.NativeName(l)})
+	}
+
 	h.render(w, r, "account-preferences.html", pageData{
 		Title:        "Preferences",
 		Nav:          "preferences",
@@ -81,6 +90,7 @@ func (h *Handler) renderPreferences(w http.ResponseWriter, r *http.Request, errM
 		Timezones:    zones,
 		LandingSide:  landingSide,
 		LandingSides: landingSides,
+		Languages:    langs,
 	})
 }
 
@@ -110,11 +120,9 @@ func (h *Handler) SavePreferences(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Dashboard language: "" = auto (follow the browser). Anything else
-	// must be a language we actually have.
+	// must be a language this deployment actually offers.
 	locale := r.FormValue("locale")
-	switch locale {
-	case "", i18n.LangEN, i18n.LangJA:
-	default:
+	if locale != "" && !slices.Contains(h.activeLanguages(r), locale) {
 		locale = ""
 	}
 

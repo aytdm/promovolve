@@ -77,14 +77,26 @@ object TieredCategory {
     }
   }
 
-  // Japanese display names, keyed by 3.0 id. Display-only — the English
-  // `name` stays canonical (classifier prompt, matching). Ids absent from
-  // the companion file fall back to English.
-  private lazy val jaNames: Map[String, String] =
-    JaNames.load("/iab_content_taxonomy/3_0_ja.tsv")
+  // Localized display names per compiled-in language, keyed by 3.0 id.
+  // Display-only — the English `name` stays canonical (classifier
+  // prompt, matching). Ids absent from a companion file fall back to
+  // English.
+  private lazy val localized: Map[String, Map[String, String]] =
+    LocalizedNames.loadAll("/iab_content_taxonomy/3_0")
 
-  /** Japanese display name for a category, if translated. */
-  def nameJa(id: String): Option[String] = jaNames.get(normalize(id))
+  /** Localized display name for a category in `lang`, if translated. */
+  def nameIn(lang: String, id: String): Option[String] =
+    localized.get(LocalizedNames.primary(lang)).flatMap(_.get(normalize(id)))
+
+  /**
+   * Every localized name a category has, across all compiled-in
+   * languages — what search matches so a name a user SAW is findable
+   * regardless of their session language.
+   */
+  def localizedNames(id: String): Iterable[String] = {
+    val n = normalize(id)
+    localized.values.flatMap(_.get(n))
+  }
 
   /**
    * Display name in the requested language, falling back to English.
@@ -92,8 +104,7 @@ object TieredCategory {
    * `get(id).map(_.name).getOrElse(id)`).
    */
   def displayName(id: String, lang: String): String =
-    if (lang.startsWith("ja")) nameJa(id).getOrElse(englishName(id))
-    else englishName(id)
+    nameIn(lang, id).getOrElse(englishName(id))
 
   private def englishName(id: String): String =
     get(id).map(_.name).getOrElse(id)

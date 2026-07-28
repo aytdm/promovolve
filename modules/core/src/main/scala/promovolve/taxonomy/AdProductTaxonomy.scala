@@ -23,10 +23,11 @@ case class AdProductCategory(
 object AdProductTaxonomy {
   private lazy val categories: Map[String, AdProductCategory] = loadTaxonomy()
 
-  // Japanese display names, keyed by id. Display-only — the English `name`
-  // stays canonical. Ids absent from the companion file fall back to English.
-  private lazy val jaNames: Map[String, String] =
-    JaNames.load("/iab/ad_product_taxonomy_2.0_ja.tsv")
+  // Localized display names per compiled-in language, keyed by id.
+  // Display-only — the English `name` stays canonical. Ids absent from a
+  // companion file fall back to English.
+  private lazy val localized: Map[String, Map[String, String]] =
+    LocalizedNames.loadAll("/iab/ad_product_taxonomy_2.0")
 
   /** Get all ad product categories. */
   def getAll: List[AdProductCategory] =
@@ -35,26 +36,27 @@ object AdProductTaxonomy {
   /** Get an ad product category by ID. */
   def get(id: String): Option[AdProductCategory] = categories.get(id)
 
-  /** Japanese display name for a category, if translated. */
-  def nameJa(id: String): Option[String] = jaNames.get(id)
+  /** Localized display name for a category in `lang`, if translated. */
+  def nameIn(lang: String, id: String): Option[String] =
+    localized.get(LocalizedNames.primary(lang)).flatMap(_.get(id))
 
   /** Display name in the requested language, falling back to English. */
   def displayName(id: String, lang: String): Option[String] =
-    if (lang.startsWith("ja")) nameJa(id).orElse(get(id).map(_.name))
-    else get(id).map(_.name)
+    nameIn(lang, id).orElse(get(id).map(_.name))
 
   /**
    * Search ad product categories by query. Matches ID, English name, and
-   * Japanese name regardless of the caller's language — an advertiser who
-   * saw 「金融・保険」 on screen must be able to find it by typing it, and
-   * untranslated categories must stay findable in English.
+   * every compiled-in localized name regardless of the caller's language
+   * — an advertiser who saw 「金融・保険」 on screen must be able to find
+   * it by typing it, and untranslated categories must stay findable in
+   * English.
    */
   def search(query: String): List[AdProductCategory] = {
     val q = query.toLowerCase
     categories.values.filter { cat =>
       cat.id.toLowerCase.contains(q) ||
       cat.name.toLowerCase.contains(q) ||
-      jaNames.get(cat.id).exists(_.toLowerCase.contains(q))
+      localized.values.exists(_.get(cat.id).exists(_.toLowerCase.contains(q)))
     }.toList.sortBy(_.id.toIntOption.getOrElse(Int.MaxValue))
   }
 

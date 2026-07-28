@@ -2426,9 +2426,9 @@ class EndpointRoutes(
           .toVector
 
         // Filter by search query if provided. Matches ID, English name,
-        // and Japanese name regardless of `lang` — a user who saw
-        // 「スポーツ」 on screen must find it by typing it, and
-        // untranslated categories must stay findable in English.
+        // and every compiled-in localized name regardless of `lang` — a
+        // user who saw 「スポーツ」 on screen must find it by typing it,
+        // and untranslated categories must stay findable in English.
         val filtered = queryOpt match {
           case Some(q) if q.nonEmpty =>
             val lowerQ = q.toLowerCase
@@ -2436,7 +2436,7 @@ class EndpointRoutes(
               cat.id.toLowerCase.contains(lowerQ) ||
               cat.name.toLowerCase.contains(lowerQ) ||
               cat.toString.toLowerCase.contains(lowerQ) ||
-              TieredCategory.nameJa(cat.id).exists(_.toLowerCase.contains(lowerQ))
+              TieredCategory.localizedNames(cat.id).exists(_.toLowerCase.contains(lowerQ))
             }
           case _ => allCategories
         }

@@ -1,5 +1,6 @@
-// Package settings stores platform-wide configuration — today just the
-// platform margin, the fee deducted from publisher earnings.
+// Package settings stores platform-wide configuration: the platform
+// margin (the fee deducted from publisher earnings) and the deployment's
+// active dashboard languages.
 //
 // The margin history is append-only and effective-dated: the current margin
 // is the latest row with effective_from <= now(), so past earnings are never
@@ -9,11 +10,16 @@ package settings
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/hanishi/promovolve/platform/internal/i18n"
 )
 
 type MarginEntry struct {
@@ -31,6 +37,12 @@ type Service struct {
 	mu       sync.Mutex
 	cached   int
 	cachedAt time.Time
+
+	// Active languages are read on EVERY request (handler.lang); same
+	// short cache, invalidated by SetActiveLanguages.
+	langsMu       sync.Mutex
+	langsCached   []string
+	langsCachedAt time.Time
 }
 
 const cacheTTL = 30 * time.Second
@@ -128,4 +140,102 @@ func (s *Service) SetMargin(ctx context.Context, bps int, createdBy string) erro
 func Net(gross float64, bps int) (net, fee float64) {
 	fee = gross * float64(bps) / 10000
 	return gross - fee, fee
+}
+
+// ── active languages ─────────────────────────────────────────────────
+
+const activeLanguagesKey = "active_languages"
+
+// defaultLanguages is what a deployment offers before the admin ever
+// touches the setting: the LANGUAGES env var (ordered CSV, first =
+// default) filtered to the catalogs this build ships, else everything
+// the build ships. Read once — it is a boot-time default, not live
+// configuration; the live knob is /admin/settings.
+var defaultLanguages = sync.OnceValue(func() []string {
+	if env := os.Getenv("LANGUAGES"); env != "" {
+		if langs := normalizeLanguages(strings.Split(env, ",")); len(langs) > 0 {
+			return langs
+		}
+	}
+	return i18n.Available()
+})
+
+// normalizeLanguages trims, lowercases, dedupes, and drops anything the
+// build has no catalog for, preserving order (first entry = deployment
+// default language).
+func normalizeLanguages(in []string) []string {
+	available := i18n.Available()
+	seen := map[string]bool{}
+	var out []string
+	for _, l := range in {
+		l = strings.ToLower(strings.TrimSpace(l))
+		if l == "" || seen[l] {
+			continue
+		}
+		for _, a := range available {
+			if a == l {
+				seen[l] = true
+				out = append(out, l)
+				break
+			}
+		}
+	}
+	return out
+}
+
+// ActiveLanguages returns the ordered set of dashboard languages this
+// deployment offers (first = default). Unset degrades to the boot-time
+// default; a transient DB error serves the cached value rather than
+// flapping the UI language.
+func (s *Service) ActiveLanguages(ctx context.Context) []string {
+	s.langsMu.Lock()
+	defer s.langsMu.Unlock()
+	if time.Since(s.langsCachedAt) < cacheTTL {
+		return s.langsCached
+	}
+
+	var raw string
+	err := s.pool.QueryRow(ctx,
+		`SELECT value FROM platform_settings WHERE key = $1`, activeLanguagesKey,
+	).Scan(&raw)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) && s.langsCached != nil {
+			return s.langsCached
+		}
+		s.langsCached = defaultLanguages()
+		s.langsCachedAt = time.Now()
+		return s.langsCached
+	}
+	langs := normalizeLanguages(strings.Split(raw, ","))
+	if len(langs) == 0 {
+		// A stored set referencing only catalogs this build no longer
+		// ships must not brick the dashboard — fall back to the default.
+		langs = defaultLanguages()
+	}
+	s.langsCached = langs
+	s.langsCachedAt = time.Now()
+	return langs
+}
+
+// SetActiveLanguages stores the operator's ordered language choice
+// (first = deployment default) and invalidates the cache.
+func (s *Service) SetActiveLanguages(ctx context.Context, langs []string, updatedBy string) error {
+	normalized := normalizeLanguages(langs)
+	if len(normalized) == 0 {
+		return fmt.Errorf("settings: at least one available language required (this build ships %s)",
+			strings.Join(i18n.Available(), ", "))
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO platform_settings (key, value, updated_by, updated_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (key) DO UPDATE SET value = $2, updated_by = $3, updated_at = NOW()`,
+		activeLanguagesKey, strings.Join(normalized, ","), updatedBy,
+	)
+	if err != nil {
+		return err
+	}
+	s.langsMu.Lock()
+	s.langsCachedAt = time.Time{}
+	s.langsMu.Unlock()
+	return nil
 }

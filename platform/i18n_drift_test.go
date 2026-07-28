@@ -132,52 +132,62 @@ func verbs(s string) []string {
 	return out
 }
 
+// Every registered catalog (ja today; operator forks add more) is held
+// to the same four rules; failures name the offending language.
+
 func TestI18nCatalogCoversUsedKeys(t *testing.T) {
 	used := scanUsedKeys(t)
-	catalog := i18n.Catalog()
-	var missing []string
-	for k := range used {
-		if _, ok := catalog[k]; !ok {
-			missing = append(missing, k)
+	for lang, catalog := range i18n.Catalogs() {
+		var missing []string
+		for k := range used {
+			if _, ok := catalog[k]; !ok {
+				missing = append(missing, k)
+			}
 		}
-	}
-	sort.Strings(missing)
-	if len(missing) > 0 {
-		t.Errorf("keys used but missing from the ja catalog (%d) — add them to internal/i18n/ja.go:\n  %s",
-			len(missing), strings.Join(missing, "\n  "))
+		sort.Strings(missing)
+		if len(missing) > 0 {
+			t.Errorf("keys used but missing from the %s catalog (%d) — add them to internal/i18n/%s.go:\n  %s",
+				lang, len(missing), lang, strings.Join(missing, "\n  "))
+		}
 	}
 }
 
 func TestI18nCatalogHasNoUnusedKeys(t *testing.T) {
 	used := scanUsedKeys(t)
-	var unused []string
-	for k := range i18n.Catalog() {
-		if !used[k] && dynamicKeys[k] == "" {
-			unused = append(unused, k)
+	for lang, catalog := range i18n.Catalogs() {
+		var unused []string
+		for k := range catalog {
+			if !used[k] && dynamicKeys[k] == "" {
+				unused = append(unused, k)
+			}
 		}
-	}
-	sort.Strings(unused)
-	if len(unused) > 0 {
-		t.Errorf("catalog keys no longer used anywhere (%d) — delete them or register in dynamicKeys:\n  %s",
-			len(unused), strings.Join(unused, "\n  "))
+		sort.Strings(unused)
+		if len(unused) > 0 {
+			t.Errorf("%s catalog keys no longer used anywhere (%d) — delete them or register in dynamicKeys:\n  %s",
+				lang, len(unused), strings.Join(unused, "\n  "))
+		}
 	}
 }
 
 func TestI18nValuesAreAlpineSafe(t *testing.T) {
-	for k, v := range i18n.Catalog() {
-		for _, bad := range []string{`'`, `"`, `\`, "`", "</"} {
-			if strings.Contains(v, bad) {
-				t.Errorf("catalog value for %q contains %q — forbidden (Alpine attribute contexts get no JS escaping); use 「」 instead", k, bad)
+	for lang, catalog := range i18n.Catalogs() {
+		for k, v := range catalog {
+			for _, bad := range []string{`'`, `"`, `\`, "`", "</"} {
+				if strings.Contains(v, bad) {
+					t.Errorf("%s catalog value for %q contains %q — forbidden (Alpine attribute contexts get no JS escaping); use 「」 instead", lang, k, bad)
+				}
 			}
 		}
 	}
 }
 
 func TestI18nPrintfVerbsMatch(t *testing.T) {
-	for k, v := range i18n.Catalog() {
-		kv, vv := verbs(k), verbs(v)
-		if strings.Join(kv, ",") != strings.Join(vv, ",") {
-			t.Errorf("printf verbs differ for key %q: key has %v, value has %v", k, kv, vv)
+	for lang, catalog := range i18n.Catalogs() {
+		for k, v := range catalog {
+			kv, vv := verbs(k), verbs(v)
+			if strings.Join(kv, ",") != strings.Join(vv, ",") {
+				t.Errorf("%s: printf verbs differ for key %q: key has %v, value has %v", lang, k, kv, vv)
+			}
 		}
 	}
 }

@@ -109,12 +109,12 @@ func (h *Handler) renderPublisherSites(w http.ResponseWriter, r *http.Request, e
 		return
 	}
 
-	// Japanese sessions overlay localized matched-category names by id
+	// Non-English sessions overlay localized matched-category names by id
 	// (nil map = English fallthrough). "Filler" has no id and stays on
 	// the {{t}} catalog path.
 	var catNames map[string]string
-	if h.lang(r, user) == i18n.LangJA {
-		catNames = h.taxonomyNames(claims, i18n.LangJA)
+	if l := h.lang(r, user); l != i18n.LangEN {
+		catNames = h.taxonomyNames(claims, l)
 	}
 
 	var sites []siteData
@@ -850,12 +850,12 @@ func (h *Handler) AdvertiserCampaigns(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Japanese sessions overlay localized taxonomy names by id; English
+	// Non-English sessions overlay localized taxonomy names by id; English
 	// sessions skip the fetch (nil maps) — the core already resolves
 	// English names.
 	lang := h.lang(r, user)
 	var catNames, adNames map[string]string
-	if lang == i18n.LangJA {
+	if lang != i18n.LangEN {
 		catNames = h.taxonomyNames(claims, lang)
 		adNames = h.adProductNames(claims, lang)
 	}
@@ -3256,11 +3256,11 @@ func (h *Handler) AdvertiserStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Localized ad-product name overlay for Japanese sessions (nil map =
+	// Localized ad-product name overlay for non-English sessions (nil map =
 	// English fallthrough).
 	var adNames map[string]string
-	if h.lang(r, user) == i18n.LangJA {
-		adNames = h.adProductNames(claims, i18n.LangJA)
+	if l := h.lang(r, user); l != i18n.LangEN {
+		adNames = h.adProductNames(claims, l)
 	}
 
 	for _, c := range campResp.Data {

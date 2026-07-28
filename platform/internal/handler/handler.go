@@ -424,15 +424,28 @@ func (h *Handler) jsonErrorT(w http.ResponseWriter, r *http.Request, status int,
 	writeJSONError(w, status, i18n.T(h.lang(r, nil), key, args...))
 }
 
-// lang resolves the request language: the signed-in user's preference
-// (platform_users.locale, "" = auto) falling back to Accept-Language.
-// Unauthenticated pages pass u == nil and get pure browser negotiation.
+// lang resolves the request language within the deployment's ACTIVE set
+// (/admin/settings; first entry = default): the signed-in user's
+// preference (platform_users.locale, "" = auto) falling back to
+// Accept-Language. A preference for a language the admin has since
+// deactivated is simply ignored, not an error. Unauthenticated pages
+// pass u == nil and get pure browser negotiation.
 func (h *Handler) lang(r *http.Request, u *model.User) string {
 	pref := ""
 	if u != nil {
 		pref = u.Locale
 	}
-	return i18n.Resolve(pref, r.Header.Get("Accept-Language"))
+	return i18n.Resolve(pref, r.Header.Get("Accept-Language"), h.activeLanguages(r))
+}
+
+// activeLanguages is the deployment's offered language set, from settings
+// when available (tests construct handlers without a settings service —
+// nil degrades to everything the build ships).
+func (h *Handler) activeLanguages(r *http.Request) []string {
+	if h.settingsSvc == nil {
+		return nil
+	}
+	return h.settingsSvc.ActiveLanguages(r.Context())
 }
 
 type pageData struct {
@@ -575,6 +588,24 @@ type pageData struct {
 	Currencies   []currency.Currency
 	LandingSide  string
 	LandingSides []string
+	// Languages this deployment offers (admin-set), as (tag, native
+	// label) pairs for the preference picker.
+	Languages []langOption
+	// Admin settings: every language the build ships, flagged with the
+	// deployment's active set and default.
+	AllLanguages []adminLangOption
+}
+
+type langOption struct {
+	Tag  string
+	Name string
+}
+
+type adminLangOption struct {
+	Tag     string
+	Name    string
+	Active  bool
+	Default bool
 }
 
 type site struct {
@@ -1558,13 +1589,13 @@ func (h *Handler) PublisherApproval(w http.ResponseWriter, r *http.Request) {
 	var allServing []servingCreative
 	var allFlagged []flaggedCreative
 
-	// Japanese sessions overlay localized taxonomy names by id; English
+	// Non-English sessions overlay localized taxonomy names by id; English
 	// sessions skip the fetch (nil maps) — the core already resolves
 	// English names.
 	var catNames, adNames map[string]string
-	if h.lang(r, user) == i18n.LangJA {
-		catNames = h.taxonomyNames(claims, i18n.LangJA)
-		adNames = h.adProductNames(claims, i18n.LangJA)
+	if l := h.lang(r, user); l != i18n.LangEN {
+		catNames = h.taxonomyNames(claims, l)
+		adNames = h.adProductNames(claims, l)
 	}
 
 	dir := h.newAdvertiserDirectory()
