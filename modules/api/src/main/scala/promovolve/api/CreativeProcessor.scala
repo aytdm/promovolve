@@ -431,33 +431,50 @@ object CreativeProcessor {
             val asyncLog = org.slf4j.LoggerFactory.getLogger("promovolve.api.CreativeProcessor.async")
             // Activate opted-in LP-original fonts BEFORE the render:
             // copy each quarantined file to the catalog key the banner
-            // derives (fonts/<slug>-<weight>-latin.woff2), so the
-            // screenshot — and every later visitor — gets the real face.
+            // derives, so the screenshot — and every later visitor —
+            // gets the real face. The variant is the creative-global
+            // rule shared with GoogleFontProvisioner and the banner's
+            // collectExpandedFonts: a CJK creative derives a per-text
+            // SUBSET key for EVERY font, LP-original brand faces
+            // included. We can't subset an LP file, so the full bytes go
+            // under the subset key — the key is a cache identity, not a
+            // promise of subsetting. (Hardcoding "latin" here 404'd the
+            // brand font on every Japanese-text creative.) The latin key
+            // is stored too when they differ: it's the cross-creative
+            // dedup identity for latin creatives sharing the face.
             // Best-effort per face; the render proceeds regardless (a
             // miss just falls back to Google provisioning / system CSS).
             val activateF: Future[Unit] =
               if (lpFonts.isEmpty) Future.unit
-              else Future.traverse(lpFonts) { grant =>
-                promovolve.publisher.assets.GoogleFontCatalog.resolve(grant.family, Some(grant.weight)) match {
-                  case None               => Future.unit // generic/system family — nothing to host
-                  case Some((slug, _, _)) =>
-                    imageStorage.fetchOriginalFont(grant.hash).flatMap {
-                      case None =>
-                        asyncLog.info("LP font activation: quarantined bytes missing for {} ({})",
-                          grant.family, grant.hash)
-                        Future.unit
-                      case Some(bytes) =>
-                        imageStorage.storeFont(slug, bytes, "latin").map { _ =>
-                          asyncLog.info("LP font activated: {} w{} -> fonts/{}-latin.woff2 ({} bytes, creative {})",
-                            grant.family, grant.weight: java.lang.Integer, slug,
-                            bytes.length: java.lang.Integer, creativeId)
-                        }
-                    }.recover { case e =>
-                      asyncLog.warn("LP font activation failed for {} w{}: {}",
-                        grant.family, grant.weight: java.lang.Integer, e.getMessage)
-                    }
-                }
-              }.map(_ => ())
+              else {
+                import promovolve.publisher.assets.GoogleFontCatalog
+                val subsetText = subsetTextFromPagesJson(updatedPagesJson).trim
+                val cjk = subsetText.nonEmpty && GoogleFontCatalog.hasCjk(subsetText)
+                val variant = if (cjk) GoogleFontCatalog.subsetKey(subsetText) else "latin"
+                val variants = if (variant == "latin") List("latin") else List(variant, "latin")
+                Future.traverse(lpFonts) { grant =>
+                  GoogleFontCatalog.resolve(grant.family, Some(grant.weight)) match {
+                    case None               => Future.unit // generic/system family — nothing to host
+                    case Some((slug, _, _)) =>
+                      imageStorage.fetchOriginalFont(grant.hash).flatMap {
+                        case None =>
+                          asyncLog.info("LP font activation: quarantined bytes missing for {} ({})",
+                            grant.family, grant.hash)
+                          Future.unit
+                        case Some(bytes) =>
+                          Future.traverse(variants)(v => imageStorage.storeFont(slug, bytes, v)).map { _ =>
+                            asyncLog.info(
+                              "LP font activated: {} w{} -> fonts/{}-{{{}}}.woff2 ({} bytes, creative {})",
+                              grant.family, grant.weight: java.lang.Integer, slug,
+                              variants.mkString(","), bytes.length: java.lang.Integer, creativeId)
+                          }
+                      }.recover { case e =>
+                        asyncLog.warn("LP font activation failed for {} w{}: {}",
+                          grant.family, grant.weight: java.lang.Integer, e.getMessage)
+                      }
+                  }
+                }.map(_ => ())
+              }
             // Provision Google-hosted faces alongside LP-font activation and
             // WAIT for both before rendering — the snapshot must fetch the
             // same woff2s a visitor's browser will. Draft saves come through
