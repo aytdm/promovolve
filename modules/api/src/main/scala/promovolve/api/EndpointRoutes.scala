@@ -2415,8 +2415,8 @@ class EndpointRoutes(
 
   // ----------------- Site Logic -----------------
   private val listTaxonomyCategoriesLogic
-      : ((Option[String], Int, Int)) => Future[Either[ErrorResponse, TaxonomyCategoryList]] = {
-    case (queryOpt, limit, offset) =>
+      : ((Option[String], Option[String], Int, Int)) => Future[Either[ErrorResponse, TaxonomyCategoryList]] = {
+    case (queryOpt, langOpt, limit, offset) =>
       import promovolve.taxonomy.TieredCategory
 
       Future.successful {
@@ -2425,14 +2425,18 @@ class EndpointRoutes(
           .sortBy(_.id.toIntOption.getOrElse(Int.MaxValue))
           .toVector
 
-        // Filter by search query if provided
+        // Filter by search query if provided. Matches ID, English name,
+        // and Japanese name regardless of `lang` — a user who saw
+        // 「スポーツ」 on screen must find it by typing it, and
+        // untranslated categories must stay findable in English.
         val filtered = queryOpt match {
           case Some(q) if q.nonEmpty =>
             val lowerQ = q.toLowerCase
             allCategories.filter { cat =>
               cat.id.toLowerCase.contains(lowerQ) ||
               cat.name.toLowerCase.contains(lowerQ) ||
-              cat.toString.toLowerCase.contains(lowerQ)
+              cat.toString.toLowerCase.contains(lowerQ) ||
+              TieredCategory.nameJa(cat.id).exists(_.toLowerCase.contains(lowerQ))
             }
           case _ => allCategories
         }
@@ -2441,11 +2445,13 @@ class EndpointRoutes(
         val total = filtered.size
         val paginated = filtered.drop(offset).take(limit)
 
-        // Convert to API model
+        // Convert to API model. `lang` localizes display names only;
+        // ids and the English fullPath stay canonical.
+        val lang = langOpt.getOrElse("")
         val data = paginated.map { cat =>
           TaxonomyCategory(
             id = cat.id,
-            name = cat.name,
+            name = TieredCategory.displayName(cat.id, lang),
             fullPath = cat.toString // Full path: "Name(ID) -> Parent(ID) -> ..."
           )
         }
@@ -2531,12 +2537,13 @@ class EndpointRoutes(
   }
 
   private val listAdProductCategoriesLogic
-      : ((Option[String], Int, Int)) => Future[Either[ErrorResponse, TaxonomyCategoryList]] = {
-    case (queryOpt, limit, offset) =>
+      : ((Option[String], Option[String], Int, Int)) => Future[Either[ErrorResponse, TaxonomyCategoryList]] = {
+    case (queryOpt, langOpt, limit, offset) =>
       import promovolve.taxonomy.AdProductTaxonomy
 
       Future.successful {
-        // Get categories, optionally filtered by search query
+        // Get categories, optionally filtered by search query (matches
+        // ID, English name, and Japanese name — see AdProductTaxonomy.search)
         val allCategories = queryOpt match {
           case Some(q) if q.nonEmpty => AdProductTaxonomy.search(q).toVector
           case _                     => AdProductTaxonomy.getAll.toVector
@@ -2546,12 +2553,14 @@ class EndpointRoutes(
         val total = allCategories.size
         val paginated = allCategories.drop(offset).take(limit)
 
-        // Convert to API model
+        // Convert to API model. `lang` localizes display names only;
+        // ids and the English fullPath stay canonical.
+        val lang = langOpt.getOrElse("")
         val data = paginated.map { cat =>
           val path = (List(cat.tier1) ++ cat.tier2.toList ++ cat.tier3.toList).mkString(" > ")
           TaxonomyCategory(
             id = cat.id,
-            name = cat.name,
+            name = AdProductTaxonomy.displayName(cat.id, lang).getOrElse(cat.name),
             fullPath = path
           )
         }
@@ -6036,9 +6045,10 @@ class EndpointRoutes(
 
   private def siteConfigToSlots(
       config: SiteEntity.SiteConfig,
-      slotCategories: Map[String, String]
+      slotCategories: Map[String, (String, Option[String])]
   ): Vector[SiteSlotConfig] =
     config.slots.map { s =>
+      val cat = slotCategories.get(s.slotId)
       SiteSlotConfig(
         slotId = s.slotId,
         width = s.width,
@@ -6047,20 +6057,24 @@ class EndpointRoutes(
         priorQualityScore = s.prior.map(_.qualityScore),
         priorRegion = s.prior.map(_.region),
         priorAboveFold = s.prior.map(_.aboveFold),
-        matchedCategory = slotCategories.get(s.slotId)
+        matchedCategory = cat.map(_._1),
+        // "Filler" is a synthetic label, not a taxonomy id; only real
+        // category names carry an id for dashboard-side localization.
+        matchedCategoryId = cat.flatMap(_._2)
       )
     }.toVector
 
   /**
-   * Build a slotId → human-readable category-name map from a site's
+   * Build a slotId → (category name, taxonomy id) map from a site's
    * per-page classifications. Each slot is attributed the top (highest
    * confidence) IAB content category of the page(s) it was discovered on;
-   * a slot seen only on filler pages (no demand category) maps to "Filler".
+   * a slot seen only on filler pages (no demand category) maps to
+   * ("Filler", None) — a synthetic label with no taxonomy id.
    * Slots on not-yet-classified pages are simply absent from the map.
    */
   private def slotCategoryMap(
       classifications: Map[String, SiteEntity.ClassificationEntry]
-  ): Map[String, String] = {
+  ): Map[String, (String, Option[String])] = {
     val FillerKey = "__filler__"
     val best = scala.collection.mutable.Map.empty[String, (String, Double)]
     classifications.valuesIterator.foreach { entry =>
@@ -6077,15 +6091,15 @@ class EndpointRoutes(
       }
     }
     best.view.mapValues {
-      case (FillerKey, _) => "Filler"
+      case (FillerKey, _) => ("Filler", None)
       case (catId, _)     =>
-        promovolve.taxonomy.TieredCategory.get(catId).map(_.name).getOrElse(catId)
+        (promovolve.taxonomy.TieredCategory.get(catId).map(_.name).getOrElse(catId), Some(catId))
     }.toMap
   }
 
   private def buildSiteResponse(
       siteId: String, publisherId: String, config: SiteEntity.SiteConfig,
-      slotCategories: Map[String, String] = Map.empty,
+      slotCategories: Map[String, (String, Option[String])] = Map.empty,
       floorCpm: Option[String] = None, minFloorCpm: Option[String],
       bidWeight: Option[String] = None,
       acceptsFillerTraffic: Option[Boolean] = None,

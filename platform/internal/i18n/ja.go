@@ -467,6 +467,7 @@ var ja = map[string]string{
 	// ── report ──
 	"Daily delivery and spend per campaign · report days follow your account timezone — the same days as your budget and Wallet statements": "キャンペーン別の日次配信と消化額 · レポートの日はアカウントのタイムゾーンに従います — 予算やウォレット明細と同じ日付です",
 	"No delivery in this range.": "この期間の配信はありません。",
+	"Uncategorized":              "未分類",
 	"+%d dog-eared":              "+%d ドッグイヤー",
 	"CTA clicks":                 "CTAクリック",
 	"Conversions":                "コンバージョン",

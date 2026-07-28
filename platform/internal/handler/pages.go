@@ -109,6 +109,14 @@ func (h *Handler) renderPublisherSites(w http.ResponseWriter, r *http.Request, e
 		return
 	}
 
+	// Japanese sessions overlay localized matched-category names by id
+	// (nil map = English fallthrough). "Filler" has no id and stays on
+	// the {{t}} catalog path.
+	var catNames map[string]string
+	if h.lang(r, user) == i18n.LangJA {
+		catNames = h.taxonomyNames(claims, i18n.LangJA)
+	}
+
 	var sites []siteData
 	body, _ := h.coreGet("/v1/publishers/me/sites?limit=50", claims)
 	var resp struct {
@@ -126,6 +134,7 @@ func (h *Handler) renderPublisherSites(w http.ResponseWriter, r *http.Request, e
 				PriorRegion       *string  `json:"priorRegion"`
 				PriorAboveFold    *bool    `json:"priorAboveFold"`
 				MatchedCategory   *string  `json:"matchedCategory"`
+				MatchedCategoryID *string  `json:"matchedCategoryId"`
 			} `json:"slots"`
 			TaxonomyIds          []string `json:"taxonomyIds"`
 			FloorCpm             string   `json:"floorCpm"`
@@ -205,6 +214,9 @@ func (h *Handler) renderPublisherSites(w http.ResponseWriter, r *http.Request, e
 			}
 			if sl.MatchedCategory != nil {
 				row.MatchedCategory = *sl.MatchedCategory
+				if sl.MatchedCategoryID != nil {
+					row.MatchedCategory = localizedName(catNames, *sl.MatchedCategoryID, row.MatchedCategory)
+				}
 			}
 			slots = append(slots, row)
 		}
@@ -838,6 +850,16 @@ func (h *Handler) AdvertiserCampaigns(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Japanese sessions overlay localized taxonomy names by id; English
+	// sessions skip the fetch (nil maps) — the core already resolves
+	// English names.
+	lang := h.lang(r, user)
+	var catNames, adNames map[string]string
+	if lang == i18n.LangJA {
+		catNames = h.taxonomyNames(claims, lang)
+		adNames = h.adProductNames(claims, lang)
+	}
+
 	// Load campaigns (enriched with delivery stats + budget inline)
 	var campaigns []campaignData
 	campBody, _ := h.coreGet("/v1/advertisers/me/campaigns?limit=50", claims)
@@ -985,7 +1007,7 @@ func (h *Handler) AdvertiserCampaigns(w http.ResponseWriter, r *http.Request) {
 			BidOnUnmatchedContext: c.BidOnUnmatchedContext,
 			Untargeted:            c.Untargeted,
 			TargetCategories:      c.TargetCategories,
-			AdProductCategoryName: c.AdProductCategoryName,
+			AdProductCategoryName: localizedName(adNames, c.AdProductCategory, c.AdProductCategoryName),
 			SiteAllowlist:         c.SiteAllowlist,
 			StartAtLocal:          startLocal,
 			StartAtDisplay:        startDisplay,
@@ -1020,7 +1042,7 @@ func (h *Handler) AdvertiserCampaigns(w http.ResponseWriter, r *http.Request) {
 			if i < len(c.TargetCategoryNames) && c.TargetCategoryNames[i] != "" {
 				name = c.TargetCategoryNames[i]
 			}
-			cd.TargetCategoryChips = append(cd.TargetCategoryChips, chip{ID: id, Name: name})
+			cd.TargetCategoryChips = append(cd.TargetCategoryChips, chip{ID: id, Name: localizedName(catNames, id, name)})
 		}
 		cd.TargetCategoryChipsJSON = "[]"
 		if len(cd.TargetCategoryChips) > 0 {
@@ -1035,7 +1057,7 @@ func (h *Handler) AdvertiserCampaigns(w http.ResponseWriter, r *http.Request) {
 			if i < len(c.SuggestedCategoryNames) && c.SuggestedCategoryNames[i] != "" {
 				name = c.SuggestedCategoryNames[i]
 			}
-			cd.SuggestedCategoryChips = append(cd.SuggestedCategoryChips, chip{ID: id, Name: name})
+			cd.SuggestedCategoryChips = append(cd.SuggestedCategoryChips, chip{ID: id, Name: localizedName(catNames, id, name)})
 		}
 		cd.SuggestedCategoryChipsJSON = "[]"
 		if len(cd.SuggestedCategoryChips) > 0 {
@@ -1127,7 +1149,7 @@ func (h *Handler) AdvertiserCampaigns(w http.ResponseWriter, r *http.Request) {
 	// whole network); the topic picker and edit panels re-fetch the hint
 	// scoped to their categories — context is this network's unit of
 	// value, so health and soccer inventory never blend silently.
-	marketRates := h.fetchMarketRates(claims, "")
+	marketRates := h.fetchMarketRates(claims, "", h.lang(r, user))
 
 	h.render(w, r, "advertiser/campaigns.html", pageData{
 		Title:          "Campaigns",
@@ -1151,7 +1173,7 @@ func (h *Handler) AdvertiserCampaigns(w http.ResponseWriter, r *http.Request) {
 // value on this network: a blended health+soccer number describes
 // neither market, so callers pass the categories they mean and the
 // hint names its scope.
-func (h *Handler) fetchMarketRates(claims *model.Claims, categories string) *marketRatesData {
+func (h *Handler) fetchMarketRates(claims *model.Claims, categories, lang string) *marketRatesData {
 	u := "/v1/advertisers/me/market-rates?days=7"
 	if categories != "" {
 		u += "&categories=" + url.QueryEscape(categories)
@@ -1228,7 +1250,7 @@ func (h *Handler) fetchMarketRates(claims *model.Claims, categories string) *mar
 		}
 	}
 	if categories != "" {
-		names := h.taxonomyNames(claims)
+		names := h.taxonomyNames(claims, lang)
 		var labels []string
 		for _, id := range strings.Split(categories, ",") {
 			id = strings.TrimSpace(id)
@@ -1275,7 +1297,7 @@ func (h *Handler) MarketRatesHint(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	data := h.fetchMarketRates(claims, r.URL.Query().Get("categories"))
+	data := h.fetchMarketRates(claims, r.URL.Query().Get("categories"), h.lang(r, user))
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	getPage(h.lang(r, user), "advertiser/campaigns.html").ExecuteTemplate(w, "market-rates-hint", data)
 }
@@ -1776,10 +1798,11 @@ type categoryFloorRow struct {
 }
 
 // categoryName resolves a content-taxonomy category id to its human name via
-// the core taxonomy search (which matches by name OR id). Falls back to the
-// raw id so the floor table never renders blank.
-func (h *Handler) categoryName(claims *model.Claims, id string) string {
-	body, err := h.coreGet("/v1/taxonomy/categories?q="+url.QueryEscape(id)+"&limit=8", claims)
+// the core taxonomy search (which matches by name OR id). lang localizes the
+// name. Falls back to the raw id so the floor table never renders blank.
+func (h *Handler) categoryName(claims *model.Claims, id, lang string) string {
+	body, err := h.coreGet("/v1/taxonomy/categories?q="+url.QueryEscape(id)+
+		"&lang="+url.QueryEscape(lang)+"&limit=8", claims)
 	if err != nil {
 		return id
 	}
@@ -2130,7 +2153,7 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 			}
 			row := categoryFloorRow{
 				Category:     cat,
-				CategoryName: h.categoryName(claims, cat),
+				CategoryName: h.categoryName(claims, cat, obsLang),
 				Floor:        pt.Label,
 				LastUpdate:   lastUpdate,
 			}
@@ -2180,7 +2203,7 @@ func (h *Handler) FloorObservations(w http.ResponseWriter, r *http.Request) {
 			}
 			row := categoryFloorRow{
 				Category:     cat,
-				CategoryName: d.Name,
+				CategoryName: h.categoryName(claims, cat, obsLang),
 				Floor:        "site fallback",
 				Bidders:      d.Bidders,
 			}
@@ -3233,8 +3256,15 @@ func (h *Handler) AdvertiserStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Localized ad-product name overlay for Japanese sessions (nil map =
+	// English fallthrough).
+	var adNames map[string]string
+	if h.lang(r, user) == i18n.LangJA {
+		adNames = h.adProductNames(claims, i18n.LangJA)
+	}
+
 	for _, c := range campResp.Data {
-		cd := campaignData{ID: c.ID, Name: c.Name, Status: c.Status, AdProductCategory: c.AdProductCategory, AdProductCategoryName: c.AdProductCategoryName, DailyBudget: money(c.Budget.Daily), MaxCPM: money(c.Bidding.MaxCPM)}
+		cd := campaignData{ID: c.ID, Name: c.Name, Status: c.Status, AdProductCategory: c.AdProductCategory, AdProductCategoryName: localizedName(adNames, c.AdProductCategory, c.AdProductCategoryName), DailyBudget: money(c.Budget.Daily), MaxCPM: money(c.Bidding.MaxCPM)}
 		if campSpendOK {
 			if s, ok := campSpendToday[c.ID]; ok {
 				cd.SpendToday = money(s)

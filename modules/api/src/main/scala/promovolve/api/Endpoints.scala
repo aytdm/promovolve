@@ -743,14 +743,18 @@ object Endpoints extends ApiJsonFormats {
       .out(statusCode(sttp.model.StatusCode.NoContent))
       .errorOut(jsonBody[ErrorResponse])
 
-  val listTaxonomyCategories: PublicEndpoint[(Option[String], Int, Int), ErrorResponse, TaxonomyCategoryList, Any] =
+  val listTaxonomyCategories
+      : PublicEndpoint[(Option[String], Option[String], Int, Int), ErrorResponse, TaxonomyCategoryList, Any] =
     endpoint
       .tag("Taxonomy")
       .summary("List content categories")
-      .description("Returns IAB Content Taxonomy 2.1 categories for page classification")
+      .description("Returns IAB Content Taxonomy 3.0 categories for page classification")
       .get
       .in(v1 / "taxonomy" / "categories")
-      .in(query[Option[String]]("q").description("Search query to filter categories by name or ID"))
+      .in(query[Option[String]]("q")
+        .description("Search query to filter categories — matches ID, English name, and Japanese name"))
+      .in(query[Option[String]]("lang")
+        .description("Display language for names (e.g. ja); untranslated names fall back to English"))
       .in(query[Int]("limit").default(100))
       .in(query[Int]("offset").default(0))
       .out(jsonBody[TaxonomyCategoryList])
@@ -786,14 +790,18 @@ object Endpoints extends ApiJsonFormats {
       .out(jsonBody[AdvertiserDomainList])
       .errorOut(jsonBody[ErrorResponse])
 
-  val listAdProductCategories: PublicEndpoint[(Option[String], Int, Int), ErrorResponse, TaxonomyCategoryList, Any] =
+  val listAdProductCategories
+      : PublicEndpoint[(Option[String], Option[String], Int, Int), ErrorResponse, TaxonomyCategoryList, Any] =
     endpoint
       .tag("Taxonomy")
       .summary("List ad product categories")
       .description("Returns IAB Ad Product Taxonomy 2.0 categories for campaign targeting")
       .get
       .in(v1 / "taxonomy" / "ad-products")
-      .in(query[Option[String]]("q").description("Search query to filter categories by name or ID"))
+      .in(query[Option[String]]("q")
+        .description("Search query to filter categories — matches ID, English name, and Japanese name"))
+      .in(query[Option[String]]("lang")
+        .description("Display language for names (e.g. ja); untranslated names fall back to English"))
       .in(query[Int]("limit").default(100))
       .in(query[Int]("offset").default(0))
       .out(jsonBody[TaxonomyCategoryList])

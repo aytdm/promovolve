@@ -23,6 +23,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hanishi/promovolve/platform/internal/i18n"
 	"github.com/hanishi/promovolve/platform/internal/model"
 )
 
@@ -165,7 +166,7 @@ func (h *Handler) AdvertiserReport(w http.ResponseWriter, r *http.Request) {
 		switch dim := r.URL.Query().Get("dim"); dim {
 		case "site", "category":
 			names := h.campaignNames("/v1/advertisers/me/campaigns?limit=100", claims)
-			groups := h.fetchBreakdownByCampaign(rangeQS, dim, names, h.taxonomyNames(claims), claims)
+			groups := h.fetchBreakdownByCampaign(rangeQS, dim, names, h.taxonomyNames(claims, h.lang(r, user)), claims)
 			writeGroupedBreakdownCSV(w, dim, from, to, groups)
 		case "publisher":
 			rows, _ := h.fetchReportBreakdown(rangeQS, dim, claims)
@@ -182,7 +183,7 @@ func (h *Handler) AdvertiserReport(w http.ResponseWriter, r *http.Request) {
 	}
 
 	names := h.campaignNames("/v1/advertisers/me/campaigns?limit=100", claims)
-	taxonomy := h.taxonomyNames(claims)
+	taxonomy := h.taxonomyNames(claims, h.lang(r, user))
 	rows := h.fetchReportRows(rangeQS, names, claims)
 	// The site range breakdown is fetched only for coverageFrom — the
 	// tables themselves come from the by-campaign split below.
@@ -597,12 +598,26 @@ func (h *Handler) fetchBreakdownDayPoints(rangeQS, dim string, taxonomy map[stri
 	return pts
 }
 
-// taxonomyNames maps IAB taxonomy category ids to display names — the
-// serve pipeline stores category IDs (e.g. "682"), which mean nothing to
-// an advertiser. Degrades to the raw id on failure.
-func (h *Handler) taxonomyNames(claims *model.Claims) map[string]string {
+// taxonomyNames maps IAB content-taxonomy category ids to display names —
+// the serve pipeline stores category IDs (e.g. "682"), which mean nothing
+// to an advertiser. lang localizes the names (untranslated ids come back
+// English from the core). Degrades to the raw id on failure.
+func (h *Handler) taxonomyNames(claims *model.Claims, lang string) map[string]string {
+	names := h.taxonomyNameMap("/v1/taxonomy/categories", claims, lang)
+	// Rows with no category id label as "Uncategorized" — localizing it
+	// through the map keeps the pure categoryName helper lang-free.
+	names[""] = i18n.T(lang, "Uncategorized")
+	return names
+}
+
+// adProductNames is taxonomyNames for the Ad Product Taxonomy.
+func (h *Handler) adProductNames(claims *model.Claims, lang string) map[string]string {
+	return h.taxonomyNameMap("/v1/taxonomy/ad-products", claims, lang)
+}
+
+func (h *Handler) taxonomyNameMap(path string, claims *model.Claims, lang string) map[string]string {
 	names := map[string]string{}
-	body, err := h.coreGet("/v1/taxonomy/categories?limit=2000", claims)
+	body, err := h.coreGet(path+"?lang="+url.QueryEscape(lang)+"&limit=2000", claims)
 	if err != nil {
 		return names
 	}
@@ -620,6 +635,17 @@ func (h *Handler) taxonomyNames(claims *model.Claims) map[string]string {
 		}
 	}
 	return names
+}
+
+// localizedName prefers the localized taxonomy name for id, falling back
+// to the server-resolved (English) name. Callers pass nil maps for
+// English sessions — the core already resolves English names, so the
+// overlay only earns its fetch when the user reads Japanese.
+func localizedName(names map[string]string, id, fallback string) string {
+	if n, ok := names[id]; ok && n != "" {
+		return n
+	}
+	return fallback
 }
 
 func funnelDisplay(spend float64, imps, clicks int64) (spendDisp, ctr, ecpm string) {

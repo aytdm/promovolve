@@ -1131,7 +1131,10 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/login", http.StatusSeeOther)
 }
 
-func (h *Handler) loadPending(siteID string, claims *model.Claims) []pendingCreative {
+// catNames/adNames are optional localized-name overlays (nil for English
+// sessions): the core resolves English names server-side; Japanese display
+// names are overlaid here by id.
+func (h *Handler) loadPending(siteID string, claims *model.Claims, catNames, adNames map[string]string) []pendingCreative {
 	pendBody, _ := h.coreGet(fmt.Sprintf("/v1/publishers/me/sites/%s/approval/pending?limit=50", siteID), claims)
 	var pendResp struct {
 		Data []struct {
@@ -1222,15 +1225,19 @@ func (h *Handler) loadPending(siteID string, claims *model.Claims) []pendingCrea
 		// representatives have no meaningful category — leave the
 		// name empty so the template uses the badge path instead.
 		if p.CategoryName != nil && *p.CategoryName != "" {
-			pc.CategoryName = *p.CategoryName
+			pc.CategoryName = localizedName(catNames, p.Category, *p.CategoryName)
 		} else if !p.Filler {
-			pc.CategoryName = p.Category
+			pc.CategoryName = localizedName(catNames, p.Category, p.Category)
 		}
 		pc.AdProductName = ""
+		adID := ""
+		if p.AdProductCategory != nil {
+			adID = *p.AdProductCategory
+		}
 		if p.AdProductCategoryName != nil && *p.AdProductCategoryName != "" {
-			pc.AdProductName = *p.AdProductCategoryName
-		} else if p.AdProductCategory != nil {
-			pc.AdProductName = *p.AdProductCategory
+			pc.AdProductName = localizedName(adNames, adID, *p.AdProductCategoryName)
+		} else if adID != "" {
+			pc.AdProductName = localizedName(adNames, adID, adID)
 		}
 		// Insertion-ordered set so the explainer lists categories in
 		// the same order they appear in the placement list.
@@ -1252,9 +1259,9 @@ func (h *Handler) loadPending(siteID string, claims *model.Claims) []pendingCrea
 			// instead.
 			if !pl.Filler {
 				if pl.CategoryName != nil && *pl.CategoryName != "" {
-					plc.CategoryName = *pl.CategoryName
+					plc.CategoryName = localizedName(catNames, plc.Category, *pl.CategoryName)
 				} else if pl.Category != nil {
-					plc.CategoryName = *pl.Category
+					plc.CategoryName = localizedName(catNames, *pl.Category, *pl.Category)
 				}
 			}
 			pc.Placements = append(pc.Placements, plc)
@@ -1268,7 +1275,9 @@ func (h *Handler) loadPending(siteID string, claims *model.Claims) []pendingCrea
 	return pending
 }
 
-func (h *Handler) loadServing(siteID string, claims *model.Claims, floorCpm float64) []servingCreative {
+// catNames is the optional localized-name overlay (nil for English
+// sessions) — same contract as loadPending.
+func (h *Handler) loadServing(siteID string, claims *model.Claims, floorCpm float64, catNames map[string]string) []servingCreative {
 	// Hits the grouped endpoint (mirror of /approval/pending) so each
 	// creative carries its delivered (url, slot, impressions) list.
 	// Falls back gracefully when the endpoint is unavailable — older
@@ -1356,9 +1365,9 @@ func (h *Handler) loadServing(siteID string, claims *model.Claims, floorCpm floa
 				plc.Category = *pl.Category
 			}
 			if pl.CategoryName != nil {
-				plc.CategoryName = *pl.CategoryName
+				plc.CategoryName = localizedName(catNames, plc.Category, *pl.CategoryName)
 			} else if pl.Category != nil {
-				plc.CategoryName = *pl.Category
+				plc.CategoryName = localizedName(catNames, *pl.Category, *pl.Category)
 			}
 			sc.Placements = append(sc.Placements, plc)
 		}
@@ -1549,10 +1558,19 @@ func (h *Handler) PublisherApproval(w http.ResponseWriter, r *http.Request) {
 	var allServing []servingCreative
 	var allFlagged []flaggedCreative
 
+	// Japanese sessions overlay localized taxonomy names by id; English
+	// sessions skip the fetch (nil maps) — the core already resolves
+	// English names.
+	var catNames, adNames map[string]string
+	if h.lang(r, user) == i18n.LangJA {
+		catNames = h.taxonomyNames(claims, i18n.LangJA)
+		adNames = h.adProductNames(claims, i18n.LangJA)
+	}
+
 	dir := h.newAdvertiserDirectory()
 	for _, s := range sites {
-		pending := h.loadPending(s.ID, claims)
-		serving := h.loadServing(s.ID, claims, s.FloorCpm)
+		pending := h.loadPending(s.ID, claims, catNames, adNames)
+		serving := h.loadServing(s.ID, claims, s.FloorCpm, catNames)
 		flagged := h.loadFlagged(s.ID, claims)
 
 		// ONE row per creative per site. The lists come from different

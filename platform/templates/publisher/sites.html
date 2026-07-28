@@ -426,17 +426,22 @@
           {{end}}
           <form method="POST" action="/publisher/sites/block-ad-product"
                 class="relative inline-flex items-center gap-1"
-                x-data="{ query: '', results: [], selectedId: '', open: false }"
+                x-data="{ query: '', results: [], selectedId: '', open: false,
+                  search() {
+                    if (this.query.length > 0) {
+                      fetch('/api/taxonomy/ad-products?q=' + encodeURIComponent(this.query))
+                        .then(r => r.json())
+                        .then(d => { this.results = d.data || []; this.open = this.results.length > 0; });
+                    } else { this.results = []; this.open = false; }
+                  }
+                }"
                 onclick="event.stopPropagation();">
             <input type="hidden" name="siteId" value="{{.ID}}">
             <input type="hidden" name="category" :value="selectedId">
             <input type="text" x-model="query"
-              @input="selectedId = '';
-                if (query.length > 0) {
-                  fetch('/api/taxonomy/ad-products?q=' + encodeURIComponent(query))
-                    .then(r => r.json())
-                    .then(d => { results = d.data || []; open = results.length > 0; });
-                } else { results = []; open = false; }"
+              @input="selectedId = ''"
+              @input.debounce.150ms="if (!$event.isComposing) search()"
+              @compositionend="search()"
               @click.outside="open = false"
               placeholder="{{t "Search categories to block"}}"
               autocomplete="off"

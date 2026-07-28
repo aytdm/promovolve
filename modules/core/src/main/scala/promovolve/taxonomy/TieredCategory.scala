@@ -77,6 +77,27 @@ object TieredCategory {
     }
   }
 
+  // Japanese display names, keyed by 3.0 id. Display-only — the English
+  // `name` stays canonical (classifier prompt, matching). Ids absent from
+  // the companion file fall back to English.
+  private lazy val jaNames: Map[String, String] =
+    JaNames.load("/iab_content_taxonomy/3_0_ja.tsv")
+
+  /** Japanese display name for a category, if translated. */
+  def nameJa(id: String): Option[String] = jaNames.get(normalize(id))
+
+  /**
+   * Display name in the requested language, falling back to English.
+   * Unknown ids echo back unchanged (same contract as callers that do
+   * `get(id).map(_.name).getOrElse(id)`).
+   */
+  def displayName(id: String, lang: String): String =
+    if (lang.startsWith("ja")) nameJa(id).getOrElse(englishName(id))
+    else englishName(id)
+
+  private def englishName(id: String): String =
+    get(id).map(_.name).getOrElse(id)
+
   /** Get all categories in the taxonomy. */
   def getAll: List[TieredCategory] = nodeMap.values.toList
 

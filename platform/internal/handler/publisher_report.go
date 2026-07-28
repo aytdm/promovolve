@@ -82,7 +82,7 @@ func (h *Handler) PublisherReport(w http.ResponseWriter, r *http.Request) {
 
 	marginBps := h.settingsSvc.CurrentMarginBps(r.Context())
 	rows, coverageFrom := h.fetchPublisherSiteCategories(rangeQS, marginBps, claims)
-	names := h.taxonomyNames(claims)
+	names := h.taxonomyNames(claims, h.lang(r, user))
 
 	if r.URL.Query().Get("format") == "csv" {
 		writePublisherReportCSV(w, from, to, rows, names)
@@ -307,11 +307,11 @@ func attachPublisherSiteSeries(sites []publisherReportSite, from, to string, day
 }
 
 func categoryName(id string, names map[string]string) string {
-	if id == "" {
-		return "Uncategorized"
-	}
-	if n, ok := names[id]; ok {
+	if n, ok := names[id]; ok && n != "" {
 		return n
+	}
+	if id == "" {
+		return "Uncategorized" // map missing its "" entry (name fetch failed)
 	}
 	return id
 }

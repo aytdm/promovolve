@@ -77,17 +77,22 @@
       <input type="text" name="name" required placeholder="{{t "Summer sale - shoes"}}"
              class="form-input">
     </div>
-    <div class="mb-4" x-data="{ query: '', results: [], selectedId: '', selectedName: '', open: false }">
+    <div class="mb-4" x-data="{ query: '', results: [], selectedId: '', selectedName: '', open: false,
+        search() {
+          if (this.query.length > 0) {
+            fetch('/api/taxonomy/ad-products?q=' + encodeURIComponent(this.query))
+              .then(r => r.json())
+              .then(d => { this.results = d.data || []; this.open = this.results.length > 0; });
+          } else { this.results = []; this.open = false; }
+        }
+      }">
       <label class="form-label">{{t "What are you advertising?"}}</label>
       <input type="hidden" name="adProductCategory" :value="selectedId">
       <div class="relative">
         <input type="text" :value="selectedName || query"
-          @input="query = $event.target.value; selectedId = ''; selectedName = '';
-            if (query.length > 0) {
-              fetch('/api/taxonomy/ad-products?q=' + encodeURIComponent(query))
-                .then(r => r.json())
-                .then(d => { results = d.data || []; open = results.length > 0; });
-            } else { results = []; open = false; }"
+          @input="query = $event.target.value; selectedId = ''; selectedName = ''"
+          @input.debounce.150ms="if (!$event.isComposing) search()"
+          @compositionend="search()"
           @click.outside="open = false"
           placeholder="{{t "Search (e.g., Travel, Kitchen, Gym)"}}"
           class="form-input"
@@ -128,6 +133,13 @@
             .then(r => r.json())
             .then(d => { list.forEach(c => { var a = (d.data || {})[c.id]; if (a) c.inv = a.status; }); })
             .catch(() => { /* unknown stays unmarked — never guess */ });
+        },
+        search() {
+          if (this.query.length > 0) {
+            fetch('/api/taxonomy/categories?q=' + encodeURIComponent(this.query))
+              .then(r => r.json())
+              .then(d => { this.results = (d.data || []).filter(c => !this.selected.find(s => s.id === c.id)); this.open = this.results.length > 0; this.mark(this.results); });
+          } else { this.results = []; this.open = false; }
         }
       }">
       <label class="form-label">{{t "Target content topics (optional)"}}</label>
@@ -144,11 +156,8 @@
       </div>
       <div class="relative">
         <input type="text" x-model="query"
-          @input="if (query.length > 0) {
-              fetch('/api/taxonomy/categories?q=' + encodeURIComponent(query))
-                .then(r => r.json())
-                .then(d => { results = (d.data || []).filter(c => !selected.find(s => s.id === c.id)); open = results.length > 0; mark(results); });
-            } else { results = []; open = false; }"
+          @input.debounce.150ms="if (!$event.isComposing) search()"
+          @compositionend="search()"
           @click.outside="open = false"
           placeholder="{{t "Search topics (e.g., Sports, Food, Healthy Cooking)"}}"
           class="form-input">
@@ -512,6 +521,12 @@
                   .then(r => r.json())
                   .then(d => { list.forEach(c => { var a = (d.data || {})[c.id]; if (a) c.inv = a.status; }); })
                   .catch(() => { /* unknown stays unmarked — never guess */ });
+              },
+              search() {
+                if (this.query.length > 0) {
+                  fetch('/api/taxonomy/categories?q=' + encodeURIComponent(this.query))
+                    .then(r => r.json()).then(d => { this.results = (d.data || []).filter(c => !this.locked.find(s => s.id === c.id) && !this.selected.find(s => s.id === c.id)); this.open = this.results.length > 0; this.mark(this.results); });
+                } else { this.results = []; this.open = false; }
               }
             }">
             <label class="form-label">{{t "Target content topics"}}</label>
@@ -541,10 +556,8 @@
             </div>
             <div class="relative">
               <input type="text" x-model="query"
-                @input="if (query.length > 0) {
-                    fetch('/api/taxonomy/categories?q=' + encodeURIComponent(query))
-                      .then(r => r.json()).then(d => { results = (d.data || []).filter(c => !locked.find(s => s.id === c.id) && !selected.find(s => s.id === c.id)); open = results.length > 0; mark(results); });
-                  } else { results = []; open = false; }"
+                @input.debounce.150ms="if (!$event.isComposing) search()"
+                @compositionend="search()"
                 @click.outside="open = false"
                 placeholder="{{t "Search topics (e.g., Sports, Food)"}}"
                 class="form-input">

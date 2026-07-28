@@ -269,7 +269,10 @@ object ApiModels {
       // Human-readable top IAB content category for the page(s) where this
       // slot was discovered; "Filler" when the page matched no demand
       // category, None when the page is not yet classified.
-      matchedCategory: Option[String] = None
+      matchedCategory: Option[String] = None,
+      // Raw taxonomy id behind matchedCategory (absent for "Filler"), so
+      // the dashboard can localize the display name by id.
+      matchedCategoryId: Option[String] = None
   )
 
   case class Site(
