@@ -1698,6 +1698,48 @@ class EndpointRoutes(
       }
   }
 
+  // ── operator-prohibited ad-product categories ────────────────────────
+  // The operator's system-wide disallow list (/admin/settings), stored in
+  // the dashboard's platform_settings row 'prohibited_ad_products' as a
+  // CSV of ids. Enforced at campaign REGISTRATION (and the category-edit
+  // endpoints), not at serve time: a prohibited campaign never exists.
+  // Cached briefly — registration is a cold path but the picker filter
+  // reads per keystroke. No dashboardDb (bare-core deploys) or no row =
+  // nothing prohibited.
+  @volatile private var prohibitedAdProductsCache: (Set[String], Long) = (Set.empty, 0L)
+  private def prohibitedAdProducts(): Future[Set[String]] = {
+    val now = System.currentTimeMillis()
+    val (cached, at) = prohibitedAdProductsCache
+    if (now - at < 30000L) Future.successful(cached)
+    else
+      dashboardDb match {
+        case None     => Future.successful(Set.empty)
+        case Some(db) =>
+          import slick.jdbc.PostgresProfile.api.*
+          db.run(
+            sql"""SELECT value FROM platform_settings WHERE key = 'prohibited_ad_products'"""
+              .as[String]
+              .headOption
+          ).map { row =>
+            val set = row.iterator.flatMap(_.split(",")).map(_.trim).filter(_.nonEmpty).toSet
+            prohibitedAdProductsCache = (set, now)
+            set
+          }.recover { case _ => cached } // transient DB error: serve stale, don't flap
+      }
+  }
+
+  // Prohibiting a parent covers the whole subtree: the check walks the
+  // category's ancestor chain.
+  private def isProhibitedAdProduct(id: String, prohibited: Set[String]): Boolean =
+    prohibited.nonEmpty && id.nonEmpty &&
+    promovolve.taxonomy.AdProductTaxonomy.selfAndAncestors(id).exists(prohibited.contains)
+
+  private val prohibitedAdProductError =
+    ErrorResponse(
+      "prohibited_ad_product",
+      "This ad product category is not accepted on this network"
+    )
+
   private val createCampaignLogic: ((String, CreateCampaignRequest)) => Future[Either[ErrorResponse, Campaign]] = {
     case (advertiserId, req) =>
       // Name is required server-side, not just by the form's `required`
@@ -1709,59 +1751,85 @@ class EndpointRoutes(
         validateLandingUrl(req.landingUrl) match {
           case Some(err) => Future.successful(Left(err))
           case None      =>
-            val createF: Future[AdvertiserEntity.CreateCampaignResult] =
-              advertiserRef(advertiserId).ask(AdvertiserEntity.CreateCampaign(_))
-
-            createF
-              .flatMap { case AdvertiserEntity.CampaignCreated(_, campaignId) =>
-                // Resolve the campaign EntityRef locally from its id rather than
-                // receiving it in the reply — an EntityRef can't be Jackson-
-                // serialized, so carrying it on CampaignCreated breaks the ask
-                // across cluster nodes (multi-node entity tier).
-                val configF: Future[CampaignEntity.ConfigUpdated] =
-                  campaignRef(advertiserId, campaignId.value).ask(ref =>
-                    CampaignEntity.UpdateConfig(
-                      maxCpm = Some(CPM(BigDecimal(req.bidding.maxCpm))),
-                      dailyBudget = Some(Budget(BigDecimal(req.budget.daily))),
-                      adProductCategory = Some(Some(AdProductCategoryId(req.adProductCategory))),
-                      categories = req.targetCategories.map(_.toSet.map(CategoryId(_))),
-                      landingUrl = Some(Some(req.landingUrl)),
-                      siteAllowlist = req.siteAllowlist.map(_.toSet),
-                      name = Some(req.name),
-                      replyTo = ref
-                    )
-                  )
-
-                configF.map { _ =>
-                  Right(
-                    Campaign(
-                      id = campaignId.value,
-                      advertiserId = advertiserId,
-                      name = req.name,
-                      status = "paused", // New campaigns start as paused
-                      budget = req.budget,
-                      schedule = req.schedule,
-                      adProductCategory = req.adProductCategory,
-                      bidding = req.bidding,
-                      landingUrl = req.landingUrl,
-                      creativeIds = Vector.empty,
-                      createdAt = nowIso,
-                      updatedAt = nowIso,
-                      siteAllowlist = req.siteAllowlist.map(_.toVector).getOrElse(Vector.empty)
-                    )
-                  )
-                }
-              }
-              .recover { case ex =>
-                Left(ErrorResponse("create_failed", ex.getMessage))
-              }
+            prohibitedAdProducts().flatMap { prohibited =>
+              if (isProhibitedAdProduct(req.adProductCategory, prohibited))
+                Future.successful(Left(prohibitedAdProductError))
+              else
+                createCampaignAfterChecks(advertiserId, req)
+            }
         }
+  }
+
+  private def createCampaignAfterChecks(
+      advertiserId: String,
+      req: CreateCampaignRequest
+  ): Future[Either[ErrorResponse, Campaign]] = {
+    val createF: Future[AdvertiserEntity.CreateCampaignResult] =
+      advertiserRef(advertiserId).ask(AdvertiserEntity.CreateCampaign(_))
+
+    createF
+      .flatMap { case AdvertiserEntity.CampaignCreated(_, campaignId) =>
+        // Resolve the campaign EntityRef locally from its id rather than
+        // receiving it in the reply — an EntityRef can't be Jackson-
+        // serialized, so carrying it on CampaignCreated breaks the ask
+        // across cluster nodes (multi-node entity tier).
+        val configF: Future[CampaignEntity.ConfigUpdated] =
+          campaignRef(advertiserId, campaignId.value).ask(ref =>
+            CampaignEntity.UpdateConfig(
+              maxCpm = Some(CPM(BigDecimal(req.bidding.maxCpm))),
+              dailyBudget = Some(Budget(BigDecimal(req.budget.daily))),
+              adProductCategory = Some(Some(AdProductCategoryId(req.adProductCategory))),
+              categories = req.targetCategories.map(_.toSet.map(CategoryId(_))),
+              landingUrl = Some(Some(req.landingUrl)),
+              siteAllowlist = req.siteAllowlist.map(_.toSet),
+              name = Some(req.name),
+              replyTo = ref
+            )
+          )
+
+        configF.map { _ =>
+          Right(
+            Campaign(
+              id = campaignId.value,
+              advertiserId = advertiserId,
+              name = req.name,
+              status = "paused", // New campaigns start as paused
+              budget = req.budget,
+              schedule = req.schedule,
+              adProductCategory = req.adProductCategory,
+              bidding = req.bidding,
+              landingUrl = req.landingUrl,
+              creativeIds = Vector.empty,
+              createdAt = nowIso,
+              updatedAt = nowIso,
+              siteAllowlist = req.siteAllowlist.map(_.toVector).getOrElse(Vector.empty)
+            )
+          )
+        }
+      }
+      .recover { case ex =>
+        Left(ErrorResponse("create_failed", ex.getMessage))
+      }
   }
   private val updateCampaignLogic
       : ((String, String, UpdateCampaignRequest)) => Future[Either[ErrorResponse, Campaign]] = {
     case (advertiserId, campaignId, req) =>
-      // Handle budget update if provided
-      val budgetUpdateF: Future[Either[ErrorResponse, Unit]] = req.budget match {
+      // Operator-prohibited categories gate the edit path too — the
+      // dashboard doesn't expose category on edit, but the API does.
+      val prohibitedCheckF: Future[Either[ErrorResponse, Unit]] =
+        req.adProductCategory match {
+          case Some(apc) =>
+            prohibitedAdProducts().map { prohibited =>
+              if (isProhibitedAdProduct(apc, prohibited)) Left(prohibitedAdProductError)
+              else Right(())
+            }
+          case None => Future.successful(Right(()))
+        }
+
+      // Handle budget update if provided. def, not val — a Future val
+      // launches its ask eagerly, before the prohibited-category gate
+      // above has had its say.
+      def budgetUpdateF: Future[Either[ErrorResponse, Unit]] = req.budget match {
         case Some(newBudget) =>
           val budget = Budget(BigDecimal(newBudget.daily))
           campaignRef(advertiserId, campaignId)
@@ -1787,7 +1855,7 @@ class EndpointRoutes(
       val scheduleEndAt: Option[Option[Instant]] = req.schedule.map { s =>
         s.endAt.flatMap(str => scala.util.Try(Instant.parse(str)).toOption)
       }
-      val configUpdateF: Future[Either[ErrorResponse, Unit]] =
+      def configUpdateF: Future[Either[ErrorResponse, Unit]] =
         if (req.adProductCategory.isDefined || req.bidding.isDefined || req.bidOnUnmatchedContext.isDefined ||
           scheduleStartAt.isDefined || scheduleEndAt.isDefined || req.targetCategories.isDefined ||
           req.siteAllowlist.isDefined ||
@@ -1819,7 +1887,9 @@ class EndpointRoutes(
 
       // Combine updates and return updated campaign
       for {
-        budgetResult <- budgetUpdateF
+        prohibitedResult <- prohibitedCheckF
+        budgetResult <-
+          if (prohibitedResult.isRight) budgetUpdateF else Future.successful(prohibitedResult)
         configResult <- if (budgetResult.isRight) configUpdateF else Future.successful(budgetResult)
         campaign <- if (configResult.isRight) getCampaignLogic((advertiserId, campaignId))
         else Future.successful(configResult.asInstanceOf[Either[ErrorResponse, Campaign]])
@@ -2541,12 +2611,21 @@ class EndpointRoutes(
     case (queryOpt, langOpt, limit, offset) =>
       import promovolve.taxonomy.AdProductTaxonomy
 
-      Future.successful {
+      prohibitedAdProducts().map { prohibited =>
         // Get categories, optionally filtered by search query (matches
-        // ID, English name, and Japanese name — see AdProductTaxonomy.search)
+        // ID, English name, and every localized name — see
+        // AdProductTaxonomy.search). SEARCH results drop operator-
+        // prohibited categories so pickers can't offer what campaign
+        // registration will reject; the no-query full list keeps them —
+        // it's the id→name map for HISTORICAL campaigns, whose names
+        // must stay resolvable after a prohibition.
         val allCategories = queryOpt match {
-          case Some(q) if q.nonEmpty => AdProductTaxonomy.search(q).toVector
-          case _                     => AdProductTaxonomy.getAll.toVector
+          case Some(q) if q.nonEmpty =>
+            AdProductTaxonomy
+              .search(q)
+              .filterNot(c => isProhibitedAdProduct(c.id, prohibited))
+              .toVector
+          case _ => AdProductTaxonomy.getAll.toVector
         }
 
         // Apply pagination
@@ -3114,27 +3193,33 @@ class EndpointRoutes(
   private val updateCampaignAdProductLogic: ((String, String, UpdateAdProductCategoryRequest)) => Future[Either[
     ErrorResponse, UpdateAdProductCategoryResponse]] = {
     case (advertiserId, campaignId, req) =>
-      val adProductCat = req.adProductCategory.map(AdProductCategoryId(_))
-      val updateF: Future[CampaignEntity.ConfigUpdated] =
-        campaignRef(advertiserId, campaignId).ask(replyTo =>
-          CampaignEntity.UpdateConfig(
-            maxCpm = None,
-            dailyBudget = None,
-            adProductCategory = Some(adProductCat), // Some(None) clears, Some(Some(x)) sets
-            replyTo = replyTo
-          )
-        )
+      prohibitedAdProducts().flatMap { prohibited =>
+        if (req.adProductCategory.exists(isProhibitedAdProduct(_, prohibited)))
+          Future.successful(Left(prohibitedAdProductError))
+        else {
+          val adProductCat = req.adProductCategory.map(AdProductCategoryId(_))
+          val updateF: Future[CampaignEntity.ConfigUpdated] =
+            campaignRef(advertiserId, campaignId).ask(replyTo =>
+              CampaignEntity.UpdateConfig(
+                maxCpm = None,
+                dailyBudget = None,
+                adProductCategory = Some(adProductCat), // Some(None) clears, Some(Some(x)) sets
+                replyTo = replyTo
+              )
+            )
 
-      updateF
-        .map { _ =>
-          Right(UpdateAdProductCategoryResponse(
-            campaignId = campaignId,
-            adProductCategory = req.adProductCategory
-          ))
+          updateF
+            .map { _ =>
+              Right(UpdateAdProductCategoryResponse(
+                campaignId = campaignId,
+                adProductCategory = req.adProductCategory
+              ))
+            }
+            .recover { case ex =>
+              Left(ErrorResponse("ad_product_update_failed", ex.getMessage))
+            }
         }
-        .recover { case ex =>
-          Left(ErrorResponse("ad_product_update_failed", ex.getMessage))
-        }
+      }
   }
 
   // ----------------- Site Ad Product Blocklist Logic -----------------

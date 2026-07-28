@@ -296,6 +296,8 @@ func main() {
 	mux.HandleFunc("POST /admin/settings/payout-floor", adm(h.UpdatePayoutFloor))
 	mux.HandleFunc("POST /admin/settings/org-max-members", adm(h.UpdateOrgMaxMembers))
 	mux.HandleFunc("POST /admin/settings/languages", adm(h.UpdateLanguages))
+	mux.HandleFunc("POST /admin/settings/prohibited-ad-products", adm(h.AddProhibitedAdProduct))
+	mux.HandleFunc("POST /admin/settings/prohibited-ad-products/remove", adm(h.RemoveProhibitedAdProduct))
 	mux.HandleFunc("POST /admin/settings/default-timezone", adm(h.UpdateDefaultOrgTimezone))
 	mux.HandleFunc("GET /admin/billing", adm(h.AdminBilling))
 	mux.HandleFunc("GET /admin/billing/topups", adm(h.AdminBillingTopups))

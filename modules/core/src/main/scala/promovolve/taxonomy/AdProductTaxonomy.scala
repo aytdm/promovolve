@@ -36,6 +36,21 @@ object AdProductTaxonomy {
   /** Get an ad product category by ID. */
   def get(id: String): Option[AdProductCategory] = categories.get(id)
 
+  /**
+   * The id plus every ancestor up the tier chain — used by the
+   * operator's prohibited-categories check so prohibiting a parent
+   * (e.g. Tobacco) covers the whole subtree (cigarettes, vaping, …).
+   * Cycle-guarded; unknown ids return just themselves.
+   */
+  def selfAndAncestors(id: String): Set[String] = {
+    @annotation.tailrec
+    def loop(cur: Option[String], acc: Set[String]): Set[String] = cur match {
+      case Some(c) if !acc.contains(c) => loop(get(c).flatMap(_.parentId), acc + c)
+      case _                           => acc
+    }
+    loop(Some(id), Set.empty)
+  }
+
   /** Localized display name for a category in `lang`, if translated. */
   def nameIn(lang: String, id: String): Option[String] =
     localized.get(LocalizedNames.primary(lang)).flatMap(_.get(id))

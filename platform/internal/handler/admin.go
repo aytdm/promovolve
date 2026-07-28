@@ -1088,7 +1088,7 @@ func (h *Handler) AdminSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) renderAdminSettings(w http.ResponseWriter, r *http.Request, errMsg string) {
-	user, _, ok := h.requireRole(w, r, model.RoleAdmin)
+	user, claims, ok := h.requireRole(w, r, model.RoleAdmin)
 	if !ok {
 		return
 	}
@@ -1142,6 +1142,19 @@ func (h *Handler) renderAdminSettings(w http.ResponseWriter, r *http.Request, er
 		}
 	}
 
+	// Prohibited ad-product categories — the operator's system-wide
+	// disallow list, with names resolved for display (the no-query
+	// taxonomy list deliberately includes prohibited ids).
+	adNames := h.adProductNames(claims, h.lang(r, user))
+	var prohibited []langOption
+	for _, id := range h.settingsSvc.ProhibitedAdProducts(r.Context()) {
+		name := id
+		if n, ok := adNames[id]; ok && n != "" {
+			name = n
+		}
+		prohibited = append(prohibited, langOption{Tag: id, Name: name})
+	}
+
 	// Languages: everything the build ships, marked with the deployment's
 	// active set (first active = default).
 	active := h.activeLanguages(r)
@@ -1167,6 +1180,7 @@ func (h *Handler) renderAdminSettings(w http.ResponseWriter, r *http.Request, er
 		DefaultOrgTimezone: defaultTZ,
 		Timezones:          zones,
 		AllLanguages:       allLangs,
+		ProhibitedAds:      prohibited,
 	})
 }
 
@@ -1187,6 +1201,53 @@ func (h *Handler) UpdateOrgMaxMembers(w http.ResponseWriter, r *http.Request) {
 	if err := h.orgRepo.SetMaxMembers(r.Context(), n, admin.ID); err != nil {
 		slog.Error("set org member cap failed", "error", err)
 		h.renderAdminSettings(w, r, "could not update the member cap")
+		return
+	}
+	http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+}
+
+// AddProhibitedAdProduct adds one ad-product category id to the
+// operator's system-wide disallow list. Enforcement lives in the CORE
+// at campaign registration (it reads the same platform_settings row and
+// covers the category's whole subtree); this handler only maintains the
+// list. Prohibiting a category never touches existing campaigns.
+func (h *Handler) AddProhibitedAdProduct(w http.ResponseWriter, r *http.Request) {
+	admin, _, ok := h.requireRole(w, r, model.RoleAdmin)
+	if !ok {
+		return
+	}
+	r.ParseForm()
+	id := strings.TrimSpace(r.FormValue("category"))
+	if id == "" {
+		h.renderAdminSettings(w, r, "pick a category to prohibit")
+		return
+	}
+	ids := append(h.settingsSvc.ProhibitedAdProducts(r.Context()), id)
+	if err := h.settingsSvc.SetProhibitedAdProducts(r.Context(), ids, admin.ID); err != nil {
+		slog.Error("add prohibited ad product failed", "error", err)
+		h.renderAdminSettings(w, r, "could not update the prohibited categories")
+		return
+	}
+	http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)
+}
+
+// RemoveProhibitedAdProduct removes one id from the disallow list.
+func (h *Handler) RemoveProhibitedAdProduct(w http.ResponseWriter, r *http.Request) {
+	admin, _, ok := h.requireRole(w, r, model.RoleAdmin)
+	if !ok {
+		return
+	}
+	r.ParseForm()
+	id := strings.TrimSpace(r.FormValue("category"))
+	var kept []string
+	for _, p := range h.settingsSvc.ProhibitedAdProducts(r.Context()) {
+		if p != id {
+			kept = append(kept, p)
+		}
+	}
+	if err := h.settingsSvc.SetProhibitedAdProducts(r.Context(), kept, admin.ID); err != nil {
+		slog.Error("remove prohibited ad product failed", "error", err)
+		h.renderAdminSettings(w, r, "could not update the prohibited categories")
 		return
 	}
 	http.Redirect(w, r, "/admin/settings", http.StatusSeeOther)

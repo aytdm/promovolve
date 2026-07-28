@@ -37,8 +37,12 @@ func TestLanguageSettingsRender(t *testing.T) {
 					{Tag: "en", Name: "English", Active: true, Default: true},
 					{Tag: "ja", Name: "日本語", Active: true},
 				},
+				ProhibitedAds: []langOption{
+					{Tag: "1544", Name: "Tobacco"},
+					{Tag: "1361", Name: "Gambling"},
+				},
 			},
-			`action="/admin/settings/languages"`,
+			`action="/admin/settings/prohibited-ad-products"`,
 		},
 		{
 			"preferences", "account-preferences.html",

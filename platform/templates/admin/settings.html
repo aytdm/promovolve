@@ -86,6 +86,53 @@
     </form>
   </div>
 
+  <div class="card mt-6">
+    <h2 class="font-semibold text-lg">{{t "Prohibited ad product categories"}}</h2>
+    <p class="text-sm text-gray-500 mt-1 mb-4">{{t "Categories advertisers cannot register campaigns for on this network — prohibiting a category covers everything beneath it (prohibiting Tobacco covers cigarettes, vaping, and the rest of its subtree). Enforced at campaign creation; existing campaigns are not touched. Category pickers stop offering prohibited entries."}}</p>
+    <div class="flex flex-wrap items-center gap-2">
+      {{range .ProhibitedAds}}
+      <span class="badge badge-danger gap-1">
+        {{.Name}} <span class="font-mono text-xs opacity-60">({{.Tag}})</span>
+        <form method="POST" action="/admin/settings/prohibited-ad-products/remove" class="inline">
+          <input type="hidden" name="category" value="{{.Tag}}">
+          <button type="submit" class="text-red-500 hover:text-red-700 font-bold">&times;</button>
+        </form>
+      </span>
+      {{end}}
+      <form method="POST" action="/admin/settings/prohibited-ad-products"
+            class="relative inline-flex items-center gap-1"
+            x-data="{ query: '', results: [], selectedId: '', open: false,
+              search() {
+                if (this.query.length > 0) {
+                  fetch('/api/taxonomy/ad-products?q=' + encodeURIComponent(this.query))
+                    .then(r => r.json())
+                    .then(d => { this.results = d.data || []; this.open = this.results.length > 0; });
+                } else { this.results = []; this.open = false; }
+              }
+            }">
+        <input type="hidden" name="category" :value="selectedId">
+        <input type="text" x-model="query"
+          @input="selectedId = ''"
+          @input.debounce.150ms="if (!$event.isComposing) search()"
+          @compositionend="search()"
+          @click.outside="open = false"
+          placeholder="{{t "Search categories to prohibit"}}"
+          autocomplete="off"
+          class="w-56 px-2 py-1 border rounded-md text-xs focus:outline-none focus:ring-2 focus:ring-brand/20 focus:border-brand">
+        <button type="submit" class="btn btn-danger btn-sm">{{t "Prohibit"}}</button>
+        <div x-show="open" x-transition
+          class="absolute top-full left-0 z-10 w-72 mt-1 bg-white border rounded-md shadow-lg max-h-48 overflow-y-auto">
+          <template x-for="cat in results" :key="cat.id">
+            <button type="button" @click="selectedId = cat.id; query = cat.name; open = false;"
+              class="w-full text-left px-2 py-1 hover:bg-gray-50 text-xs">
+              <span class="font-mono text-gray-400 mr-1" x-text="cat.id"></span><span x-text="cat.name"></span>
+            </button>
+          </template>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <div class="card mt-6 p-0 overflow-x-auto">
     <h2 class="font-semibold text-lg px-6 pt-6">{{t "History"}}</h2>
     <table class="w-full text-sm mt-3">

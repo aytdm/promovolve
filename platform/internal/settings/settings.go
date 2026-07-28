@@ -142,6 +142,51 @@ func Net(gross float64, bps int) (net, fee float64) {
 	return gross - fee, fee
 }
 
+// ── prohibited ad-product categories ─────────────────────────────────
+
+const prohibitedAdProductsKey = "prohibited_ad_products"
+
+// ProhibitedAdProducts is the operator's system-wide disallow list of
+// ad-product category ids (e.g. Tobacco for a JP deployment). The CORE
+// enforces it at campaign registration by reading this same row through
+// its dashboard-DB handle; here it only feeds the admin UI. Uncached —
+// the admin settings page is the sole reader on this side.
+func (s *Service) ProhibitedAdProducts(ctx context.Context) []string {
+	var raw string
+	if err := s.pool.QueryRow(ctx,
+		`SELECT value FROM platform_settings WHERE key = $1`, prohibitedAdProductsKey,
+	).Scan(&raw); err != nil {
+		return nil
+	}
+	var out []string
+	for _, id := range strings.Split(raw, ",") {
+		if id = strings.TrimSpace(id); id != "" {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// SetProhibitedAdProducts stores the list (dedupe, drop blanks). An
+// empty list is valid — it clears the prohibition.
+func (s *Service) SetProhibitedAdProducts(ctx context.Context, ids []string, updatedBy string) error {
+	seen := map[string]bool{}
+	var clean []string
+	for _, id := range ids {
+		if id = strings.TrimSpace(id); id != "" && !seen[id] {
+			seen[id] = true
+			clean = append(clean, id)
+		}
+	}
+	_, err := s.pool.Exec(ctx, `
+		INSERT INTO platform_settings (key, value, updated_by, updated_at)
+		VALUES ($1, $2, $3, NOW())
+		ON CONFLICT (key) DO UPDATE SET value = $2, updated_by = $3, updated_at = NOW()`,
+		prohibitedAdProductsKey, strings.Join(clean, ","), updatedBy,
+	)
+	return err
+}
+
 // ── active languages ─────────────────────────────────────────────────
 
 const activeLanguagesKey = "active_languages"

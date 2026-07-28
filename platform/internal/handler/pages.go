@@ -1151,10 +1151,22 @@ func (h *Handler) AdvertiserCampaigns(w http.ResponseWriter, r *http.Request) {
 	// value, so health and soccer inventory never blend silently.
 	marketRates := h.fetchMarketRates(claims, "", h.lang(r, user))
 
+	// Error banner from a redirected create failure (?error=code) — the
+	// create POST round-trips through the core, and rejections (e.g. an
+	// operator-prohibited ad-product category) land back here.
+	var formError string
+	switch r.URL.Query().Get("error") {
+	case "prohibited_ad_product":
+		formError = i18n.T(lang, "This ad product category is not accepted on this network")
+	case "create_failed":
+		formError = i18n.T(lang, "Could not create the campaign — try again")
+	}
+
 	h.render(w, r, "advertiser/campaigns.html", pageData{
 		Title:          "Campaigns",
 		Nav:            "campaigns",
 		User:           user,
+		Error:          formError,
 		Campaigns:      campaigns,
 		AdvBudget:      advBudget,
 		AdvAvgCTR:      avgCTR,
@@ -1450,7 +1462,18 @@ func (h *Handler) CreateCampaign(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	body, _ := json.Marshal(payload)
-	h.corePost("/v1/advertisers/me/campaigns", claims, string(body))
+	// Checked: a rejected create (e.g. operator-prohibited ad-product
+	// category) must land back on the form as an error banner, not
+	// vanish into an unconditional redirect.
+	if respBody, err := h.corePostChecked("/v1/advertisers/me/campaigns", claims, string(body)); err != nil {
+		code := "create_failed"
+		if bytes.Contains(respBody, []byte("prohibited_ad_product")) {
+			code = "prohibited_ad_product"
+		}
+		slog.Warn("create campaign rejected", "code", code, "error", err)
+		http.Redirect(w, r, "/advertiser/campaigns?error="+code, http.StatusSeeOther)
+		return
+	}
 	http.Redirect(w, r, "/advertiser/campaigns", http.StatusSeeOther)
 }
 

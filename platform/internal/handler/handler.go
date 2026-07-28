@@ -594,6 +594,9 @@ type pageData struct {
 	// Admin settings: every language the build ships, flagged with the
 	// deployment's active set and default.
 	AllLanguages []adminLangOption
+	// Admin settings: the operator's prohibited ad-product categories,
+	// (id, resolved name) pairs.
+	ProhibitedAds []langOption
 }
 
 type langOption struct {
