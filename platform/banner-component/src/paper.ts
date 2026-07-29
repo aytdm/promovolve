@@ -449,9 +449,30 @@ export function foldRoundness(
 // geometry of the rotating-crease model (junction walks, cone tapers,
 // reach constraints) simply doesn't exist here.
 
-/** Which curl the reader uses. "corner" = the production rotating
-  * mirror fold; "slide" = the fixed-angle sweeping curl. */
-export const CURL_MODEL: "corner" | "slide" = "corner";
+/**
+ * Curl + flight geometry, live-tunable. Shipped values ARE the tuned
+ * kawaraban feel; production code never mutates this object — the dev
+ * harness does (dev/index.html's paper-feel panel), and every painted
+ * frame reads it fresh, so a mid-session tweak retunes the NEXT frame.
+ *
+ *  - model:   "corner" = the production rotating mirror fold;
+ *             "slide"  = the fixed-angle sweeping curl.
+ *  - releaseT: grip fraction before the sheet comes free of the pile
+ *             (see the turn-driver note below — 0 means the sheet
+ *             slides from the first pixel, no fold phase at all).
+ *  - flightX: how far the freed sheet slides off (× width).
+ *  - arcY:    upward arc height of the flight (× width, quadratic).
+ *  - spinDeg: rotation at full flight (degrees).
+ *  - lift:    pickup scale bump at first grip.
+ */
+export const CURL_TUNE = {
+  model: "corner" as "corner" | "slide",
+  releaseT: 0,
+  flightX: 1.05,
+  arcY: 0.55,
+  spinDeg: 6,
+  lift: 0.018,
+};
 
 /** Crease tilt from vertical (radians). The xfade default (angle 80°)
   * is a 10° tilt; the classic iOS look sits nearer 30°. */
@@ -582,8 +603,9 @@ export function slideShadow(t: number, w: number, h: number, rtl = false): strin
   * to the DOG-EAR (a deliberate crease you make to keep something).
   * The grip cue is a LIFT, not a fold: at first touch the sheet is
   * picked up off the pile — a slight scale-up and a blooming cast
-  * shadow — and then it slides. No crease, no paper back, ever. */
-export const SHEET_RELEASE_T = 0;
+  * shadow — and then it slides. No crease, no paper back, ever.
+  * (CURL_TUNE.releaseT = 0 encodes exactly this; raising it in the dev
+  * panel restores a fold-then-release hybrid for experimentation.) */
 
 const easeInOutCubic = (t: number): number =>
   t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
@@ -747,27 +769,28 @@ export function animatePageTurn(opts: {
       // Un-peel landing: hand the fold back while still in motion so
       // the flap drop + notch switch are masked (see restoreFoldState).
       if (direction === "prev" && t <= 0.12) restoreFoldState();
-      // Grip until SHEET_RELEASE_T, then the bend freezes and the whole
+      // Grip until CURL_TUNE.releaseT, then the bend freezes and the whole
       // sheet departs (release-and-slide — a loose sheet lifts off the
       // pile; it never folds over a crease like a bound page).
       // The corner lift RELAXES once the sheet comes free — slightly
       // bent paper springs back flat; it doesn't stay creased.
-      const relRaw = t <= SHEET_RELEASE_T ? 0 : (t - SHEET_RELEASE_T) / (1 - SHEET_RELEASE_T);
-      const tBend = t <= SHEET_RELEASE_T ? t : SHEET_RELEASE_T * Math.max(0, 1 - relRaw * 2.5);
-      const ff = CURL_MODEL === "slide" ? slideFrame(t, w, h, notch, rtl) : foldFrame(tBend, w, h, notch, rtl);
-      const rel = CURL_MODEL === "slide" || t <= SHEET_RELEASE_T
-        ? 0 : (t - SHEET_RELEASE_T) / (1 - SHEET_RELEASE_T);
+      const relT = CURL_TUNE.releaseT;
+      const relRaw = t <= relT ? 0 : (t - relT) / (1 - relT);
+      const tBend = t <= relT ? t : relT * Math.max(0, 1 - relRaw * 2.5);
+      const ff = CURL_TUNE.model === "slide" ? slideFrame(t, w, h, notch, rtl) : foldFrame(tBend, w, h, notch, rtl);
+      const rel = CURL_TUNE.model === "slide" || t <= relT
+        ? 0 : (t - relT) / (1 - relT);
       if (rel > 0) {
         // LIFT: picked up off the pile in the first sliver of drag —
         // slight scale, blooming cast shadow. Then the SLIDE: x follows
         // the drag linearly (the sheet moves WITH the thumb); the
         // upward arc and spin build later.
         const lift = Math.min(1, rel / 0.08);
-        const fx = -w * 1.05 * rel * (rtl ? -1 : 1);
-        const fy = -w * 0.55 * rel * rel;
-        const rot = -6 * rel * (rtl ? -1 : 1);
+        const fx = -w * CURL_TUNE.flightX * rel * (rtl ? -1 : 1);
+        const fy = -w * CURL_TUNE.arcY * rel * rel;
+        const rot = -CURL_TUNE.spinDeg * rel * (rtl ? -1 : 1);
         turning.style.transform =
-          `translate(${fx.toFixed(1)}px, ${fy.toFixed(1)}px) rotate(${rot.toFixed(2)}deg) scale(${(1 + 0.018 * lift).toFixed(4)})`;
+          `translate(${fx.toFixed(1)}px, ${fy.toFixed(1)}px) rotate(${rot.toFixed(2)}deg) scale(${(1 + CURL_TUNE.lift * lift).toFixed(4)})`;
         turning.style.filter =
           `drop-shadow(0 ${(12 * lift).toFixed(1)}px ${(22 * lift).toFixed(1)}px rgba(0,0,0,${(0.32 * lift).toFixed(2)}))`;
         turning.style.opacity = String(rel < 0.75 ? 1 : Math.max(0, 1 - (rel - 0.75) / 0.25));
@@ -789,7 +812,7 @@ export function animatePageTurn(opts: {
         }
       }
       if (tube) {
-        const ro = CURL_MODEL === "slide" ? slideRoundness(t, w, h, rtl) : foldRoundness(t, w, h, rtl);
+        const ro = CURL_TUNE.model === "slide" ? slideRoundness(t, w, h, rtl) : foldRoundness(t, w, h, rtl);
         if (ro) {
           tube.style.display = "block";
           tube.style.clipPath = ro.clip;
@@ -800,7 +823,7 @@ export function animatePageTurn(opts: {
         }
       }
       if (shade) {
-        const sh = CURL_MODEL === "slide" ? slideShadow(t, w, h, rtl) : foldShadow(tBend, w, h, rtl);
+        const sh = CURL_TUNE.model === "slide" ? slideShadow(t, w, h, rtl) : foldShadow(tBend, w, h, rtl);
         if (sh) {
           shade.style.display = "block";
           shade.style.backgroundImage = sh;
@@ -926,27 +949,28 @@ export function createInteractivePeel(opts: {
   let done = false;
 
   const paint = (t: number): void => {
-    // Grip until SHEET_RELEASE_T, then the bend freezes and the whole
+    // Grip until CURL_TUNE.releaseT, then the bend freezes and the whole
     // sheet departs (release-and-slide — a loose sheet lifts off the
     // pile; it never folds over a crease like a bound page).
     // The corner lift RELAXES once the sheet comes free — slightly
     // bent paper springs back flat; it doesn't stay creased.
-    const relRaw = t <= SHEET_RELEASE_T ? 0 : (t - SHEET_RELEASE_T) / (1 - SHEET_RELEASE_T);
-    const tBend = t <= SHEET_RELEASE_T ? t : SHEET_RELEASE_T * Math.max(0, 1 - relRaw * 2.5);
-    const ff = CURL_MODEL === "slide" ? slideFrame(t, w, h, notch, rtl) : foldFrame(tBend, w, h, notch, rtl);
-    const rel = CURL_MODEL === "slide" || t <= SHEET_RELEASE_T
-      ? 0 : (t - SHEET_RELEASE_T) / (1 - SHEET_RELEASE_T);
+    const relT = CURL_TUNE.releaseT;
+      const relRaw = t <= relT ? 0 : (t - relT) / (1 - relT);
+    const tBend = t <= relT ? t : relT * Math.max(0, 1 - relRaw * 2.5);
+    const ff = CURL_TUNE.model === "slide" ? slideFrame(t, w, h, notch, rtl) : foldFrame(tBend, w, h, notch, rtl);
+    const rel = CURL_TUNE.model === "slide" || t <= relT
+      ? 0 : (t - relT) / (1 - relT);
     if (rel > 0) {
       // LIFT: picked up off the pile in the first sliver of drag —
       // slight scale, blooming cast shadow. Then the SLIDE: x follows
       // the drag linearly (the sheet moves WITH the thumb); the
       // upward arc and spin build later.
       const lift = Math.min(1, rel / 0.08);
-      const fx = -w * 1.05 * rel * (rtl ? -1 : 1);
-      const fy = -w * 0.55 * rel * rel;
-      const rot = -6 * rel * (rtl ? -1 : 1);
+      const fx = -w * CURL_TUNE.flightX * rel * (rtl ? -1 : 1);
+      const fy = -w * CURL_TUNE.arcY * rel * rel;
+      const rot = -CURL_TUNE.spinDeg * rel * (rtl ? -1 : 1);
       turning.style.transform =
-        `translate(${fx.toFixed(1)}px, ${fy.toFixed(1)}px) rotate(${rot.toFixed(2)}deg) scale(${(1 + 0.018 * lift).toFixed(4)})`;
+        `translate(${fx.toFixed(1)}px, ${fy.toFixed(1)}px) rotate(${rot.toFixed(2)}deg) scale(${(1 + CURL_TUNE.lift * lift).toFixed(4)})`;
       turning.style.filter =
         `drop-shadow(0 ${(12 * lift).toFixed(1)}px ${(22 * lift).toFixed(1)}px rgba(0,0,0,${(0.32 * lift).toFixed(2)}))`;
       turning.style.opacity = String(rel < 0.75 ? 1 : Math.max(0, 1 - (rel - 0.75) / 0.25));
@@ -965,7 +989,7 @@ export function createInteractivePeel(opts: {
     } else {
       flap.style.display = "none";
     }
-    const ro = CURL_MODEL === "slide" ? slideRoundness(t, w, h, rtl) : foldRoundness(t, w, h, rtl);
+    const ro = CURL_TUNE.model === "slide" ? slideRoundness(t, w, h, rtl) : foldRoundness(t, w, h, rtl);
     if (ro) {
       tube.style.display = "block";
       tube.style.clipPath = ro.clip;
@@ -974,7 +998,7 @@ export function createInteractivePeel(opts: {
     } else {
       tube.style.display = "none";
     }
-    const sh = CURL_MODEL === "slide" ? slideShadow(t, w, h, rtl) : foldShadow(tBend, w, h, rtl);
+    const sh = CURL_TUNE.model === "slide" ? slideShadow(t, w, h, rtl) : foldShadow(tBend, w, h, rtl);
     if (sh) {
       shade.style.display = "block";
       shade.style.backgroundImage = sh;

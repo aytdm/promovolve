@@ -182,5 +182,148 @@
       await customElements.whenDefined("expandable-magazine-banner");
       mount();
     </script>
+
+    <!-- ── Paper-feel tuning panel (dev only) ─────────────────────────
+         PAPER_FEEL is a const BINDING to a mutable record and every
+         gesture reads it fresh, so mutating the current weight's values
+         here retunes the physics LIVE — no rebuild, no remount. Sliders
+         write into PAPER_FEEL[CONFIG.paperWeight]; "copy" puts the
+         current values on the clipboard as a types.ts-ready line. -->
+    <script type="module">
+      import { PAPER_FEEL } from "/src/types.ts";
+      import { CURL_TUNE } from "/src/paper.ts";
+      const FIELDS = [
+        ["travel",   0.8, 3.0, 0.05, "pull stiffness — thumb-distance per fold"],
+        ["commitAt", 0.15, 0.7, 0.01, "how far a pull must go to commit"],
+        ["flickVel", 0.8, 5.0, 0.05, "release velocity that throws the page"],
+        ["springK",  60, 300, 2,     "settle-spring stiffness"],
+        ["springC",  6, 40, 1,       "damping — lower = floppier"],
+        ["tempo",    0.4, 2.2, 0.05, "deal/fly speed — mass"],
+      ];
+      const panel = document.createElement("div");
+      panel.id = "feel-panel";
+      panel.style.cssText =
+        "position:fixed;bottom:12px;right:12px;z-index:2000;background:#16161cee;border:1px solid #2a2a33;" +
+        "border-radius:10px;padding:12px 14px;font:12px/1.5 ui-monospace,monospace;color:#ddd;width:250px";
+      panel.innerHTML = `<div data-head style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;cursor:pointer">
+        <strong style="color:#f5c518">paper feel <span data-w></span></strong>
+        <span><button data-copy title="copy as types.ts line">copy</button>
+        <button data-reset>reset</button></span></div>`;
+      // Collapsible — on a phone the panel would otherwise cover the
+      // slot. Header click toggles; starts collapsed on narrow screens.
+      const applyCollapsed = (c) => {
+        panel.dataset.collapsed = c ? "1" : "";
+        for (const el of panel.children)
+          if (!el.hasAttribute("data-head")) el.style.display = c ? "none" : "";
+      };
+      panel.querySelector("[data-head]").addEventListener("click", (e) => {
+        if (e.target instanceof HTMLButtonElement) return; // copy/reset stay buttons
+        applyCollapsed(!panel.dataset.collapsed);
+      });
+      for (const b of panel.querySelectorAll("button"))
+        b.style.cssText = "background:#23232c;color:#ddd;border:1px solid #34343f;border-radius:5px;padding:1px 7px;cursor:pointer;font:inherit;margin-left:4px";
+      const defaults = JSON.parse(JSON.stringify(PAPER_FEEL));
+      const rows = {};
+      for (const [key, min, max, step, tip] of FIELDS) {
+        const row = document.createElement("label");
+        row.title = tip;
+        row.style.cssText = "display:grid;grid-template-columns:64px 1fr 44px;gap:6px;align-items:center;margin:3px 0";
+        row.innerHTML = `<span>${key}</span><input type="range" min="${min}" max="${max}" step="${step}"><output style="text-align:right;color:#f5c518"></output>`;
+        panel.appendChild(row);
+        rows[key] = { input: row.querySelector("input"), out: row.querySelector("output") };
+        rows[key].input.oninput = () => {
+          const v = parseFloat(rows[key].input.value);
+          PAPER_FEEL[window.__cfgWeight()][key] = v;
+          rows[key].out.textContent = v;
+        };
+      }
+      // The main script's CONFIG isn't visible from this module — read the
+      // active weight off the toolbar's highlighted button instead.
+      window.__cfgWeight = () => {
+        for (const b of document.querySelectorAll(".bar button"))
+          if (["light","medium","heavy"].includes(b.textContent) && b.className === "active") return b.textContent;
+        return "medium";
+      };
+      const sync = () => {
+        const w = window.__cfgWeight();
+        panel.querySelector("[data-w]").textContent = "· " + w;
+        for (const [key] of FIELDS) {
+          rows[key].input.value = PAPER_FEEL[w][key];
+          rows[key].out.textContent = PAPER_FEEL[w][key];
+        }
+      };
+      panel.querySelector("[data-reset]").onclick = () => {
+        const w = window.__cfgWeight();
+        Object.assign(PAPER_FEEL[w], defaults[w]);
+        sync();
+      };
+      panel.querySelector("[data-copy]").onclick = () => {
+        const w = window.__cfgWeight();
+        const f = PAPER_FEEL[w];
+        navigator.clipboard.writeText(
+          `${w}: { travel: ${f.travel}, commitAt: ${f.commitAt}, flickVel: ${f.flickVel}, springK: ${f.springK}, springC: ${f.springC}, tempo: ${f.tempo} },`);
+      };
+      // Re-sync when the weight buttons switch stock.
+      document.addEventListener("click", (e) => {
+        if (e.target instanceof HTMLButtonElement &&
+            ["light","medium","heavy"].includes(e.target.textContent)) setTimeout(sync, 0);
+      });
+
+      // ── Curl + flight geometry (CURL_TUNE — creative-global, not per
+      // stock). Same live-mutation trick: every painted frame reads the
+      // object fresh. The model toggle swaps the whole curl family:
+      // "corner" = production mirror fold, "slide" = fixed-angle curl.
+      const GEO = [
+        ["releaseT", 0, 0.6, 0.01, "grip fraction before the sheet comes free (0 = pure slide)"],
+        ["flightX",  0.5, 2.0, 0.05, "flight distance × width"],
+        ["arcY",     0, 1.5, 0.05,   "flight arc height × width"],
+        ["spinDeg",  0, 25, 0.5,     "spin at full flight (deg)"],
+        ["lift",     0, 0.06, 0.002, "pickup scale bump"],
+      ];
+      const geoDefaults = { ...CURL_TUNE };
+      const sep = document.createElement("div");
+      sep.style.cssText = "display:flex;justify-content:space-between;align-items:center;margin:8px 0 4px;border-top:1px solid #2a2a33;padding-top:8px";
+      sep.innerHTML = `<strong style="color:#f5c518">curl geometry</strong>
+        <span><button data-model></button><button data-georeset>reset</button></span>`;
+      for (const b of sep.querySelectorAll("button"))
+        b.style.cssText = "background:#23232c;color:#ddd;border:1px solid #34343f;border-radius:5px;padding:1px 7px;cursor:pointer;font:inherit;margin-left:4px";
+      panel.appendChild(sep);
+      const geoRows = {};
+      for (const [key, min, max, step, tip] of GEO) {
+        const row = document.createElement("label");
+        row.title = tip;
+        row.style.cssText = "display:grid;grid-template-columns:64px 1fr 44px;gap:6px;align-items:center;margin:3px 0";
+        row.innerHTML = `<span>${key}</span><input type="range" min="${min}" max="${max}" step="${step}"><output style="text-align:right;color:#f5c518"></output>`;
+        panel.appendChild(row);
+        geoRows[key] = { input: row.querySelector("input"), out: row.querySelector("output") };
+        geoRows[key].input.oninput = () => {
+          const v = parseFloat(geoRows[key].input.value);
+          CURL_TUNE[key] = v;
+          geoRows[key].out.textContent = v;
+        };
+      }
+      const modelBtn = sep.querySelector("[data-model]");
+      const geoSync = () => {
+        modelBtn.textContent = CURL_TUNE.model;
+        modelBtn.title = "curl model — corner (production fold) vs slide (fixed-angle curl)";
+        for (const [key] of GEO) {
+          geoRows[key].input.value = CURL_TUNE[key];
+          geoRows[key].out.textContent = CURL_TUNE[key];
+        }
+      };
+      modelBtn.onclick = () => {
+        CURL_TUNE.model = CURL_TUNE.model === "corner" ? "slide" : "corner";
+        geoSync();
+      };
+      sep.querySelector("[data-georeset]").onclick = () => {
+        Object.assign(CURL_TUNE, geoDefaults);
+        geoSync();
+      };
+      geoSync();
+
+      document.body.appendChild(panel);
+      applyCollapsed(window.innerWidth < 700);
+      sync();
+    </script>
   </body>
 </html>

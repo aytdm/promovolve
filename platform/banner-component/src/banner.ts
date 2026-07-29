@@ -26,6 +26,20 @@ function resolveExpandEffect(cfg: BannerConfig): ExpandAnimation {
   return cfg.entrance === "fade" ? "fade" : "stack";
 }
 
+// The paper illusion's CSS half (the constructor installs the event
+// half): no text selection mid-peel, no iOS long-press save-image
+// callout, no native image drag ghosts. Interaction is untouched —
+// these suppress presentation-layer native behaviors only; every
+// pointer event still reaches the component's own gesture code.
+const SOLID_SHEET_CSS = `
+  * {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+  img { -webkit-user-drag: none; }
+`;
+
 // Effect CSS, motion helpers, and pure utilities live in their own
 // modules (expand-effects.ts, motion.ts, utils.ts) so this file
 // stays focused on the custom-element lifecycle, render pipeline,
@@ -129,7 +143,28 @@ export class ExpandableMagazineBanner extends HTMLElement {
     super();
     this.attachShadow({ mode: "open" });
     this.handleKeyDown = (e) => this.onKeyDown(e);
+    // The creative must read as ONE sheet of paper, not a collection of
+    // DOM parts. Suppress the NATIVE behaviors that decompose it
+    // mid-gesture — native image ghost-drags (desktop) and long-press
+    // context menus (Android; iOS's save-image callout is killed by
+    // -webkit-touch-callout in SOLID_SHEET_CSS). Pointer events are
+    // untouched: the peel/dog-ear/tap gestures keep the full stream —
+    // in fact they gain reliability, since a native image-drag used to
+    // steal the stream mid-peel. Desktop right-click stays usable
+    // (touch-originated menus only). Listeners live on the shadow ROOT,
+    // so innerHTML re-renders never shed them.
+    this.shadowRoot?.addEventListener("dragstart", (e) => e.preventDefault());
+    this.shadowRoot?.addEventListener(
+      "pointerdown",
+      (e) => { this._lastPointerWasTouch = (e as PointerEvent).pointerType === "touch"; },
+      true,
+    );
+    this.shadowRoot?.addEventListener("contextmenu", (e) => {
+      if (this._lastPointerWasTouch) e.preventDefault();
+    });
   }
+
+  private _lastPointerWasTouch = false;
 
   static get observedAttributes(): string[] {
     return ["pages", "width", "height", "config", "collapsed-page-index", "mode", "force-mobile", "preview-frame", "imp-url"];
@@ -1227,6 +1262,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
     this.shadowRoot.innerHTML = trustedHTML(`
       <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
+        ${SOLID_SHEET_CSS}
         .design-box {
           container-type: size;
           aspect-ratio: ${aspectCss};
