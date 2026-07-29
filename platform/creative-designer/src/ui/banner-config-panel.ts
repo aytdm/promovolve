@@ -5,7 +5,7 @@
 // theatre), reading direction, and the paper stock (weight + back
 // colour). Deal tempo derives from the paper weight.
 
-import { PAPER_WEIGHTS, type PaperWeight } from "@banner/types";
+import { PAPER_FEEL, PAPER_WEIGHTS, TEMPO_MAX, TEMPO_MIN, type PaperWeight } from "@banner/types";
 import type { Store } from "../store";
 import type { DesignerState } from "../types";
 import { tokens } from "./tokens";
@@ -163,6 +163,47 @@ export function mountBannerConfigPanel(
   weightRow.appendChild(weightSelect);
   panel.appendChild(weightRow);
 
+  // Deal/fly tempo: how fast the reader's sheets deal in on open and fly
+  // away on turns/close. Unset ("auto") follows the paper stock's preset
+  // (light snaps, heavy is stately); the slider overrides it per
+  // creative. The indicator always shows the EFFECTIVE multiplier.
+  const tempoRow = document.createElement("div");
+  tempoRow.style.cssText = "display:flex;align-items:center;gap:8px;margin-top:8px;";
+  const tempoLabel = document.createElement("label");
+  tempoLabel.textContent = "Tempo";
+  tempoLabel.style.cssText = `flex:0 0 auto;font-size:11px;color:${tokens.ink300};`;
+  tempoRow.appendChild(tempoLabel);
+  const tempoSlider = document.createElement("input");
+  tempoSlider.type = "range";
+  tempoSlider.min = String(TEMPO_MIN);
+  tempoSlider.max = String(TEMPO_MAX);
+  tempoSlider.step = "0.05";
+  tempoSlider.title = "Deal-in / fly-away speed — lower is slower, statelier";
+  tempoSlider.style.cssText = "flex:1 1 auto;min-width:0;";
+  tempoRow.appendChild(tempoSlider);
+  const tempoOut = document.createElement("output");
+  tempoOut.style.cssText = `flex:0 0 34px;text-align:right;font-size:11px;color:${tokens.ink100};font-variant-numeric:tabular-nums;`;
+  tempoRow.appendChild(tempoOut);
+  const tempoReset = document.createElement("button");
+  tempoReset.type = "button";
+  tempoReset.textContent = "Auto";
+  tempoReset.title = "Follow the paper stock's own tempo";
+  tempoReset.style.cssText = `flex:0 0 auto;font-size:11px;color:${tokens.ink300};background:${tokens.ink900};border:1px solid ${tokens.ink500};border-radius:4px;padding:4px 6px;cursor:pointer;`;
+  tempoRow.appendChild(tempoReset);
+  const presetTempo = (): number =>
+    PAPER_FEEL[store.state.bannerConfig.paperWeight ?? "medium"].tempo;
+  tempoSlider.addEventListener("input", () => {
+    const v = parseFloat(tempoSlider.value);
+    const current = store.state.bannerConfig;
+    store.commit({ ...store.state, bannerConfig: { ...current, tempo: v } });
+  });
+  tempoReset.addEventListener("click", () => {
+    const current = store.state.bannerConfig;
+    if (current.tempo === undefined) return;
+    store.commit({ ...store.state, bannerConfig: { ...current, tempo: undefined } });
+  });
+  panel.appendChild(tempoRow);
+
   // Paper back colour: the stock revealed as a page peels (flap, dog-ear
   // tease, folded corner — one magazine, one paper). The fiber/mottle/
   // sheen texture rides on top of whatever base tone is picked. The reset
@@ -203,6 +244,15 @@ export function mountBannerConfigPanel(
       if (dirSelect.value !== dir) dirSelect.value = dir;
       const weight = state.bannerConfig.paperWeight ?? "medium";
       if (weightSelect.value !== weight) weightSelect.value = weight;
+      // Tempo indicator: slider + number always show the EFFECTIVE
+      // multiplier; the ×-suffix goes amber when overriding the stock.
+      const overridden = state.bannerConfig.tempo !== undefined;
+      const effTempo = overridden ? state.bannerConfig.tempo! : presetTempo();
+      const slider = String(effTempo);
+      if (tempoSlider.value !== slider) tempoSlider.value = slider;
+      tempoOut.textContent = `${effTempo.toFixed(2)}×`;
+      tempoOut.style.color = overridden ? tokens.amber : tokens.ink300;
+      tempoReset.style.opacity = overridden ? "1" : "0.5";
       // Unset back colour → show the default warm tone in the picker (it
       // can't represent "unset", so the swatch mirrors the effective look).
       const back = state.bannerConfig.paperBackColor ?? DEFAULT_BACK_COLOR;

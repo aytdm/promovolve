@@ -10,7 +10,7 @@
 // Object.assign blocks.
 
 import type { BannerConfig, ExpandAnimation } from "./types";
-import { PAPER_FEEL } from "./types";
+import { dealTempo } from "./types";
 import { EXPAND_EFFECT_CSS } from "./expand-effects";
 import { PAPER_CSS } from "./paper";
 
@@ -115,7 +115,8 @@ export function buildExpandWrapper(opts: {
   }
   // Paper mass drives the deal tempo: heavy stock enters (and leaves)
   // the pile slower; light snaps. Same multiplier the close flight uses.
-  const tempo = PAPER_FEEL[cfg.paperWeight ?? "medium"].tempo;
+  // A per-creative Designer override rides on top (dealTempo).
+  const tempo = dealTempo(cfg);
   // The deal waits for the scrim: --deal-base must match buildOverlay's
   // opacity transition (0.4s) so the sheets start the moment the room
   // finishes dimming. See the --deal-base note in EXPAND_EFFECT_CSS.

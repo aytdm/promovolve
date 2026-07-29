@@ -309,6 +309,25 @@ export const PAPER_FEEL: Record<PaperWeight, PaperFeel> = {
   heavy:  { travel: 1.9, commitAt: 0.42, flickVel: 2.6, springK: 130, springC: 24, tempo: 1.3 },
 };
 
+// Bounds for the per-creative tempo override (the Designer's Tempo
+// slider). Shared by the slider and the clamp so hand-edited JSON can't
+// stall the open/close choreography or make it strobe.
+export const TEMPO_MIN = 0.4;
+export const TEMPO_MAX = 2.2;
+
+/**
+ * Effective deal/fly tempo for a config: the explicit per-creative
+ * override (Designer's Tempo control) when set, else the paper stock's
+ * preset. This is the ONE read path — every deal-in, fly-away and
+ * close-timing consumer goes through it, so the override always moves
+ * all of them together.
+ */
+export function dealTempo(cfg: BannerConfig): number {
+  const preset = PAPER_FEEL[cfg.paperWeight ?? "medium"].tempo;
+  const t = cfg.tempo ?? preset;
+  return Math.min(TEMPO_MAX, Math.max(TEMPO_MIN, t));
+}
+
 export interface BannerConfig {
   layout: "auto";
   font: "sans" | "serif";
@@ -328,6 +347,11 @@ export interface BannerConfig {
   // Paper stock for the interactive page-peel (see PAPER_FEEL). Defaults
   // to "medium" when unset. Purely a hand-feel preset — no visual change.
   paperWeight?: PaperWeight;
+  // Per-creative deal/fly tempo override (the Designer's Tempo control):
+  // multiplies the open deal-in, the fly-away turns' close choreography
+  // and their stagger. Unset = the paperWeight preset's tempo. Clamped
+  // to [TEMPO_MIN, TEMPO_MAX] on read (see dealTempo).
+  tempo?: number;
   // Base tone of the paper BACK revealed as a page peels (the flap, the
   // dog-ear tease, the folded corner — all one stock). A CSS color; the
   // fiber + mottle texture and lighting gradient still ride on top. Unset

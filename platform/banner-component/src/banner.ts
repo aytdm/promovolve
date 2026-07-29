@@ -1,5 +1,5 @@
 import type { BannerConfig, ExpandAnimation, LayoutItem, MotionTarget, Page, PaperFeel, TextureBg, VideoBg } from "./types";
-import { PAPER_FEEL } from "./types";
+import { PAPER_FEEL, dealTempo } from "./types";
 import { fontMain, fontUI } from "./fonts";
 import { layoutItemToNode } from "./layout-item";
 import { applyTargetState, autoFitText, harmonizeAutofit, transitionFor } from "./motion";
@@ -582,7 +582,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
         ? cfg.expandDurationMs
         // stack: last sheet lands at (360 + 2·90)·tempo; +80 buffer.
         : resolveExpandEffect(cfg) === "stack"
-          ? Math.round(540 * this.paperFeel().tempo) + 80 : 400;
+          ? Math.round(540 * dealTempo(this.configData)) + 80 : 400;
       if (this._collapseHideTimer) window.clearTimeout(this._collapseHideTimer);
       this._collapseHideTimer = window.setTimeout(() => {
         this._collapseHideTimer = null;
@@ -832,7 +832,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
       if (el) flyers.push(el);
     }
     if (flyers.length === 0) { this._collapse(); return; }
-    const tempo = this.paperFeel().tempo;
+    const tempo = dealTempo(this.configData);
     const flyMs = Math.round(360 * tempo);
     const flyStagger = Math.round(90 * tempo);
     // Chrome leaves FIRST, then the sheets: the pill's 120ms exit fade
