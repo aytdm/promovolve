@@ -284,6 +284,16 @@
                 <div x-show="isImageUsed(imgIdx)" class="absolute inset-0 flex items-center justify-center bg-black/30">
                   <span class="text-white text-xs font-bold" x-text="'P' + (imageUsedByPage(imgIdx) + 1)"></span>
                 </div>
+                {{/* Save-to-library star. stop keeps the click from also
+                     assigning the image to the active page. Filled amber =
+                     in the library (delete-able via toggle or the designer's
+                     asset modal); outline = this session only. */}}
+                <button type="button"
+                        @click.stop="toggleLibrarySave(img)"
+                        :title="libSaved[img.src] && libSaved[img.src] !== 'saving' ? '{{t "In your image library — click to remove"}}' : '{{t "Save to your image library for reuse in other creatives"}}'"
+                        class="absolute top-1 right-1 w-6 h-6 rounded-full flex items-center justify-center text-sm leading-none shadow"
+                        :class="libSaved[img.src] === 'saving' ? 'bg-white/80 text-gray-300' : (libSaved[img.src] ? 'bg-amber-400 text-white' : 'bg-white/80 text-gray-400 hover:text-amber-500')"
+                        x-text="libSaved[img.src] && libSaved[img.src] !== 'saving' ? '★' : '☆'"></button>
               </div>
             </template>
           </div>
@@ -390,6 +400,12 @@ function creativeEditor() {
     useOriginalFonts: false,  // the advertiser's license confirmation
     // Materials from LP
     allImages: [],    // [{src, width, height, alt}]
+    // Explicit save-to-library curation: src → asset id once saved,
+    // 'saving' while the import is in flight. NOTHING is saved unless
+    // the user stars a tile — extraction alone never touches the
+    // library. Saved images appear in the designer's asset modal and
+    // any future creative, independent of this wizard session.
+    libSaved: {},
     // Hover magnifier over the image-pool thumbnails: index of the
     // hovered image (null = hidden), the floating preview position, and
     // the natural dimensions read from the enlarged img on load.
@@ -858,6 +874,55 @@ function creativeEditor() {
     // === Compose helpers ===
     openImagePicker(pageIdx) {
       this.activePageIdx = pageIdx;
+    },
+
+    // Save one tray image to the advertiser's image library (star on) or
+    // remove it again (star off). Saving rides the existing import-urls
+    // endpoint: analysis already parked candidate bytes on our CDN, so
+    // the "download" is a self-fetch that hash-dedups into a bare
+    // ownership row. Errors reuse the upload error line.
+    async toggleLibrarySave(img) {
+      const cur = this.libSaved[img.src];
+      if (cur === 'saving') return;
+      this.uploadError = '';
+      if (cur) {
+        // Unsave: delete the ownership row (the shared bytes stay).
+        this.libSaved[img.src] = 'saving';
+        try {
+          const resp = await fetch('/advertiser/assets/' + encodeURIComponent(cur), {
+            method: 'DELETE', credentials: 'same-origin',
+          });
+          if (!resp.ok) throw new Error('HTTP ' + resp.status);
+          delete this.libSaved[img.src];
+        } catch (e) {
+          this.libSaved[img.src] = cur; // still saved
+          this.uploadError = e.message;
+        }
+        return;
+      }
+      this.libSaved[img.src] = 'saving';
+      try {
+        const name = (() => {
+          try {
+            const seg = new URL(img.src).pathname.split('/').filter(Boolean).pop() || '';
+            return seg.slice(0, 100) || 'lp-image';
+          } catch { return 'lp-image'; }
+        })();
+        const resp = await fetch('/advertiser/assets/import-urls', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'same-origin',
+          body: JSON.stringify({ urls: [{ url: img.src, filename: name }] }),
+        });
+        if (!resp.ok) throw new Error('HTTP ' + resp.status);
+        const data = await resp.json();
+        const asset = data.results && data.results[0] && data.results[0].asset;
+        if (!asset || !asset.id) throw new Error('{{t "could not save this image"}}');
+        this.libSaved[img.src] = asset.id;
+      } catch (e) {
+        delete this.libSaved[img.src];
+        this.uploadError = e.message;
+      }
     },
 
     // Shared upload core — used by both the file input and the
