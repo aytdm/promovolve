@@ -94,6 +94,25 @@
 })();
 </script>
 {{end}}
+{{/* Flash-free polling: the pending/pubGrace poll below re-fetches and
+     swaps this area every 3s, and each swap recreates the <img> nodes —
+     a visible blink on every thumbnail even when NOTHING changed (the
+     common case while waiting on render/verification). Cancel the swap
+     when the incoming fragment is identical to what's already on
+     screen; real changes still swap. Fails open — any parse trouble or
+     mutation-induced mismatch just swaps like before. */}}
+<script>
+  document.addEventListener('htmx:beforeSwap', function (evt) {
+    if (!evt.detail || !evt.detail.target || evt.detail.target.id !== 'creatives-area' || !evt.detail.xhr) return;
+    try {
+      var doc = new DOMParser().parseFromString(evt.detail.xhr.responseText, 'text/html');
+      var incoming = doc.getElementById('creatives-area');
+      if (incoming && incoming.outerHTML === evt.detail.target.outerHTML) {
+        evt.detail.shouldSwap = false;
+      }
+    } catch (e) { /* fall through to the normal swap */ }
+  });
+</script>
 <div id="creatives-area"
      hx-get="/advertiser/creatives?campaignId={{.CampaignID}}{{if .ListNav}}{{if .ListNav.Sort}}&amp;sort={{.ListNav.Sort}}{{end}}&amp;page={{.ListNav.Page}}{{end}}"
      hx-trigger="every 3s [document.querySelectorAll('[data-pending-render], [data-pending-verify]').length > 0 || (window.__pubGrace && Date.now() < window.__pubGrace)]"
@@ -135,9 +154,11 @@
   <div class="bg-white rounded-lg border overflow-hidden group"
        {{/* Mark cards waiting on Gemini category verification so the
             poll loop keeps reloading until matchConfidence lands.
-            Drafts skip verification; only Active creatives that haven't
-            yet reported a confidence score are pending. */}}
-       {{if and (eq .ActiveStatus "Active") (not .Confidence)}}data-pending-verify{{end}}>
+            Drafts skip verification; only RECENT Active creatives
+            without a score are pending — the server caps the marker at
+            15 minutes so a permanently failed verification can't keep
+            the grid polling forever. */}}
+       {{if .PendingVerify}}data-pending-verify{{end}}>
     <!-- Thumbnail area — always shown at 16:9 (PC expanded aspect),
          since one creative now covers every slot size. -->
     <div class="aspect-video bg-gray-50 flex items-center justify-center">

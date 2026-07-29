@@ -2787,8 +2787,13 @@ type creativeData struct {
 	ActiveStatus string
 	AssetURL     string
 	Confidence   string
-	PagesJson    string
-	Impressions  int64
+	// Freshly published and awaiting its verification score — drives the
+	// grid's poll loop. Time-capped: an old creative whose verification
+	// permanently failed must not poll forever (see the cap where this
+	// is set).
+	PendingVerify bool
+	PagesJson     string
+	Impressions   int64
 	Clicks       int64
 	CTAClicks    int64
 	CTR          string
@@ -2928,6 +2933,7 @@ func (h *Handler) AdvertiserCreatives(w http.ResponseWriter, r *http.Request) {
 				BrokenImages     int      `json:"brokenImages"`
 				SafetyAdvisories []string `json:"safetyAdvisories"`
 				SafetyScore      *float64 `json:"safetyScore"`
+				CreatedAt        string   `json:"createdAt"`
 			} `json:"data"`
 		}
 		json.Unmarshal(crBody, &crResp)
@@ -2979,6 +2985,18 @@ func (h *Handler) AdvertiserCreatives(w http.ResponseWriter, r *http.Request) {
 			}
 			if c.MatchConfidence != nil {
 				cd.Confidence = fmt.Sprintf("%.0f%%", *c.MatchConfidence*100)
+			}
+			// Pending-verify drives the grid's 3s poll — but only for
+			// RECENT creatives. Verification retries once and then gives
+			// up (see CreativeProcessor); a creative whose score never
+			// landed must not keep every thumbnail on the page blinking
+			// forever. 15 min covers render + verify + the retry with
+			// generous slack.
+			cd.PendingVerify = cd.ActiveStatus == "Active" && cd.Confidence == ""
+			if cd.PendingVerify {
+				if t, err := time.Parse(time.RFC3339Nano, c.CreatedAt); err != nil || time.Since(t) > 15*time.Minute {
+					cd.PendingVerify = false
+				}
 			}
 			if st, ok := crStats[c.ID]; ok {
 				cd.Impressions = st.Impressions

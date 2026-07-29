@@ -595,11 +595,14 @@ object CreativeProcessor {
                   // → image. The first non-empty one wins. Logging the
                   // chosen source helps when diagnosing why Gemini
                   // returned no categories.
-                  val (verifyF, source) =
-                    if (designerText.nonEmpty) (client.verifyText(designerText, declaredCat), "designer-text")
+                  val (mkVerify, source) =
+                    if (designerText.nonEmpty)
+                      ((() => client.verifyText(designerText, declaredCat)), "designer-text")
                     else lpText match {
-                      case Some(text) if text.nonEmpty => (client.verifyText(text, declaredCat), "lp-snapshot")
-                      case _                           => (client.verify(bannerImageBytes, bannerMime, declaredCat), "image")
+                      case Some(text) if text.nonEmpty =>
+                        ((() => client.verifyText(text, declaredCat)), "lp-snapshot")
+                      case _ =>
+                        ((() => client.verify(bannerImageBytes, bannerMime, declaredCat)), "image")
                     }
                   system.log.info(
                     "CreativeProcessor: {} verifying via {} ({} chars)",
@@ -608,6 +611,26 @@ object CreativeProcessor {
                      else if (source == "lp-snapshot") lpText.map(_.length).getOrElse(0)
                      else bannerImageBytes.length): java.lang.Integer
                   )
+                  // A dropped verification is not cosmetic: match_confidence
+                  // stays NULL forever, the dashboard's pending-verify poll
+                  // never resolves for this creative, and publishers see no
+                  // match score. (This was a bare .foreach — a failed future
+                  // simply vanished.) One delayed retry absorbs transient
+                  // LLM hiccups; a second failure is logged at ERROR and the
+                  // creative heals on republish.
+                  val verifyF = mkVerify().recoverWith { case e1 =>
+                    system.log.warn(
+                      "CreativeProcessor: {} verification failed via {} — retrying in 30s: {}",
+                      creativeId, source, e1.getMessage
+                    )
+                    org.apache.pekko.pattern.after(30.seconds)(mkVerify())(using system)
+                  }
+                  verifyF.failed.foreach { e =>
+                    system.log.error(
+                      "CreativeProcessor: {} verification FAILED after retry via {} — match_confidence stays unset until republish: {}",
+                      creativeId, source, e.getMessage
+                    )
+                  }
                   verifyF.foreach { result =>
                     creativeRepo.updateVerification(
                       creativeId, result.matchConfidence, result.reason,
