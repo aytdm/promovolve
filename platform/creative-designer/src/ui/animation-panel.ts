@@ -12,9 +12,12 @@
 // auto-stagger (delay += step per item, selection order), which is how
 // real pages get choreographed without arithmetic.
 //
-// The legacy raw animationTo end-pose editor survives under
-// "Advanced" — it's a different tool (emphasis moves, exit poses) and
-// power users still want it.
+// The raw animationTo end-pose editor was REMOVED (2026-07): absolute
+// target coordinates silently detach when the item is dragged, and
+// post-settle drift cuts against the curated-motion stance. The engine
+// still plays animationTo (published creatives are frozen), so an item
+// that already carries one gets a notice + remove button — never
+// invisible state.
 //
 // Edit semantics match props-panel: `change` events → store.commit
 // (one undo step per edit). ▶ Replay re-fires entrances on the canvas
@@ -23,7 +26,7 @@
 import { ANIMATION_PRESETS, EASING_MENU, easingIdFor, presetById, presetDistance, withDistance } from "../animation-presets";
 import { currentItem, updateItem } from "../state";
 import type { Store } from "../store";
-import type { DesignerState, LayoutItem, MotionFrom, MotionTarget } from "../types";
+import type { DesignerState, LayoutItem, MotionFrom } from "../types";
 import { tokens } from "./tokens";
 
 export interface AnimationPanelHandle {
@@ -149,69 +152,23 @@ function build(panel: HTMLElement, idx: number, item: LayoutItem, store: Store, 
   // its ▶.
   if (item.animationFrom || item.animationTo) panel.appendChild(replayButton());
 
-  // Advanced: the raw end-pose tween (emphasis moves). Unchanged
-  // semantics; collapsed behind a details fold so the preset flow
-  // stays clean.
-  const adv = document.createElement("details");
-  adv.style.cssText = `margin-top:14px;padding-top:12px;border-top:1px solid ${tokens.ink500};`;
-  const advSummary = document.createElement("summary");
-  advSummary.textContent = "Advanced — end pose (animationTo)";
-  advSummary.style.cssText = `font-size:11px;color:${tokens.ink300};cursor:pointer;`;
-  adv.appendChild(advSummary);
-  if (item.animationTo) adv.open = true;
-  panel.appendChild(adv);
-  buildAdvanced(adv, idx, item, store, setters);
+  // Items from before the editor was removed may still carry an
+  // end-pose tween. Surface it — it plays in delivery, so it must be
+  // visible and removable here.
+  if (item.animationTo) {
+    const legacy = document.createElement("div");
+    legacy.style.cssText = `margin-top:14px;padding-top:12px;border-top:1px solid ${tokens.ink500};`;
+    const note = document.createElement("div");
+    note.style.cssText = `color:${tokens.ink400};font-size:11px;line-height:1.4;margin-bottom:8px;`;
+    note.textContent = "This item has an end-pose tween (a legacy feature): after entering, it moves to a fixed position. ▶ Replay previews it.";
+    legacy.appendChild(note);
+    legacy.appendChild(dangerButton("Remove end-pose tween", () => {
+      store.commit(updateItem(store.state, idx, (it) => ({ ...it, animationTo: undefined })));
+    }));
+    panel.appendChild(legacy);
+  }
 
   return { key, setters };
-}
-
-function buildAdvanced(
-  host: HTMLElement, idx: number, item: LayoutItem, store: Store,
-  setters: Array<(item: LayoutItem) => void>,
-): void {
-  if (!item.animationTo) {
-    const add = document.createElement("div");
-    add.style.cssText = "margin-top:8px;";
-    add.appendChild(primaryButton("Add end-pose tween", () => {
-      store.commit(updateItem(store.state, idx, (it) => ({
-        ...it,
-        animationTo: { left: (it.left ?? 0) + 10, top: it.top ?? 0, duration: 0.8 },
-      })));
-    }));
-    host.appendChild(add);
-    return;
-  }
-  const target = item.animationTo;
-  const fields: Array<[string, NumericMotionKey]> = [
-    ["left (%)", "left"], ["top (%)", "top"], ["rotation (°)", "rotation"],
-    ["scale", "scale"], ["opacity", "opacity"], ["duration (s)", "duration"], ["delay (s)", "delay"],
-  ];
-  for (const [label, fkey] of fields) {
-    const set = optionalNumberField(host, label, target[fkey], (v) =>
-      commit(store, idx, (it) => ({ ...it, animationTo: withPhaseField(it.animationTo, fkey, v) })));
-    setters.push((it) => set(it.animationTo?.[fkey]));
-  }
-  const ease = select(host, "easing", [
-    { value: "", label: "(default)" },
-    { value: "linear", label: "linear" },
-    { value: "ease", label: "ease" },
-    { value: "ease-in", label: "ease-in" },
-    { value: "ease-out", label: "ease-out" },
-    { value: "ease-in-out", label: "ease-in-out" },
-  ], target.easing ?? "", (v) =>
-    commit(store, idx, (it) => ({ ...it, animationTo: { ...(it.animationTo ?? {}), easing: v || undefined } })));
-  setters.push((it) => {
-    if (document.activeElement === ease) return;
-    const v = it.animationTo?.easing ?? "";
-    if (ease.value !== v) ease.value = v;
-  });
-
-  const removeWrap = document.createElement("div");
-  removeWrap.style.cssText = "margin-top:10px;";
-  removeWrap.appendChild(dangerButton("Remove end-pose tween", () => {
-    store.commit(updateItem(store.state, idx, (it) => ({ ...it, animationTo: undefined })));
-  }));
-  host.appendChild(removeWrap);
 }
 
 // ─── Multi selection: one preset, staggered ───────────────────────
@@ -290,17 +247,6 @@ function replayButton(): HTMLButtonElement {
 
 // ─── Shared plumbing ──────────────────────────────────────────────
 
-type NumericMotionKey = Exclude<keyof MotionTarget, "easing">;
-
-function withPhaseField(
-  target: MotionTarget | undefined, key: NumericMotionKey, v: number | null,
-): MotionTarget {
-  const next = { ...(target ?? {}) };
-  if (v === null) delete next[key];
-  else next[key] = v;
-  return next;
-}
-
 function commit(store: Store, idx: number, fn: (it: LayoutItem) => LayoutItem): void {
   store.commit(updateItem(store.state, idx, fn));
 }
@@ -362,33 +308,6 @@ function numberField(
   return (v) => {
     if (document.activeElement === input) return;
     const next = String(v);
-    if (input.value !== next) input.value = next;
-  };
-}
-
-/** Optional numeric field (Advanced section) — empty = unset. */
-function optionalNumberField(
-  parent: HTMLElement, label: string, value: number | undefined,
-  onChange: (v: number | null) => void,
-): (v: number | undefined) => void {
-  const input = document.createElement("input");
-  input.type = "number";
-  input.step = "0.1";
-  input.placeholder = "—";
-  input.value = value === undefined ? "" : String(value);
-  input.style.cssText = INPUT_STYLE;
-  input.addEventListener("change", () => {
-    const raw = input.value.trim();
-    if (raw === "") onChange(null);
-    else {
-      const n = Number(raw);
-      if (Number.isFinite(n)) onChange(n);
-    }
-  });
-  row(parent, label, input);
-  return (v) => {
-    if (document.activeElement === input) return;
-    const next = v === undefined ? "" : String(v);
     if (input.value !== next) input.value = next;
   };
 }

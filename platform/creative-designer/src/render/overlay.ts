@@ -742,26 +742,20 @@ function buildMenu(store: Store): MenuEntry[] {
       onSelect: () => store.commit(ungroupSelection(store.state)),
     },
     "---",
-    {
-      label: hasAnim ? "Remove Animation" : "Add Animation",
-      disabled: !solo,
-      onSelect: () => {
-        if (!solo) return;
-        if (hasAnim) {
-          store.commit(updateItem(store.state, soloIdx, (it) => ({ ...it, animationTo: undefined })));
-        } else {
-          store.commit(updateItem(store.state, soloIdx, (it) => ({
-            ...it,
-            animationTo: {
-              left: (it.left ?? 0) + 10,
-              top: it.top ?? 0,
-              duration: 0.8,
+    // End-pose tweens can no longer be CREATED (entrances via the
+    // Animation panel replaced them) — but a legacy item that still
+    // carries one keeps its remove entry and its editable ghost.
+    ...(hasAnim
+      ? ([
+          {
+            label: "Remove End-Pose Tween",
+            onSelect: () => {
+              store.commit(updateItem(store.state, soloIdx, (it) => ({ ...it, animationTo: undefined })));
             },
-          })));
-        }
-      },
-    },
-    "---",
+          },
+          "---",
+        ] as MenuEntry[])
+      : []),
     {
       label: "Duplicate",
       shortcut: `${modKey}D`,
