@@ -13,7 +13,7 @@
 // dignified ads publishers are proud to carry. Six entrances with
 // tuned defaults beat a keyframe timeline that invites abuse.
 
-import type { MotionFrom } from "./types";
+import type { MotionFrom, MotionTarget } from "./types";
 
 export interface AnimationPreset {
   id: string;
@@ -49,6 +49,32 @@ export const ANIMATION_PRESETS: AnimationPreset[] = [
 
 export function presetById(id: string | undefined): AnimationPreset | undefined {
   return ANIMATION_PRESETS.find((p) => p.id === id);
+}
+
+// ─── Exit presets ─────────────────────────────────────────────────
+//
+// Curated EXITS materialize `animationTo` (the engine's end-pose
+// substrate) + `animationExitPreset`. Deliberately opacity/scale only —
+// no positional targets, so an exit can never point at a stale
+// location after the item is dragged (the trap that killed the raw
+// end-pose editor). `delay` is "after (s)": seconds from page
+// activation until the exit starts.
+
+export interface ExitPreset {
+  id: string;
+  label: string;
+  to: MotionTarget;
+}
+
+export const EXIT_PRESETS: ExitPreset[] = [
+  { id: "fade-out",    label: "Fade out",
+    to: { opacity: 0, delay: 2, duration: 0.6 } },
+  { id: "shrink-away", label: "Shrink away",
+    to: { opacity: 0, scale: 0.85, delay: 2, duration: 0.45 } },
+];
+
+export function exitPresetById(id: string | undefined): ExitPreset | undefined {
+  return EXIT_PRESETS.find((p) => p.id === id);
 }
 
 // Curated easing menu — named curves, not bezier strings. "Smooth" is

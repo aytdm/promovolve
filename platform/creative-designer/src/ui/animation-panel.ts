@@ -23,7 +23,7 @@
 // (one undo step per edit). ▶ Replay re-fires entrances on the canvas
 // component (edit mode suppresses the automatic players).
 
-import { ANIMATION_PRESETS, EASING_MENU, easingIdFor, presetById, presetDistance, withDistance } from "../animation-presets";
+import { ANIMATION_PRESETS, EASING_MENU, EXIT_PRESETS, easingIdFor, exitPresetById, presetById, presetDistance, withDistance } from "../animation-presets";
 import { currentItem, updateItem } from "../state";
 import type { Store } from "../store";
 import type { DesignerState, LayoutItem, MotionFrom } from "../types";
@@ -66,7 +66,7 @@ export function mountAnimationPanel(host: HTMLElement, store: Store): AnimationP
         return;
       }
       const idx = state.selectedItemIdxs[0]!;
-      const key = `${idx}|${item.type}|${item.animationPreset ?? ""}|${item.animationFrom ? "f" : ""}|${item.animationTo ? "t" : ""}`;
+      const key = `${idx}|${item.type}|${item.animationPreset ?? ""}|${item.animationExitPreset ?? ""}|${item.animationFrom ? "f" : ""}|${item.animationTo ? "t" : ""}`;
       if (!rendered || rendered.key !== key) {
         rendered = build(panel, idx, item, store, key);
       } else {
@@ -147,15 +147,62 @@ function build(panel: HTMLElement, idx: number, item: LayoutItem, store: Store, 
     });
   }
 
-  // Replay previews the WHOLE choreography (entrance + end pose), so it
-  // must exist whenever either does — an end-pose-only item still needs
-  // its ▶.
+  // Exit — curated, materializes animationTo (opacity/scale only, so
+  // it can't detach when the item moves the way raw end poses could).
+  const exitWrap = document.createElement("div");
+  exitWrap.style.cssText = `margin-top:14px;padding-top:12px;border-top:1px solid ${tokens.ink500};`;
+  panel.appendChild(exitWrap);
+  header(exitWrap, "Exit");
+  const exitSelect = select(exitWrap, "Preset", [
+    { value: "", label: "None" },
+    ...EXIT_PRESETS.map((p) => ({ value: p.id, label: p.label })),
+  ], item.animationExitPreset ?? "", (v) => {
+    commit(store, idx, (it) => {
+      if (v === "") return { ...it, animationTo: undefined, animationExitPreset: undefined };
+      const preset = exitPresetById(v)!;
+      return { ...it, animationTo: { ...preset.to }, animationExitPreset: preset.id };
+    });
+  });
+  setters.push((it) => {
+    if (document.activeElement === exitSelect) return;
+    const v = it.animationExitPreset ?? "";
+    if (exitSelect.value !== v) exitSelect.value = v;
+  });
+  if (item.animationExitPreset && item.animationTo) {
+    const after = numberField(exitWrap, "After (s)", item.animationTo.delay ?? 0, 0.1, (v) =>
+      commit(store, idx, (it) => ({
+        ...it,
+        animationTo: { ...(it.animationTo ?? {}), delay: Math.max(0, v) },
+      })));
+    setters.push((it) => after(it.animationTo?.delay ?? 0));
+    const edur = numberField(exitWrap, "Duration (s)", item.animationTo.duration ?? 0.6, 0.05, (v) =>
+      commit(store, idx, (it) => ({
+        ...it,
+        animationTo: { ...(it.animationTo ?? {}), duration: Math.max(0.05, v) },
+      })));
+    setters.push((it) => edur(it.animationTo?.duration ?? 0.6));
+    const eease = select(exitWrap, "Easing", EASING_MENU.map((e) => ({ value: e.id, label: e.label })),
+      easingIdFor(item.animationTo.easing), (v) =>
+        commit(store, idx, (it) => ({
+          ...it,
+          animationTo: { ...(it.animationTo ?? {}), easing: EASING_MENU.find((e) => e.id === v)?.css },
+        })));
+    setters.push((it) => {
+      if (document.activeElement === eease) return;
+      const v = easingIdFor(it.animationTo?.easing);
+      if (eease.value !== v) eease.value = v;
+    });
+  }
+
+  // Replay previews the WHOLE choreography (entrance + exit), so it
+  // must exist whenever either does.
   if (item.animationFrom || item.animationTo) panel.appendChild(replayButton());
 
-  // Items from before the editor was removed may still carry an
-  // end-pose tween. Surface it — it plays in delivery, so it must be
-  // visible and removable here.
-  if (item.animationTo) {
+  // Items from before the raw end-pose editor was removed may still
+  // carry a positional tween (no exit preset tag). Surface it — it
+  // plays in delivery, so it must be visible and removable here.
+  // Picking an Exit preset above overwrites it (a clean migration).
+  if (item.animationTo && !item.animationExitPreset) {
     const legacy = document.createElement("div");
     legacy.style.cssText = `margin-top:14px;padding-top:12px;border-top:1px solid ${tokens.ink500};`;
     const note = document.createElement("div");

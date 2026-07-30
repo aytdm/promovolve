@@ -73,6 +73,12 @@ interface LayoutItemBase {
   // The Designer preset that materialized animationFrom ("fade-up" …).
   // Pure UI round-trip metadata — the engine never reads it.
   animationPreset?: string;
+  // The Designer EXIT preset that materialized animationTo ("fade-out"
+  // …). Same round-trip-only rule. Curated exits only touch
+  // opacity/scale — never left/top — so they can't detach when the
+  // item is dragged; the Designer suppresses the motion ghost and raw
+  // end-pose affordances when this is set.
+  animationExitPreset?: string;
   // Historical: marked this item as a CTA click hotspot. Navigation is
   // now page-wide (a deliberate tap anywhere on the sheet opens the
   // landing page — banner.ts wires it at page level, with scroll/drag

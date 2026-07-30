@@ -346,12 +346,15 @@ function renderOverlay(root: HTMLElement, state: DesignerState): void {
     hit.appendChild(renderBadge(items.length - idx, isSelected(state, idx)));
     root.appendChild(hit);
 
-    // Motion ghost: if this item has animationTo and is selected,
-    // render a faded duplicate at the end position plus a dashed line
-    // between the two centers. The ghost is a draggable hit target
-    // (data-cd-ghost-idx). Skipped on locked items — the ghost would
-    // be draggable and that contradicts the lock.
-    if (item.animationTo && isSelected(state, idx) && state.selectedItemIdxs.length === 1 && !locked) {
+    // Motion ghost: if this item has a LEGACY end-pose tween and is
+    // selected, render a faded duplicate at the end position plus a
+    // dashed line between the two centers. The ghost is a draggable
+    // hit target (data-cd-ghost-idx). Skipped on locked items — the
+    // ghost would be draggable and that contradicts the lock. Also
+    // skipped for curated exit presets: those never target a position,
+    // and the ghost (opacity 0 = invisible, but still pointer-events:
+    // auto) would let a drag write left/top into a clean exit.
+    if (item.animationTo && !item.animationExitPreset && isSelected(state, idx) && state.selectedItemIdxs.length === 1 && !locked) {
       renderMotionGhost(root, item, bounds, idx);
     }
   });
@@ -697,7 +700,9 @@ function buildMenu(store: Store): MenuEntry[] {
   const modKey = navigator.platform.includes("Mac") ? "⌘" : "Ctrl";
   const soloIdx = store.state.selectedItemIdxs.length === 1 ? store.state.selectedItemIdxs[0]! : -1;
   const solo = soloIdx >= 0 ? currentItem(store.state) : null;
-  const hasAnim = !!solo?.animationTo;
+  // Legacy raw end-pose only — curated exit presets are managed in the
+  // Animation panel, not here.
+  const hasAnim = !!solo?.animationTo && !solo.animationExitPreset;
   const selCount = store.state.selectedItemIdxs.length;
   const layoutNow = currentLayout(store.state);
   const anyGrouped = store.state.selectedItemIdxs.some(

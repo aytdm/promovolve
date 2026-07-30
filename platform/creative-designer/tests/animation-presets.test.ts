@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ANIMATION_PRESETS, easingIdFor, presetById, presetDistance, withDistance } from "../src/animation-presets";
+import { ANIMATION_PRESETS, EXIT_PRESETS, easingIdFor, exitPresetById, presetById, presetDistance, withDistance } from "../src/animation-presets";
 
 describe("animation presets", () => {
   it("every preset materializes a non-empty entrance with a duration", () => {
@@ -25,6 +25,17 @@ describe("animation presets", () => {
     expect(scaled.scale).toBe(rise.scale);
     expect(scaled.opacity).toBe(rise.opacity);
     expect(scaled.dx).toBe(rise.dx); // undefined stays undefined
+  });
+
+  it("exit presets never target a position — the drag-detach trap that killed the raw editor", () => {
+    for (const p of EXIT_PRESETS) {
+      expect(p.to.left).toBeUndefined();
+      expect(p.to.top).toBeUndefined();
+      expect(p.to.rotation).toBeUndefined();
+      expect(p.to.duration).toBeGreaterThan(0);
+      expect(p.to.delay).toBeGreaterThanOrEqual(0);
+      expect(exitPresetById(p.id)).toBe(p);
+    }
   });
 
   it("easing menu round-trips: css → id, unknown css → smooth", () => {
