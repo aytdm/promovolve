@@ -40,7 +40,7 @@ describe("entrance helpers", () => {
 
 // End-pose (animationTo) offset resolution: dx/dy ride the CURRENT
 // authored position (drag-safe), absolute left/top win when present.
-import { applyTargetState, resolveTargetValues, transitionFor } from "../src/motion";
+import { applyTargetState, resolveTargetValues, targetStartSeconds, transitionFor } from "../src/motion";
 
 describe("end-pose offsets", () => {
   it("resolveTargetValues: dx/dy add to base, absolutes win over offsets", () => {
@@ -58,5 +58,14 @@ describe("end-pose offsets", () => {
     expect(el.style.top).toBe("17%");
     expect(el.style.left).toBe("");
     expect(el.style.opacity).toBe("0");
+  });
+});
+
+describe("exit timing", () => {
+  it("afterEntrance targets start when the entrance lands; plain targets from activation", () => {
+    const entrance = { opacity: 0, duration: 0.6, delay: 0.2 };
+    expect(targetStartSeconds({ opacity: 0, delay: 2, afterEntrance: true }, entrance)).toBeCloseTo(2.8);
+    expect(targetStartSeconds({ opacity: 0, delay: 2, afterEntrance: true }, null)).toBe(2);
+    expect(targetStartSeconds({ opacity: 0, delay: 2 }, entrance)).toBe(2);
   });
 });

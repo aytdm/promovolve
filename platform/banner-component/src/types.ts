@@ -23,6 +23,13 @@ export interface MotionTarget {
   opacity?: number;
   duration?: number;
   delay?: number;
+  // When true, `delay` counts from the moment the item's ENTRANCE
+  // completes (its delay + duration) instead of from page activation —
+  // so an author sets "show for N seconds" without doing arithmetic
+  // against the entrance timing. Curated exit presets set this; with
+  // no entrance on the item it adds nothing. Absent on legacy configs,
+  // which keep activation-based delays.
+  afterEntrance?: boolean;
   // CSS timing-function. Any valid value accepted — common names
   // ("linear", "ease", "ease-in", "ease-out", "ease-in-out") or a
   // cubic-bezier() expression. Defaults to a smooth ease-out curve.

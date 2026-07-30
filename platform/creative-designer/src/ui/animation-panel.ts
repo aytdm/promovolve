@@ -169,7 +169,7 @@ function build(panel: HTMLElement, idx: number, item: LayoutItem, store: Store, 
     if (exitSelect.value !== v) exitSelect.value = v;
   });
   if (item.animationExitPreset && item.animationTo) {
-    const after = numberField(exitWrap, "After (s)", item.animationTo.delay ?? 0, 0.1, (v) =>
+    const after = numberField(exitWrap, "Show for (s)", item.animationTo.delay ?? 0, 0.1, (v) =>
       commit(store, idx, (it) => ({
         ...it,
         animationTo: { ...(it.animationTo ?? {}), delay: Math.max(0, v) },

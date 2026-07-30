@@ -80,6 +80,16 @@ export function transitionFor(target: MotionTarget, fallbackDuration: number): s
   return parts.join(",");
 }
 
+/** Seconds from page activation until a MotionTarget starts playing.
+  * Plain targets: their own delay. afterEntrance targets: the
+  * entrance's full runtime is added, so the target's delay reads as
+  * "show for N seconds" in the Designer. */
+export function targetStartSeconds(target: MotionTarget, from: MotionFrom | null | undefined): number {
+  const own = target.delay ?? 0;
+  if (!target.afterEntrance || !from) return own;
+  return (from.delay ?? 0) + (from.duration ?? 0.6) + own;
+}
+
 /** Resolve a MotionTarget's effective end values against the item's
   * authored base. Absolute left/top win; otherwise dx/dy ride on the
   * base (that's what makes offset-based exits drag-safe — the base is

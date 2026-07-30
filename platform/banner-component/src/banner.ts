@@ -2,7 +2,7 @@ import type { BannerConfig, ExpandAnimation, LayoutItem, MotionTarget, Page, Pap
 import { PAPER_FEEL, dealTempo } from "./types";
 import { fontMain, fontUI } from "./fonts";
 import { layoutItemToNode } from "./layout-item";
-import { applyEntranceStart, applyTargetState, autoFitText, harmonizeAutofit, playEntranceHome, prefersReducedMotion, resolveTargetValues, transitionFor } from "./motion";
+import { applyEntranceStart, applyTargetState, autoFitText, harmonizeAutofit, playEntranceHome, prefersReducedMotion, resolveTargetValues, targetStartSeconds, transitionFor } from "./motion";
 import { renderCollapsedItemHtml } from "./render-collapsed";
 import {
   buildCloseButton,
@@ -1378,7 +1378,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
         applyTargetState(el, to, resolveTargetValues(to, baseValues));
         return;
       }
-      const delay = to.delay ?? 0;
+      const delay = targetStartSeconds(to, item.animationFrom);
       setTimeout(() => {
         el.style.transition = transitionFor({ ...to, delay: 0 }, 0.8);
         // Two rAFs: the first lets the browser paint the baseline with
@@ -1464,7 +1464,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
       }
       if (from) this.playEntrance(el, from, base);
       if (!to) return;
-      const toDelay = to.delay ?? 0;
+      const toDelay = targetStartSeconds(to, from);
       const toDuration = to.duration ?? 0.8;
       setTimeout(() => {
         el.style.transition = transitionFor({ ...to, delay: 0 }, 0.8);
@@ -2394,7 +2394,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
       applyTargetState(item, to, resolveTargetValues(to, baseValues));
       return;
     }
-    const delay = to.delay ?? 0;
+    const delay = targetStartSeconds(to, from);
     setTimeout(() => {
       item.style.transition = transitionFor({ ...to, delay: 0 }, 0.8);
       requestAnimationFrame(() => requestAnimationFrame(() => {
