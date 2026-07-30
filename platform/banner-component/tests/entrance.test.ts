@@ -69,3 +69,17 @@ describe("exit timing", () => {
     expect(targetStartSeconds({ opacity: 0, delay: 2 }, entrance)).toBe(2);
   });
 });
+
+describe("fade easing split", () => {
+  it("opacity rides its own gentle curve; position keeps the settling curve; explicit easing wins everywhere", () => {
+    const el = document.createElement("div");
+    playEntranceHome(el, { dy: 5, opacity: 0, duration: 5 }, { left: 0, top: 0, rotation: 0, opacity: 1 });
+    expect(el.style.transition).toContain("top 5s cubic-bezier(0.16,1,0.3,1)");
+    expect(el.style.transition).toContain("opacity 5s cubic-bezier(0.37,0,0.63,1)");
+    const t = transitionFor({ dy: -3, opacity: 0, duration: 0.7 }, 0.8);
+    expect(t).toContain("top 0.7s cubic-bezier(0.16,1,0.3,1)");
+    expect(t).toContain("opacity 0.7s cubic-bezier(0.37,0,0.63,1)");
+    const explicit = transitionFor({ opacity: 0, duration: 1, easing: "linear" }, 0.8);
+    expect(explicit).toContain("opacity 1s linear");
+  });
+});

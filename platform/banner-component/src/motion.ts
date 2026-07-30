@@ -16,6 +16,13 @@ import type { MotionFrom, MotionTarget } from "./types";
 
 export const DEFAULT_EASING = "cubic-bezier(0.16,1,0.3,1)";
 
+// Opacity gets its own default curve. DEFAULT_EASING is an aggressive
+// ease-out — right for motion settling into place, but a fade under it
+// is ~90% done at a third of its duration, so "Duration 5s" LOOKS like
+// a 1.5s fade. easeInOutSine spends the whole configured window
+// perceptibly fading. An author's explicit easing overrides both.
+export const FADE_EASING = "cubic-bezier(0.37,0,0.63,1)";
+
 /** Reduced-motion probe. Entrances are skipped entirely (the resting
   * layout IS the meaningful pose); animationTo end-poses are applied
   * instantly instead of tweened. */
@@ -48,14 +55,14 @@ export function applyEntranceStart(el: HTMLElement, from: MotionFrom, base: Entr
   * applyEntranceStart has painted (double-rAF at the call site). */
 export function playEntranceHome(el: HTMLElement, from: MotionFrom, base: EntranceBase): void {
   const duration = from.duration ?? 0.6;
-  const easing = from.easing ?? DEFAULT_EASING;
-  const timing = `${duration}s ${easing} 0s`;
+  const timing = `${duration}s ${from.easing ?? DEFAULT_EASING} 0s`;
+  const fadeTiming = `${duration}s ${from.easing ?? FADE_EASING} 0s`;
   const parts: string[] = [];
   if (from.dx !== undefined) parts.push(`left ${timing}`);
   if (from.dy !== undefined) parts.push(`top ${timing}`);
   if (from.rotate !== undefined) parts.push(`rotate ${timing}`);
   if (from.scale !== undefined) parts.push(`scale ${timing}`);
-  if (from.opacity !== undefined) parts.push(`opacity ${timing}`);
+  if (from.opacity !== undefined) parts.push(`opacity ${fadeTiming}`);
   el.style.transition = parts.join(",");
   if (from.dx !== undefined) el.style.left = `${base.left}%`;
   if (from.dy !== undefined) el.style.top = `${base.top}%`;
@@ -69,14 +76,14 @@ export function playEntranceHome(el: HTMLElement, from: MotionFrom, base: Entran
 export function transitionFor(target: MotionTarget, fallbackDuration: number): string {
   const duration = target.duration ?? fallbackDuration;
   const delay = target.delay ?? 0;
-  const easing = target.easing ?? DEFAULT_EASING;
-  const timing = `${duration}s ${easing} ${delay}s`;
+  const timing = `${duration}s ${target.easing ?? DEFAULT_EASING} ${delay}s`;
+  const fadeTiming = `${duration}s ${target.easing ?? FADE_EASING} ${delay}s`;
   const parts: string[] = [];
   if (target.left !== undefined || target.dx !== undefined) parts.push(`left ${timing}`);
   if (target.top !== undefined || target.dy !== undefined) parts.push(`top ${timing}`);
   if (target.rotation !== undefined) parts.push(`rotate ${timing}`);
   if (target.scale !== undefined) parts.push(`scale ${timing}`);
-  if (target.opacity !== undefined) parts.push(`opacity ${timing}`);
+  if (target.opacity !== undefined) parts.push(`opacity ${fadeTiming}`);
   return parts.join(",");
 }
 
