@@ -363,9 +363,14 @@ export const PAPER_FEEL: Record<PaperWeight, PaperFeel> = {
 };
 
 // Bounds for the per-creative tempo override (the Designer's Tempo
-// slider). Shared by the slider and the clamp so hand-edited JSON can't
-// stall the open/close choreography or make it strobe.
-export const TEMPO_MIN = 0.4;
+// slider). Tempo MULTIPLIES durations, so 1.0 is the natural pace and
+// larger is slower/statelier. The floor is 1.0 — an override can only
+// slow the choreography down, never speed it past natural (fast,
+// strobe-y ads are exactly what the curated stance exists to prevent).
+// Shared by the slider and the clamp so hand-edited JSON can't strobe
+// either. Only the OVERRIDE is clamped: the paper stocks' curated
+// presets (light = 0.8 snaps) are code-owned and bypass it.
+export const TEMPO_MIN = 1.0;
 export const TEMPO_MAX = 2.2;
 
 /**
@@ -377,8 +382,8 @@ export const TEMPO_MAX = 2.2;
  */
 export function dealTempo(cfg: BannerConfig): number {
   const preset = PAPER_FEEL[cfg.paperWeight ?? "medium"].tempo;
-  const t = cfg.tempo ?? preset;
-  return Math.min(TEMPO_MAX, Math.max(TEMPO_MIN, t));
+  if (cfg.tempo === undefined) return preset;
+  return Math.min(TEMPO_MAX, Math.max(TEMPO_MIN, cfg.tempo));
 }
 
 export interface BannerConfig {

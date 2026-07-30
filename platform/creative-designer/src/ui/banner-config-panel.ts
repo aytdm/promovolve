@@ -178,7 +178,7 @@ export function mountBannerConfigPanel(
   tempoSlider.min = String(TEMPO_MIN);
   tempoSlider.max = String(TEMPO_MAX);
   tempoSlider.step = "0.05";
-  tempoSlider.title = "Deal-in / fly-away speed — lower is slower, statelier";
+  tempoSlider.title = "Deal-in / fly-away pace — 1.0 is natural, higher is slower, statelier";
   tempoSlider.style.cssText = "flex:1 1 auto;min-width:0;";
   tempoRow.appendChild(tempoSlider);
   const tempoOut = document.createElement("output");
