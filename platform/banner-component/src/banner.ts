@@ -1213,6 +1213,11 @@ export class ExpandableMagazineBanner extends HTMLElement {
   private renderFromLayout(page: Page, cfg: BannerConfig): void {
     const defaultFont = fontMain(cfg);
     const items: LayoutItem[] = page.layout ?? [];
+    // Stash the rendered array for _replayItemEntrances: collapsed/edit
+    // nodes are plain HTML (renderCollapsedItemHtml) with no per-node
+    // animation datasets, so replay resolves entrances by layout index
+    // against this snapshot instead.
+    this._renderedCollapsedItems = items;
     const editMode = this.editMode;
 
     const html = items
@@ -1400,9 +1405,16 @@ export class ExpandableMagazineBanner extends HTMLElement {
     });
   }
 
+  /** Rendered-items snapshot for the collapsed/edit canvas — see
+    * renderFromLayout and _replayItemEntrances. */
+  private _renderedCollapsedItems: LayoutItem[] = [];
+
   /** Play one item's entrance: synchronous snap to the off-pose (so the
     * first paint after this call is already the start state — no flash
     * of the resting layout), then tween home after the entrance delay.
+    * The transition rule is cleared once the tween lands — the Designer
+    * canvas patches styles directly during drags, and a sticky
+    * transition would turn cursor-tracking into rubber-banding.
     * Reduced motion skips entirely: the resting layout IS the pose. */
   private playEntrance(
     el: HTMLElement,
@@ -1421,22 +1433,37 @@ export class ExpandableMagazineBanner extends HTMLElement {
         playEntranceHome(el, from, base);
       }));
     }, delay * 1000);
+    setTimeout(() => { el.style.transition = ""; },
+      (delay + (from.duration ?? 0.6)) * 1000 + 120);
   }
 
   /** Replay every rendered item's entrance (Designer's ▶ button; runs
-    * in edit mode too, where the normal players are suppressed).
-    * Underscore-named like _replayExpandEffect so it survives
-    * minification for host calls. */
+    * in edit mode too, where the normal players are suppressed). Two
+    * render paths, two data sources: expanded-reader nodes carry
+    * animation datasets (layoutItemToNode); collapsed/edit nodes are
+    * plain HTML, so their entrance + resting pose resolve by layout
+    * index against the render snapshot. Underscore-named like
+    * _replayExpandEffect so it survives minification for host calls. */
   _replayItemEntrances(): void {
     const nodes = this.shadowRoot?.querySelectorAll<HTMLElement>("[data-layout-idx]") ?? [];
     nodes.forEach((el) => {
-      const from = parseJSON<import("./types").MotionFrom>(el.dataset.animationFrom);
-      if (!from) return;
-      this.playEntrance(el, from, {
-        left: Number(el.dataset.baseLeft ?? "0"),
-        top: Number(el.dataset.baseTop ?? "0"),
-        rotation: Number(el.dataset.baseRotation ?? "0"),
-        opacity: Number(el.dataset.baseOpacity ?? "1"),
+      const stashed = parseJSON<import("./types").MotionFrom>(el.dataset.animationFrom);
+      if (stashed) {
+        this.playEntrance(el, stashed, {
+          left: Number(el.dataset.baseLeft ?? "0"),
+          top: Number(el.dataset.baseTop ?? "0"),
+          rotation: Number(el.dataset.baseRotation ?? "0"),
+          opacity: Number(el.dataset.baseOpacity ?? "1"),
+        });
+        return;
+      }
+      const item = this._renderedCollapsedItems[Number(el.dataset.layoutIdx ?? "-1")];
+      if (!item?.animationFrom) return;
+      this.playEntrance(el, item.animationFrom, {
+        left: item.left ?? 0,
+        top: item.top ?? 0,
+        rotation: item.rotation ?? 0,
+        opacity: item.opacity ?? 1,
       });
     });
   }
