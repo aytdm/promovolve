@@ -1437,34 +1437,73 @@ export class ExpandableMagazineBanner extends HTMLElement {
       (delay + (from.duration ?? 0.6)) * 1000 + 120);
   }
 
-  /** Replay every rendered item's entrance (Designer's ▶ button; runs
-    * in edit mode too, where the normal players are suppressed). Two
-    * render paths, two data sources: expanded-reader nodes carry
-    * animation datasets (layoutItemToNode); collapsed/edit nodes are
-    * plain HTML, so their entrance + resting pose resolve by layout
-    * index against the render snapshot. Underscore-named like
-    * _replayExpandEffect so it survives minification for host calls. */
+  /** Replay every rendered item's motion (Designer's ▶ button; runs in
+    * edit mode too, where the normal players are suppressed): the
+    * animationFrom entrance AND the animationTo end-pose tween, each on
+    * its own delay — the same choreography delivery plays. Unlike
+    * delivery, the end pose does NOT persist: after it completes, the
+    * item is restored to its authored resting values so the canvas is
+    * never left corrupted by a preview. Two render paths, two data
+    * sources: expanded-reader nodes carry animation datasets
+    * (layoutItemToNode); collapsed/edit nodes are plain HTML, so their
+    * motion + resting pose resolve by layout index against the render
+    * snapshot. Underscore-named like _replayExpandEffect so it survives
+    * minification for host calls. */
   _replayItemEntrances(): void {
+    if (prefersReducedMotion()) return;
     const nodes = this.shadowRoot?.querySelectorAll<HTMLElement>("[data-layout-idx]") ?? [];
     nodes.forEach((el) => {
-      const stashed = parseJSON<import("./types").MotionFrom>(el.dataset.animationFrom);
-      if (stashed) {
-        this.playEntrance(el, stashed, {
-          left: Number(el.dataset.baseLeft ?? "0"),
-          top: Number(el.dataset.baseTop ?? "0"),
-          rotation: Number(el.dataset.baseRotation ?? "0"),
-          opacity: Number(el.dataset.baseOpacity ?? "1"),
-        });
-        return;
+      let from = parseJSON<import("./types").MotionFrom>(el.dataset.animationFrom);
+      let to = parseJSON<MotionTarget>(el.dataset.animationTo);
+      let base = {
+        left: Number(el.dataset.baseLeft ?? "0"),
+        top: Number(el.dataset.baseTop ?? "0"),
+        rotation: Number(el.dataset.baseRotation ?? "0"),
+        opacity: Number(el.dataset.baseOpacity ?? "1"),
+      };
+      if (el.dataset.animItem !== "true") {
+        // Collapsed/edit canvas node: no datasets, resolve by index.
+        const item = this._renderedCollapsedItems[Number(el.dataset.layoutIdx ?? "-1")];
+        if (!item) return;
+        from = item.animationFrom ?? null;
+        to = item.animationTo ?? null;
+        base = {
+          left: item.left ?? 0,
+          top: item.top ?? 0,
+          rotation: item.rotation ?? 0,
+          opacity: item.opacity ?? 1,
+        };
       }
-      const item = this._renderedCollapsedItems[Number(el.dataset.layoutIdx ?? "-1")];
-      if (!item?.animationFrom) return;
-      this.playEntrance(el, item.animationFrom, {
-        left: item.left ?? 0,
-        top: item.top ?? 0,
-        rotation: item.rotation ?? 0,
-        opacity: item.opacity ?? 1,
-      });
+      if (from) this.playEntrance(el, from, base);
+      if (!to) return;
+      const toDelay = to.delay ?? 0;
+      const toDuration = to.duration ?? 0.8;
+      setTimeout(() => {
+        el.style.transition = transitionFor({ ...to, delay: 0 }, 0.8);
+        requestAnimationFrame(() => requestAnimationFrame(() => {
+          applyTargetState(el, to!, {
+            left: to!.left ?? base.left,
+            top: to!.top ?? base.top,
+            rotation: to!.rotation ?? base.rotation,
+            scale: to!.scale ?? 1,
+            opacity: to!.opacity ?? 1,
+          });
+        }));
+      }, toDelay * 1000);
+      // Preview-only restore: hold the end pose for a beat, then snap
+      // back to the authored resting values (transitions off so the
+      // return is a cut, not a reverse animation).
+      setTimeout(() => {
+        el.style.transition = "none";
+        applyTargetState(el, to!, {
+          left: base.left,
+          top: base.top,
+          rotation: base.rotation,
+          scale: 1,
+          opacity: base.opacity,
+        });
+        requestAnimationFrame(() => { el.style.transition = ""; });
+      }, (toDelay + toDuration) * 1000 + 700);
     });
   }
 

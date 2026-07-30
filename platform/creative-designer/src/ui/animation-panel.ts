@@ -142,9 +142,12 @@ function build(panel: HTMLElement, idx: number, item: LayoutItem, store: Store, 
       const v = easingIdFor(it.animationFrom?.easing);
       if (ease.value !== v) ease.value = v;
     });
-
-    panel.appendChild(replayButton());
   }
+
+  // Replay previews the WHOLE choreography (entrance + end pose), so it
+  // must exist whenever either does — an end-pose-only item still needs
+  // its ▶.
+  if (item.animationFrom || item.animationTo) panel.appendChild(replayButton());
 
   // Advanced: the raw end-pose tween (emphasis moves). Unchanged
   // semantics; collapsed behind a details fold so the preset flow
