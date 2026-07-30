@@ -2,7 +2,7 @@ import type { BannerConfig, ExpandAnimation, LayoutItem, MotionTarget, Page, Pap
 import { PAPER_FEEL, dealTempo } from "./types";
 import { fontMain, fontUI } from "./fonts";
 import { layoutItemToNode } from "./layout-item";
-import { applyEntranceStart, applyTargetState, autoFitText, harmonizeAutofit, playEntranceHome, prefersReducedMotion, transitionFor } from "./motion";
+import { applyEntranceStart, applyTargetState, autoFitText, harmonizeAutofit, playEntranceHome, prefersReducedMotion, resolveTargetValues, transitionFor } from "./motion";
 import { renderCollapsedItemHtml } from "./render-collapsed";
 import {
   buildCloseButton,
@@ -1375,13 +1375,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
       if (prefersReducedMotion()) {
         // Motion-sensitive users get the END pose instantly — it's the
         // meaningful state (authors use animationTo for emphasis).
-        applyTargetState(el, to, {
-          left: to.left ?? baseValues.left,
-          top: to.top ?? baseValues.top,
-          rotation: to.rotation ?? baseValues.rotation,
-          scale: to.scale ?? 1,
-          opacity: to.opacity ?? 1,
-        });
+        applyTargetState(el, to, resolveTargetValues(to, baseValues));
         return;
       }
       const delay = to.delay ?? 0;
@@ -1393,13 +1387,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
         // rAF or a sync reflow isn't enough — the browser batches both
         // style mutations and skips the animation.
         requestAnimationFrame(() => requestAnimationFrame(() => {
-          applyTargetState(el, to, {
-            left: to.left ?? baseValues.left,
-            top: to.top ?? baseValues.top,
-            rotation: to.rotation ?? baseValues.rotation,
-            scale: to.scale ?? 1,
-            opacity: to.opacity ?? 1,
-          });
+          applyTargetState(el, to, resolveTargetValues(to, baseValues));
         }));
       }, delay * 1000);
     });
@@ -1481,13 +1469,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
       setTimeout(() => {
         el.style.transition = transitionFor({ ...to, delay: 0 }, 0.8);
         requestAnimationFrame(() => requestAnimationFrame(() => {
-          applyTargetState(el, to!, {
-            left: to!.left ?? base.left,
-            top: to!.top ?? base.top,
-            rotation: to!.rotation ?? base.rotation,
-            scale: to!.scale ?? 1,
-            opacity: to!.opacity ?? 1,
-          });
+          applyTargetState(el, to!, resolveTargetValues(to!, base));
         }));
       }, toDelay * 1000);
       // Preview-only restore: hold the end pose for a beat, then snap
@@ -2409,26 +2391,14 @@ export class ExpandableMagazineBanner extends HTMLElement {
     const to = parseJSON<MotionTarget>(item.dataset.animationTo);
     if (!to) return;
     if (prefersReducedMotion()) {
-      applyTargetState(item, to, {
-        left: to.left ?? baseValues.left,
-        top: to.top ?? baseValues.top,
-        rotation: to.rotation ?? baseValues.rotation,
-        scale: to.scale ?? 1,
-        opacity: to.opacity ?? 1,
-      });
+      applyTargetState(item, to, resolveTargetValues(to, baseValues));
       return;
     }
     const delay = to.delay ?? 0;
     setTimeout(() => {
       item.style.transition = transitionFor({ ...to, delay: 0 }, 0.8);
       requestAnimationFrame(() => requestAnimationFrame(() => {
-        applyTargetState(item, to, {
-          left: to.left ?? baseValues.left,
-          top: to.top ?? baseValues.top,
-          rotation: to.rotation ?? baseValues.rotation,
-          scale: to.scale ?? 1,
-          opacity: to.opacity ?? 1,
-        });
+        applyTargetState(item, to, resolveTargetValues(to, baseValues));
       }));
     }, delay * 1000);
   }

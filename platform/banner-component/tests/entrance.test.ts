@@ -37,3 +37,26 @@ describe("entrance helpers", () => {
     expect(el.style.opacity).toBe("1");
   });
 });
+
+// End-pose (animationTo) offset resolution: dx/dy ride the CURRENT
+// authored position (drag-safe), absolute left/top win when present.
+import { applyTargetState, resolveTargetValues, transitionFor } from "../src/motion";
+
+describe("end-pose offsets", () => {
+  it("resolveTargetValues: dx/dy add to base, absolutes win over offsets", () => {
+    expect(resolveTargetValues({ dy: -3, opacity: 0 }, { left: 10, top: 20, rotation: 5 }))
+      .toEqual({ left: 10, top: 17, rotation: 5, scale: 1, opacity: 0 });
+    expect(resolveTargetValues({ left: 40, dx: 99 }, { left: 10, top: 20, rotation: 0 }).left).toBe(40);
+  });
+
+  it("transitionFor and applyTargetState treat dx/dy as position moves", () => {
+    const to = { dy: -3, opacity: 0, duration: 0.7 };
+    expect(transitionFor(to, 0.8)).toContain("top 0.7s");
+    expect(transitionFor(to, 0.8)).not.toContain("left");
+    const el = document.createElement("div");
+    applyTargetState(el, to, resolveTargetValues(to, { left: 10, top: 20, rotation: 0 }));
+    expect(el.style.top).toBe("17%");
+    expect(el.style.left).toBe("");
+    expect(el.style.opacity).toBe("0");
+  });
+});

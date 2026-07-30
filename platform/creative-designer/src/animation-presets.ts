@@ -57,8 +57,9 @@ export function presetById(id: string | undefined): AnimationPreset | undefined 
 // substrate) + `animationExitPreset`. Deliberately opacity/scale only —
 // no positional targets, so an exit can never point at a stale
 // location after the item is dragged (the trap that killed the raw
-// end-pose editor). `delay` is "after (s)": seconds from page
-// activation until the exit starts.
+// end-pose editor); directional exits use dx/dy OFFSETS, which ride
+// the item's current position the same way entrances do. `delay` is
+// "after (s)": seconds from page activation until the exit starts.
 
 export interface ExitPreset {
   id: string;
@@ -71,6 +72,10 @@ export const EXIT_PRESETS: ExitPreset[] = [
     to: { opacity: 0, delay: 2, duration: 0.6 } },
   { id: "shrink-away", label: "Shrink away",
     to: { opacity: 0, scale: 0.85, delay: 2, duration: 0.45 } },
+  // Rise's counterpart: drifts UP and fades, gently shrinking — the
+  // reverse of arriving from below.
+  { id: "float-away", label: "Float away",
+    to: { opacity: 0, dy: -3, scale: 0.96, delay: 2, duration: 0.7 } },
 ];
 
 export function exitPresetById(id: string | undefined): ExitPreset | undefined {

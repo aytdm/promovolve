@@ -27,7 +27,7 @@ describe("animation presets", () => {
     expect(scaled.dx).toBe(rise.dx); // undefined stays undefined
   });
 
-  it("exit presets never target a position — the drag-detach trap that killed the raw editor", () => {
+  it("exit presets never target an ABSOLUTE position — the drag-detach trap that killed the raw editor (dx/dy offsets are fine)", () => {
     for (const p of EXIT_PRESETS) {
       expect(p.to.left).toBeUndefined();
       expect(p.to.top).toBeUndefined();

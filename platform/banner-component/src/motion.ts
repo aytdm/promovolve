@@ -72,12 +72,29 @@ export function transitionFor(target: MotionTarget, fallbackDuration: number): s
   const easing = target.easing ?? DEFAULT_EASING;
   const timing = `${duration}s ${easing} ${delay}s`;
   const parts: string[] = [];
-  if (target.left !== undefined) parts.push(`left ${timing}`);
-  if (target.top !== undefined) parts.push(`top ${timing}`);
+  if (target.left !== undefined || target.dx !== undefined) parts.push(`left ${timing}`);
+  if (target.top !== undefined || target.dy !== undefined) parts.push(`top ${timing}`);
   if (target.rotation !== undefined) parts.push(`rotate ${timing}`);
   if (target.scale !== undefined) parts.push(`scale ${timing}`);
   if (target.opacity !== undefined) parts.push(`opacity ${timing}`);
   return parts.join(",");
+}
+
+/** Resolve a MotionTarget's effective end values against the item's
+  * authored base. Absolute left/top win; otherwise dx/dy ride on the
+  * base (that's what makes offset-based exits drag-safe — the base is
+  * read at play time, so it's always the CURRENT authored position). */
+export function resolveTargetValues(
+  target: MotionTarget,
+  base: { left: number; top: number; rotation: number },
+): { left: number; top: number; rotation: number; scale: number; opacity: number } {
+  return {
+    left: target.left ?? base.left + (target.dx ?? 0),
+    top: target.top ?? base.top + (target.dy ?? 0),
+    rotation: target.rotation ?? base.rotation,
+    scale: target.scale ?? 1,
+    opacity: target.opacity ?? 1,
+  };
 }
 
 // Apply the end values of a motion target to an element. Only the
@@ -88,8 +105,8 @@ export function applyTargetState(
   target: MotionTarget,
   values: { left: number; top: number; rotation: number; scale: number; opacity: number },
 ): void {
-  if (target.left !== undefined) el.style.left = `${values.left}%`;
-  if (target.top !== undefined) el.style.top = `${values.top}%`;
+  if (target.left !== undefined || target.dx !== undefined) el.style.left = `${values.left}%`;
+  if (target.top !== undefined || target.dy !== undefined) el.style.top = `${values.top}%`;
   if (target.rotation !== undefined) el.style.rotate = `${values.rotation}deg`;
   if (target.scale !== undefined) el.style.scale = String(values.scale);
   if (target.opacity !== undefined) el.style.opacity = String(values.opacity);

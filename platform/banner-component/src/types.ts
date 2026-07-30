@@ -11,6 +11,13 @@
 export interface MotionTarget {
   left?: number;
   top?: number;
+  // Relative offsets from the AUTHORED left/top (% of the container,
+  // same convention as MotionFrom.dx/dy). Unlike absolute left/top,
+  // these follow the item when it's dragged in the Designer — curated
+  // exit presets use them for directional motion. Absolute left/top
+  // win when both are set (legacy configs).
+  dx?: number;
+  dy?: number;
   rotation?: number;
   scale?: number;
   opacity?: number;
