@@ -22,6 +22,31 @@ export interface MotionTarget {
   easing?: string;
 }
 
+/**
+ * Entrance start-state for a layout item: the item first PAINTS at
+ * this pose and tweens home to its authored layout when its page
+ * becomes active. Position/rotation are OFFSETS from the authored
+ * values (so dragging the item in the Designer moves its home and the
+ * entrance follows); scale/opacity are absolute start values (the
+ * resting state is always scale 1 / the authored opacity).
+ *
+ * This is the substrate the Designer's animation PRESETS materialize
+ * into ("Fade up" = { dy: 5, opacity: 0 }); `animationPreset` on the
+ * item remembers which preset produced it, for round-trip editing.
+ * The engine only ever reads the concrete values — published
+ * creatives stay frozen even if preset definitions evolve.
+ */
+export interface MotionFrom {
+  dx?: number;      // % of width, offset from the authored left
+  dy?: number;      // % of height, offset from the authored top
+  rotate?: number;  // °, offset from the authored rotation
+  scale?: number;   // absolute start scale (resting = 1)
+  opacity?: number; // absolute start opacity (resting = authored)
+  duration?: number; // s (default 0.6)
+  delay?: number;    // s after the page becomes active
+  easing?: string;   // CSS timing-function (default = DEFAULT_EASING)
+}
+
 interface LayoutItemBase {
   left?: number;
   top?: number;
@@ -40,6 +65,14 @@ interface LayoutItemBase {
   // If set, the item tweens from its base state to these values
   // after `delay` seconds.
   animationTo?: MotionTarget;
+  // Entrance: the item first paints at this offset pose and tweens
+  // HOME to the authored layout when its page becomes active. See
+  // MotionFrom. Composable with animationTo (entrance first, then the
+  // end-pose tween on its own delay).
+  animationFrom?: MotionFrom;
+  // The Designer preset that materialized animationFrom ("fade-up" …).
+  // Pure UI round-trip metadata — the engine never reads it.
+  animationPreset?: string;
   // Historical: marked this item as a CTA click hotspot. Navigation is
   // now page-wide (a deliberate tap anywhere on the sheet opens the
   // landing page — banner.ts wires it at page level, with scroll/drag

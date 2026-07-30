@@ -2,7 +2,7 @@ import type { BannerConfig, ExpandAnimation, LayoutItem, MotionTarget, Page, Pap
 import { PAPER_FEEL, dealTempo } from "./types";
 import { fontMain, fontUI } from "./fonts";
 import { layoutItemToNode } from "./layout-item";
-import { applyTargetState, autoFitText, harmonizeAutofit, transitionFor } from "./motion";
+import { applyEntranceStart, applyTargetState, autoFitText, harmonizeAutofit, playEntranceHome, prefersReducedMotion, transitionFor } from "./motion";
 import { renderCollapsedItemHtml } from "./render-collapsed";
 import {
   buildCloseButton,
@@ -1347,11 +1347,10 @@ export class ExpandableMagazineBanner extends HTMLElement {
     });
 
     // Tween items that declare animationTo from base state → target.
-    // Items without animationTo are static. Edit mode skips animation.
+    // Items without animationFrom/animationTo are static. Edit mode
+    // skips animation.
     if (editMode) return;
     items.forEach((item, i) => {
-      const to = item.animationTo;
-      if (!to) return;
       const el = this.shadowRoot?.querySelector<HTMLElement>(`[data-layout-idx="${i}"]`);
       if (!el) return;
 
@@ -1362,6 +1361,24 @@ export class ExpandableMagazineBanner extends HTMLElement {
         scale: 1,
         opacity: item.opacity ?? 1,
       };
+      // Entrance first: snap to the off-pose NOW (before this frame
+      // paints) and tween home. Composable with animationTo below,
+      // which rides its own delay.
+      if (item.animationFrom) this.playEntrance(el, item.animationFrom, baseValues);
+      const to = item.animationTo;
+      if (!to) return;
+      if (prefersReducedMotion()) {
+        // Motion-sensitive users get the END pose instantly — it's the
+        // meaningful state (authors use animationTo for emphasis).
+        applyTargetState(el, to, {
+          left: to.left ?? baseValues.left,
+          top: to.top ?? baseValues.top,
+          rotation: to.rotation ?? baseValues.rotation,
+          scale: to.scale ?? 1,
+          opacity: to.opacity ?? 1,
+        });
+        return;
+      }
       const delay = to.delay ?? 0;
       setTimeout(() => {
         el.style.transition = transitionFor({ ...to, delay: 0 }, 0.8);
@@ -1380,6 +1397,47 @@ export class ExpandableMagazineBanner extends HTMLElement {
           });
         }));
       }, delay * 1000);
+    });
+  }
+
+  /** Play one item's entrance: synchronous snap to the off-pose (so the
+    * first paint after this call is already the start state — no flash
+    * of the resting layout), then tween home after the entrance delay.
+    * Reduced motion skips entirely: the resting layout IS the pose. */
+  private playEntrance(
+    el: HTMLElement,
+    from: import("./types").MotionFrom,
+    base: { left: number; top: number; rotation: number; opacity: number },
+  ): void {
+    if (prefersReducedMotion()) return;
+    applyEntranceStart(el, from, base);
+    const delay = from.delay ?? 0;
+    setTimeout(() => {
+      // Double-rAF for the same reason as the animationTo player: the
+      // start pose must be committed in a painted frame before the
+      // transition properties change, or the browser batches the two
+      // writes and skips the tween.
+      requestAnimationFrame(() => requestAnimationFrame(() => {
+        playEntranceHome(el, from, base);
+      }));
+    }, delay * 1000);
+  }
+
+  /** Replay every rendered item's entrance (Designer's ▶ button; runs
+    * in edit mode too, where the normal players are suppressed).
+    * Underscore-named like _replayExpandEffect so it survives
+    * minification for host calls. */
+  _replayItemEntrances(): void {
+    const nodes = this.shadowRoot?.querySelectorAll<HTMLElement>("[data-layout-idx]") ?? [];
+    nodes.forEach((el) => {
+      const from = parseJSON<import("./types").MotionFrom>(el.dataset.animationFrom);
+      if (!from) return;
+      this.playEntrance(el, from, {
+        left: Number(el.dataset.baseLeft ?? "0"),
+        top: Number(el.dataset.baseTop ?? "0"),
+        rotation: Number(el.dataset.baseRotation ?? "0"),
+        opacity: Number(el.dataset.baseOpacity ?? "1"),
+      });
     });
   }
 
@@ -2268,12 +2326,11 @@ export class ExpandableMagazineBanner extends HTMLElement {
     return el;
   }
 
-  // Tween a layout item node from base state to its animationTo values
-  // when its page becomes active. Reads animationTo off dataset (stashed
-  // by layoutItemToNode).
+  // Play a layout item node's motion when its page becomes active:
+  // the animationFrom entrance (snap off-pose, tween home) and/or the
+  // animationTo end-pose tween. Reads both off dataset (stashed by
+  // layoutItemToNode).
   private playItemAnimation(item: HTMLElement): void {
-    const to = parseJSON<MotionTarget>(item.dataset.animationTo);
-    if (!to) return;
     const baseValues = {
       left: Number(item.dataset.baseLeft ?? "0"),
       top: Number(item.dataset.baseTop ?? "0"),
@@ -2281,6 +2338,20 @@ export class ExpandableMagazineBanner extends HTMLElement {
       scale: 1,
       opacity: Number(item.dataset.baseOpacity ?? "1"),
     };
+    const from = parseJSON<import("./types").MotionFrom>(item.dataset.animationFrom);
+    if (from) this.playEntrance(item, from, baseValues);
+    const to = parseJSON<MotionTarget>(item.dataset.animationTo);
+    if (!to) return;
+    if (prefersReducedMotion()) {
+      applyTargetState(item, to, {
+        left: to.left ?? baseValues.left,
+        top: to.top ?? baseValues.top,
+        rotation: to.rotation ?? baseValues.rotation,
+        scale: to.scale ?? 1,
+        opacity: to.opacity ?? 1,
+      });
+      return;
+    }
     const delay = to.delay ?? 0;
     setTimeout(() => {
       item.style.transition = transitionFor({ ...to, delay: 0 }, 0.8);

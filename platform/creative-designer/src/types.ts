@@ -8,6 +8,7 @@ export type {
   CircleItem,
   ImageItem,
   LayoutItem,
+  MotionFrom,
   MotionTarget,
   Page,
   RectItem,

@@ -12,9 +12,57 @@
 //     with the canvas-percent layout system, and it's invoked from
 //     the same render code path that applies motion.
 
-import type { MotionTarget } from "./types";
+import type { MotionFrom, MotionTarget } from "./types";
 
 export const DEFAULT_EASING = "cubic-bezier(0.16,1,0.3,1)";
+
+/** Reduced-motion probe. Entrances are skipped entirely (the resting
+  * layout IS the meaningful pose); animationTo end-poses are applied
+  * instantly instead of tweened. */
+export function prefersReducedMotion(): boolean {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
+}
+
+/** The authored resting pose an entrance tweens home to. */
+export interface EntranceBase {
+  left: number;
+  top: number;
+  rotation: number;
+  opacity: number;
+}
+
+/** Snap an element to its entrance start pose — synchronously, with
+  * transitions off, so the very first paint is the off-state (never a
+  * flash of the resting pose before the tween). */
+export function applyEntranceStart(el: HTMLElement, from: MotionFrom, base: EntranceBase): void {
+  el.style.transition = "none";
+  if (from.dx !== undefined) el.style.left = `${base.left + from.dx}%`;
+  if (from.dy !== undefined) el.style.top = `${base.top + from.dy}%`;
+  if (from.rotate !== undefined) el.style.rotate = `${base.rotation + from.rotate}deg`;
+  if (from.scale !== undefined) el.style.scale = String(from.scale);
+  if (from.opacity !== undefined) el.style.opacity = String(from.opacity);
+}
+
+/** Tween the element home from its entrance pose: transition only the
+  * fields the entrance moved, then write the resting values. Call after
+  * applyEntranceStart has painted (double-rAF at the call site). */
+export function playEntranceHome(el: HTMLElement, from: MotionFrom, base: EntranceBase): void {
+  const duration = from.duration ?? 0.6;
+  const easing = from.easing ?? DEFAULT_EASING;
+  const timing = `${duration}s ${easing} 0s`;
+  const parts: string[] = [];
+  if (from.dx !== undefined) parts.push(`left ${timing}`);
+  if (from.dy !== undefined) parts.push(`top ${timing}`);
+  if (from.rotate !== undefined) parts.push(`rotate ${timing}`);
+  if (from.scale !== undefined) parts.push(`scale ${timing}`);
+  if (from.opacity !== undefined) parts.push(`opacity ${timing}`);
+  el.style.transition = parts.join(",");
+  if (from.dx !== undefined) el.style.left = `${base.left}%`;
+  if (from.dy !== undefined) el.style.top = `${base.top}%`;
+  if (from.rotate !== undefined) el.style.rotate = base.rotation ? `${base.rotation}deg` : "0deg";
+  if (from.scale !== undefined) el.style.scale = "1";
+  if (from.opacity !== undefined) el.style.opacity = String(base.opacity);
+}
 
 // Build a CSS transition string for whichever fields of the
 // MotionTarget are present. Drives the base → animationTo tween.

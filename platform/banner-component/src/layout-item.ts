@@ -262,7 +262,7 @@ export function layoutItemToNode(
     // tweens because the software compositor doesn't fully repaint the
     // previous frame. will-change hints the engine + translate3d forces
     // the hardware layer on older WebKit that ignores will-change.
-    willChange: item.animationTo ? "transform, opacity" : "auto",
+    willChange: item.animationTo || item.animationFrom ? "transform, opacity" : "auto",
     transform: "translateZ(0)",
     backfaceVisibility: "hidden",
   });
@@ -277,6 +277,7 @@ export function layoutItemToNode(
   // the same role across the reader's pages and unify their fitted size.
   if (item.type === "text" && item.field) node.dataset.field = item.field;
   if (item.animationTo) node.dataset.animationTo = JSON.stringify(item.animationTo);
+  if (item.animationFrom) node.dataset.animationFrom = JSON.stringify(item.animationFrom);
   // item.ctaTarget no longer wires anything here: the whole sheet is
   // the click target now (banner.ts wires it at page level), so the
   // field is only a designer styling hint.
