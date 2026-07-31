@@ -89,7 +89,31 @@ object GoogleFontCatalog {
     "sans-serif", "serif", "monospace", "cursive", "fantasy",
     "system-ui", "ui-sans-serif", "ui-serif", "ui-monospace", "ui-rounded",
     "georgia", "times", "times new roman", "arial", "helvetica", "helvetica neue",
-    "courier", "courier new", "verdana", "tahoma", "trebuchet ms", "segoe ui"
+    "courier", "courier new", "verdana", "tahoma", "trebuchet ms", "segoe ui",
+    // CJK system faces — proprietary OS fonts with no web-hostable source
+    // (LP captures from Japanese sites reference these constantly). Keys
+    // are lowercased; full-width Latin lowercases to full-width
+    // ("ＭＳ"→"ｍｓ"), hence both spellings. MIRROR of the banner's
+    // GENERIC_FAMILIES in font-catalog.ts — keep the two in sync.
+    // Japanese (Windows)
+    "メイリオ", "meiryo", "meiryo ui",
+    "ms gothic", "ms pgothic", "ms mincho", "ms pmincho", "ms ui gothic",
+    "ｍｓ ゴシック", "ｍｓ ｐゴシック", "ｍｓ 明朝", "ｍｓ ｐ明朝",
+    "yu gothic", "yu gothic ui", "yugothic", "yu mincho",
+    "游ゴシック", "游ゴシック体", "游明朝", "游明朝体",
+    // Japanese (macOS)
+    "hiragino sans", "hiragino kaku gothic pro", "hiragino kaku gothic pron",
+    "hiragino kaku gothic std", "hiragino kaku gothic stdn",
+    "hiragino mincho pro", "hiragino mincho pron",
+    "hiragino maru gothic pro", "hiragino maru gothic pron",
+    "ヒラギノ角ゴシック", "ヒラギノ角ゴ pro", "ヒラギノ角ゴ pron",
+    "ヒラギノ明朝 pro", "ヒラギノ明朝 pron", "osaka",
+    // Chinese
+    "microsoft yahei", "微软雅黑", "microsoft jhenghei", "微軟正黑體",
+    "simsun", "宋体", "simhei", "黑体", "pingfang sc", "pingfang tc", "pingfang hk",
+    "heiti sc", "heiti tc",
+    // Korean
+    "malgun gothic", "맑은 고딕", "gulim", "dotum", "batang", "apple sd gothic neo"
   )
 
   /** True for a generic/system family we never try to self-host. */

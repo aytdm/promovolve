@@ -50,6 +50,24 @@ describe("collectExpandedFonts", () => {
     ]);
   });
 
+  it("skips CJK system faces — proprietary OS fonts that can never be hosted (メイリオ 404 regression)", () => {
+    const faces = collectExpandedFonts([page([
+      { type: "text", fontFamily: "メイリオ, Meiryo, sans-serif" },
+      { type: "text", fontFamily: "游ゴシック, Yu Gothic, Hiragino Sans, serif" },
+      { type: "text", fontFamily: "ＭＳ Ｐゴシック" },
+    ])], origin);
+    expect(faces).toEqual([]);
+  });
+
+  it("still hosts a real webfont when a system face shares its stack", () => {
+    const faces = collectExpandedFonts([page([
+      { type: "text", fontFamily: "Montserrat, メイリオ, sans-serif" },
+    ])], origin);
+    expect(faces).toEqual([
+      { family: "Montserrat", weight: 400, url: "https://cdn.example.com/fonts/montserrat-400-latin.woff2" },
+    ]);
+  });
+
   it("parses a named-instance weight (Montserrat Thin → 100), keeps the literal family, base slug", () => {
     const faces = collectExpandedFonts([page([{ type: "text", fontFamily: "Montserrat Thin, sans-serif" }])], origin);
     expect(faces).toEqual([
