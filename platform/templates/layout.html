@@ -199,8 +199,7 @@
     // Shared calendar core: month navigation, header label, day grid.
     // Mixed into each picker's Alpine state (Object.assign) — pickers
     // supply vy/vm (view month) and dayDisabled(iso). ONE copy of the
-    // calendar math for every picker in the dashboard; the report range
-    // picker (reportRangeCal) builds on this too.
+    // calendar math for every picker in the dashboard.
     function calCore() {
       const iso = d => d.toISOString().slice(0, 10);
       return {
@@ -396,36 +395,19 @@
      FRAGMENT into an href gets component-escaped by html/template
      (= and & become %3d/%26) and the server drops the range. */}}
 {{define "report-range-picker"}}
-{{/* Custom range calendar (Alpine) instead of two native date inputs —
-     the browser's own date popup follows the browser/OS theme and looks
-     different everywhere; this one is ours and matches the design
-     system. Click once for the start day, again for the end day. */}}
-<div class="card card-tight mb-6" x-data="reportRangeCal('{{.From}}', '{{.To}}', '{{.Today}}')">
+{{/* From/To as two shared date-picker fields (same component as every
+     other date field — see the "date-picker" partial). The server
+     clamps from > to and windows over 91 days, so the two fields don't
+     need cross-constraints; Max bounds both at the account-zone today. */}}
+<div class="card card-tight mb-6">
   <form method="get" class="flex flex-wrap items-end gap-3">
-    <input type="hidden" name="from" :value="from">
-    <input type="hidden" name="to" :value="to">
-    <div class="relative">
-      <label class="form-label">{{t "Range"}}</label>
-      <button type="button" @click="toggle()" class="form-input inline-flex items-center gap-2 whitespace-nowrap cursor-pointer bg-white hover:bg-gray-50" style="width:auto">
-        <svg class="w-4 h-4 text-gray-500" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M8 3v4M16 3v4M3 11h18"/></svg>
-        <span x-text="from + ' → ' + to">{{.From}} → {{.To}}</span>
-      </button>
-      <div x-show="open" x-cloak @click.outside="open=false" class="absolute z-50 mt-1 bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-72">
-        <div class="flex items-center justify-between mb-2">
-          <button type="button" @click="nav(-1)" aria-label="{{t "Previous month"}}" class="w-7 h-7 rounded-md hover:bg-gray-100 text-gray-600">&lsaquo;</button>
-          <span class="text-sm font-medium" x-text="monthLabel()"></span>
-          <button type="button" @click="nav(1)" aria-label="{{t "Next month"}}" class="w-7 h-7 rounded-md hover:bg-gray-100 text-gray-600">&rsaquo;</button>
-        </div>
-        <div class="grid grid-cols-7 text-center text-xs text-gray-400 mb-1">
-          <span>{{t "Su"}}</span><span>{{t "Mo"}}</span><span>{{t "Tu"}}</span><span>{{t "We"}}</span><span>{{t "Th"}}</span><span>{{t "Fr"}}</span><span>{{t "Sa"}}</span>
-        </div>
-        <div class="grid grid-cols-7 gap-y-0.5 text-center text-sm">
-          <template x-for="d in grid()" :key="d.k">
-            <button type="button" x-text="d.n" :disabled="!d.iso || d.dis" @click="pick(d.iso)" :class="cls(d)"></button>
-          </template>
-        </div>
-        <p class="text-xs text-gray-400 mt-2" x-text="sel === 'from' ? '{{t "Pick a start day"}}' : '{{t "Pick an end day"}}'"></p>
-      </div>
+    <div>
+      <label class="form-label">{{t "From"}}</label>
+      {{template "date-picker" dict "Name" "from" "Value" .From "Max" .Today}}
+    </div>
+    <div>
+      <label class="form-label">{{t "To"}}</label>
+      {{template "date-picker" dict "Name" "to" "Value" .To "Max" .Today}}
     </div>
     <button type="submit" class="btn btn-primary">{{t "Apply"}}</button>
     <div class="flex items-center gap-2 ml-auto">
@@ -438,41 +420,4 @@
     </div>
   </form>
 </div>
-<script>
-// Range calendar state for the report pages' shared picker. Days are
-// plain YYYY-MM-DD strings in the ACCOUNT timezone — the server passes
-// its idea of "today" (the account zone's current day, which bounds the
-// pickable range) so no client-side timezone math is needed.
-// Month navigation / label / grid come from calCore (see the layout's
-// global script) — ONE copy of the calendar math for every picker.
-function reportRangeCal(from, to, todayArg) {
-  return Object.assign(calCore(), {
-    open: false, from, to, sel: 'from',
-    today: todayArg || new Date().toISOString().slice(0, 10),
-    vy: +to.slice(0, 4), vm: +to.slice(5, 7) - 1,
-    dayDisabled(s) { return s > this.today; },
-    toggle() { this.open = !this.open; this.sel = 'from'; },
-    pick(s) {
-      if (!s) return;
-      if (this.sel === 'from' || s < this.from) {
-        this.from = s;
-        if (this.to < s) this.to = s;
-        this.sel = 'to';
-      } else {
-        this.to = s;
-        this.sel = 'from';
-        this.open = false;
-      }
-    },
-    cls(d) {
-      const c = 'w-8 h-8 rounded-md ';
-      if (!d.iso) return c + 'invisible';
-      if (d.dis) return c + 'text-gray-300 cursor-default';
-      if (d.iso === this.from || d.iso === this.to) return c + 'bg-brand text-gray-950 font-semibold';
-      if (d.iso > this.from && d.iso < this.to) return c + 'bg-brand-soft';
-      return c + 'hover:bg-gray-100';
-    }
-  });
-}
-</script>
 {{end}}

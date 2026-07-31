@@ -115,22 +115,37 @@ check("pickers are independent state",
   (await end.locator('input[type="hidden"]').inputValue()).endsWith("-20T00:00") &&
   (await start.locator('input[type="hidden"]').inputValue()) === "");
 
-// ── Report page: picker WITH Max — bounds must still disable ──
+// ── Report page: the range is two bounded pickers (From / To) ──
 await page.goto(`http://127.0.0.1:${PORT}/preview/report-en.html`, { waitUntil: "load" });
 await page.waitForTimeout(800);
-// The bounded picker lives in the collapsed conversions panel.
-await page.locator("button", { hasText: "Report conversions" }).click();
+const from = page.locator('[x-data^="dateCal"]').nth(0);
+const to = page.locator('[x-data^="dateCal"]').nth(1);
+
+// Initial values come from the server render (preview pins 07-21 → 07-28).
+check("range pickers carry the server-rendered range",
+  (await from.locator('input[type="hidden"]').inputValue()) === "2026-07-21" &&
+  (await to.locator('input[type="hidden"]').inputValue()) === "2026-07-28");
+
+// Max = account-zone today (2026-07-28): later days disabled, on/before enabled.
+await from.locator("button").first().click();
 await page.waitForTimeout(300);
-const bounded = page.locator('[x-data^="dateCal"]').first();
-await bounded.locator("button").first().click();
-await page.waitForTimeout(300);
-// Preview data pins Today/Max = 2026-07-28: later days disabled, on/before enabled.
-const boundedState = await bounded.evaluate((root) => {
+const boundedState = await from.evaluate((root) => {
   const btn = (n) => [...root.querySelectorAll(".grid-cols-7 button")].find((b) => b.textContent.trim() === String(n));
   return { d28: btn(28)?.disabled, d29: btn(29)?.disabled };
 });
 check("bounded picker: Max day enabled, day after disabled",
   boundedState.d28 === false && boundedState.d29 === true, JSON.stringify(boundedState));
+
+// Range flow: pick both ends, hidden from/to reflect (date-only format).
+await from.locator(".grid-cols-7 button", { hasText: /^15$/ }).first().click();
+await page.waitForTimeout(200);
+await to.locator("button").first().click();
+await page.waitForTimeout(300);
+await to.locator(".grid-cols-7 button", { hasText: /^20$/ }).first().click();
+await page.waitForTimeout(200);
+check("range picks reflect into hidden from/to",
+  (await from.locator('input[type="hidden"]').inputValue()) === "2026-07-15" &&
+  (await to.locator('input[type="hidden"]').inputValue()) === "2026-07-20");
 
 check("no page errors", pageErrors.length === 0, JSON.stringify(pageErrors));
 

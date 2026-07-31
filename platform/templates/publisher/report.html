@@ -7,7 +7,7 @@
   </div>
 </div>
 
-{{template "report-range-picker" dict "From" $r.From "To" $r.To "Preset" $r.Preset "Presets" $r.Presets "CSVURL" $r.CSVURL}}
+{{template "report-range-picker" dict "From" $r.From "To" $r.To "Today" $r.Today "Preset" $r.Preset "Presets" $r.Presets "CSVURL" $r.CSVURL}}
 
 {{if not $r.HasData}}
 <div class="card text-center text-gray-500">{{t "No delivery in this range."}}</div>
