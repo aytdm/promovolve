@@ -447,7 +447,19 @@ final class TrackRoutes(
     replayGuard match {
       case Some(guard) =>
         val nonce = ReplayGuard.hash(canonical)
-        guard.ask[Boolean](ref => TrackingReplayGuard.Validate(nonce, ref))
+        guard
+          .ask[Boolean](ref => TrackingReplayGuard.Validate(nonce, ref))
+          .recover { case e: java.util.concurrent.TimeoutException =>
+            // FAIL OPEN. The guard is replay HARDENING on top of the HMAC +
+            // freshness checks that already ran — if its shard is wedged or
+            // rebalancing, 500ing every imp/click/CTA trades the entire
+            // tracking+billing pipeline for a few minutes of replay window.
+            // (2026-07-31: a stranded replay-guard coordinator 500'd all
+            // beacons on one api pod for over an hour.) Accept, and WARN so
+            // a wedge is still visible in logs.
+            system.log.warn("Replay guard timed out — accepting event unchecked: {}", e.getMessage)
+            true
+          }
       case None =>
         Future.successful(true)
     }

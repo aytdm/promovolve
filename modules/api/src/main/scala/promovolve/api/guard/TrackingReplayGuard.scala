@@ -68,6 +68,15 @@ object TrackingReplayGuard {
       Entity(WindowedBloomReplayGuard.TypeKey) { entityCtx =>
         WindowedBloomReplayGuard.initBehavior(entityCtx, config)
       }
+        // Pin to the api role. This sharding is only ever INITIALIZED here
+        // (api-tier HttpBootstrap) — without a role, the coordinator's
+        // singleton anchor is "oldest cluster member", which can be the
+        // singleton-tier pod that never runs this init. Then every region's
+        // registration black-holes and all tracking beacons ask-timeout
+        // (observed 2026-07-31: >1h of imp/click 500s, coordinator anchored
+        // to a member with no coordinator on it). With the role, anchor,
+        // entities and coordinator all stay on nodes that run the init.
+        .withRole("api")
     )
   }
 
