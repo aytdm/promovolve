@@ -202,7 +202,10 @@ export function imageDimensions(file: File): Promise<{ w: number; h: number }> {
 // Trade-offs baked in:
 //   - Long-edge cap of 2000px. Expanded PC caps at 1600px; 2000 leaves
 //     headroom for retina without storing 4000px phone-camera originals
-//     for a 300x250 ad.
+//     for a 300x250 ad. Page-strip images (aspect > 3 — tall LP sections
+//     exported as one JPEG, ubiquitous on Japanese sites) cap the SHORT
+//     edge instead: long-edge-capping a 1000×11000 strip crushes its
+//     width to 182px. Mirror of ImageCompression.scaleFor.
 //   - Quality 0.82 — visually indistinguishable from the source on
 //     photos, ~30-50% smaller than equivalent JPEG.
 //   - Keep original if the downsample didn't kick in AND WebP came out
@@ -218,7 +221,12 @@ export async function prepareForUpload(file: File): Promise<File> {
     const bitmap = await createImageBitmap(file);
     const { width: srcW, height: srcH } = bitmap;
     const MAX_EDGE = 2000;
-    const scale = Math.min(1, MAX_EDGE / Math.max(srcW, srcH));
+    const MAX_STRIP_LONG_EDGE = 10000;
+    const longE = Math.max(srcW, srcH);
+    const shortE = Math.max(1, Math.min(srcW, srcH));
+    const scale = longE / shortE <= 3
+      ? Math.min(1, MAX_EDGE / longE)
+      : Math.min(1, MAX_EDGE / shortE, MAX_STRIP_LONG_EDGE / longE);
     const w = Math.max(1, Math.round(srcW * scale));
     const h = Math.max(1, Math.round(srcH * scale));
 

@@ -36,7 +36,25 @@ import javax.imageio.{ IIOImage, ImageIO, ImageWriteParam }
 object ImageCompression {
   private val log = LoggerFactory.getLogger(getClass)
   private val MaxEdge = 2000
+  // Page-strip images (whole LP sections exported as one tall JPEG —
+  // ubiquitous on Japanese landing pages) must NOT be long-edge capped:
+  // a 1000×11000 strip scaled to fit 2000 ends up 182px wide — mush.
+  // Past this aspect, the cap moves to the SHORT edge (the display-
+  // relevant one) with a generous long-edge ceiling for decode sanity.
+  private val StripAspect = 3.0
+  private val MaxStripLongEdge = 10000
   private val JpegQuality = 0.82f
+
+  /**
+   * Scale factor for (w, h): long-edge cap for normal images, short-edge
+   * cap + long-edge ceiling for strips/panoramas.
+   */
+  private[api] def scaleFor(w: Int, h: Int): Double = {
+    val longE = math.max(w, h).toDouble
+    val shortE = math.max(1, math.min(w, h)).toDouble
+    if (longE / shortE <= StripAspect) math.min(1.0, MaxEdge.toDouble / longE)
+    else math.min(1.0, math.min(MaxEdge.toDouble / shortE, MaxStripLongEdge.toDouble / longE))
+  }
 
   /**
    * Compress bytes if beneficial. Returns (bytes, mime, width, height).
@@ -73,7 +91,7 @@ object ImageCompression {
         } else {
           val srcW = src.getWidth
           val srcH = src.getHeight
-          val scale = math.min(1.0, MaxEdge.toDouble / math.max(srcW, srcH).toDouble)
+          val scale = scaleFor(srcW, srcH)
           val targetW = math.max(1, math.round(srcW * scale).toInt)
           val targetH = math.max(1, math.round(srcH * scale).toInt)
 

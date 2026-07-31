@@ -149,8 +149,11 @@ window.extractSections = function (strategy) {
       // Too small to be a content/product image: favicons, icons, small
       // logos, share buttons. naturalWidth is intrinsic, so this is reliable.
       if (w && h && (w < 120 || h < 120)) return false;
-      // Extreme aspect ratio: sprite sheets, hairline rules, ultra-thin bars.
-      if (w && h && Math.max(w, h) / Math.min(w, h) > 6) return false;
+      // Extreme aspect ratio: sprite sheets, hairline rules, ultra-thin
+      // bars — but only when THIN. A big page-strip (a whole LP section
+      // exported as one tall JPEG, e.g. 1000×11000) is real content the
+      // advertiser may want; sprites and hairlines have a small short edge.
+      if (w && h && Math.max(w, h) / Math.min(w, h) > 6 && Math.min(w, h) < 300) return false;
       var hay = (img.src + " " + (img.alt || "")).toLowerCase();
       // Strong non-content signals — always drop.
       if (/favicon|sprite|spinner|loader|placeholder|tracking|1x1|pixel\.|\/icons?\//.test(hay)) return false;
