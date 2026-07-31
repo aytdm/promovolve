@@ -221,7 +221,11 @@
           for (let i = 0; i < lead; i++) cells.push({ k: 'b' + i, n: '', iso: '' });
           for (let d = 1; d <= days; d++) {
             const s = this.iso(new Date(Date.UTC(this.vy, this.vm, d)));
-            cells.push({ k: s, n: d, iso: s, dis: this.dayDisabled(s) });
+            // !! — dis feeds a :disabled binding, and Alpine only REMOVES
+            // a boolean attribute for null/undefined/false. A truthy-but-
+            // not-boolean return ('' from a &&-chain over empty min/max)
+            // would set disabled on every day of the month.
+            cells.push({ k: s, n: d, iso: s, dis: !!this.dayDisabled(s) });
           }
           return cells;
         },
@@ -241,7 +245,7 @@
         time: (value || '').slice(11, 16),
         min: min || '', max: max || '',
         vy: 0, vm: 0,
-        dayDisabled(s) { return (this.max && s > this.max) || (this.min && s < this.min); },
+        dayDisabled(s) { return !!((this.max && s > this.max) || (this.min && s < this.min)); },
         toggle() {
           this.open = !this.open;
           if (this.open) {

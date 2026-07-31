@@ -82,6 +82,31 @@ jobs:
       - run: npm run lint
       - run: npm run test
 
+  datepicker:
+    name: Dashboard date-picker (browser)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform/dashboard-tests
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      # Needs BOTH toolchains: the Go preview test renders the real pages
+      # (PREVIEW_OUT), then Playwright drives the calendar in Chromium.
+      # A render test alone cannot catch this component's failure mode —
+      # Alpine boolean-attribute semantics only exist in a browser.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: platform/go.mod
+          cache-dependency-path: platform/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: platform/dashboard-tests/package-lock.json
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+
   go:
     name: Platform (go)
     runs-on: ubuntu-latest

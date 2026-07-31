@@ -36,6 +36,15 @@ func TestDatePickerRenders(t *testing.T) {
 				From: "2026-07-21", To: "2026-07-28", Today: "2026-07-28", Preset: "7d",
 				HasData:   true,
 				Campaigns: []reportBreakdownRow{{Key: "c1", Label: "Summer sale"}},
+				// The chart scripts splice these in as raw JS — leaving them
+				// zero renders `const labels = ;`, a page-wide SyntaxError
+				// the browser suite (dashboard-tests) would flag. Real
+				// handlers always marshal at least "[]".
+				ChartLabels: "[]", ChartSpend: "[]", ChartImps: "[]",
+				CampaignSeries:  reportSeriesChart{Labels: "[]", Series: "[]"},
+				SiteSeries:      reportSeriesChart{Labels: "[]", Series: "[]"},
+				CategorySeries:  reportSeriesChart{Labels: "[]", Series: "[]"},
+				PublisherSeries: reportSeriesChart{Labels: "[]", Series: "[]"},
 			}},
 			"dateCal('2026-07-28'",
 		},
