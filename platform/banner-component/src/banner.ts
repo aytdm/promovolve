@@ -1322,6 +1322,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
         background:transparent;
         border:${editMode ? "none" : "1px solid rgba(196,163,90,0.25)"};
         border-radius:${editMode ? "0" : "6px"};
+        opacity:${editMode ? "1" : "0"};transition:opacity .18s ease-out;
       ">
         <div class="design-box">${html}</div>
         <div class="collapsed-dogear-flap"></div>
@@ -1350,6 +1351,15 @@ export class ExpandableMagazineBanner extends HTMLElement {
         autoFitText(el);
       }
     });
+
+    // Atomic reveal: the banner rendered at opacity 0 (layout intact, so
+    // the autofit sweep above still measures). Show it only once every
+    // image has fetched AND decoded — a served ad must appear whole, not
+    // assemble itself piecemeal while its images trickle in. Capped so a
+    // dead/glacial image can't hold the slot hostage; edit mode renders
+    // visible from the start (the canvas re-renders on every keystroke).
+    const bannerEl = this.shadowRoot.querySelector<HTMLElement>(".banner");
+    if (!editMode && bannerEl) this.revealWhenImagesReady(bannerEl);
 
     // Tween items that declare animationTo from base state → target.
     // Items without animationFrom/animationTo are static. Edit mode
@@ -1396,6 +1406,29 @@ export class ExpandableMagazineBanner extends HTMLElement {
   /** Rendered-items snapshot for the collapsed/edit canvas — see
     * renderFromLayout and _replayItemEntrances. */
   private _renderedCollapsedItems: LayoutItem[] = [];
+
+  /** Fade `root` in once all of its <img>s are fetched + decoded (or the
+    * cap expires — a broken image must not blank the slot forever). decode()
+    * resolves only when the bitmap is paint-ready, so the reveal is truly
+    * atomic; images that error resolve too and render as their alt/blank. */
+  private revealWhenImagesReady(root: HTMLElement): void {
+    const CAP_MS = 2000;
+    const imgs = Array.from(root.querySelectorAll("img"));
+    const waits = imgs.map((img) => {
+      if (img.complete && img.naturalWidth > 0) return Promise.resolve();
+      if (typeof img.decode === "function") return img.decode().catch(() => undefined);
+      return new Promise<void>((res) => {
+        img.addEventListener("load", () => res(), { once: true });
+        img.addEventListener("error", () => res(), { once: true });
+      });
+    });
+    const cap = new Promise<void>((res) => setTimeout(res, CAP_MS));
+    Promise.race([Promise.all(waits), cap]).then(() => {
+      // A re-render replaces the shadow DOM wholesale; touching the old
+      // node then is harmless (it's detached), so no generation check.
+      root.style.opacity = "1";
+    });
+  }
 
   /** Play one item's entrance: synchronous snap to the off-pose (so the
     * first paint after this call is already the start state — no flash
