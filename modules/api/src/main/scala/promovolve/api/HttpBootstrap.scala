@@ -242,9 +242,16 @@ object HttpBootstrap {
       val engagementChecker: Option[promovolve.api.guard.EngagementChecker] =
         if (Try(appConfig.getBoolean("fraud.engagement-guard.enabled")).getOrElse(false)) {
           val cfg = promovolve.api.guard.EngagementGuard.Config()
+          // withRole: this sharding is only initialized HERE (api tier).
+          // Without the role, the coordinator anchors on the oldest cluster
+          // member — which after a roll can be the singleton pod, where no
+          // coordinator exists, stranding every region (same failure as the
+          // 2026-07-31 replay-guard incident; this guard fails open so it
+          // only cost L1 marks + log noise, but the rule is the rule: a
+          // sharding init'd on a subset of tiers MUST carry that tier's role.
           sharding.init(org.apache.pekko.cluster.sharding.typed.scaladsl.Entity(
             promovolve.api.guard.EngagementGuard.TypeKey
-          )(ctx => promovolve.api.guard.EngagementGuard.initBehavior(ctx, cfg)))
+          )(ctx => promovolve.api.guard.EngagementGuard.initBehavior(ctx, cfg)).withRole("api"))
           system.log.info("EngagementGuard enabled (fraud Layer 1): {} partitions", partitions: Integer)
           Some(new promovolve.api.guard.EngagementChecker(sharding, partitions, askTimeout = 300.millis)(using system))
         } else {
