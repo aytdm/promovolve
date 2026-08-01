@@ -1076,4 +1076,26 @@ object Protocol {
   final case class RemoveCampaign(campaignId: CampaignId) extends Command
 
   case object Passivate extends Command
+
+  /**
+   * Site-deletion cascade: purge every serve-side trace of this site — the
+   * LMDB-durable ServeIndex pools, the approval queue + decisions + trust
+   * anchors + quarantine (SQL), per-advertiser approval sets (announced),
+   * the traffic-ratio DData entry, and the whole in-memory State. Replies
+   * ok=false when the SQL step failed (the caller surfaces the error and the
+   * delete is retried); the pool/DData removals are fire-and-forget with
+   * their own retry ladders.
+   */
+  final case class PurgeSiteData(replyTo: ActorRef[SiteDataPurged]) extends Command
+
+  final case class SiteDataPurged(siteId: SiteId, approvalRowsDeleted: Int, ok: Boolean)
+      extends CborSerializable
+
+  /** Internal: DB step of PurgeSiteData finished; carry results back onto the actor thread. */
+  private[delivery] final case class SitePurgeDbDone(
+      replyTo: ActorRef[SiteDataPurged],
+      approvedCreativeAdvertisers: Map[String, String],
+      rowsDeleted: Int,
+      error: Option[String]
+  ) extends Command
 }

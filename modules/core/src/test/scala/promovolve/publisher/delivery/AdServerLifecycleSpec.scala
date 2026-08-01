@@ -23,11 +23,14 @@ import promovolve.publisher.{
   PendingSelectionStore
 }
 import promovolve.publisher.delivery.Protocol.{
+  BatchHostNotVerified,
   BatchSelect,
   BatchSelectResult,
   BatchSlotSpec,
   CandidatesCollected,
   PacingConfigUpdated,
+  PurgeSiteData,
+  SiteDataPurged,
   SpendInfoUpdated,
   VerifiedHostUpdated
 }
@@ -151,6 +154,7 @@ class AdServerLifecycleSpec extends AnyWordSpec with Matchers with BeforeAndAfte
       Future.successful(None)
     def unflagCreative(p: String, c: String): Future[Option[FlaggedCreative]] = Future.successful(None)
     def getFlagged(p: String): Future[Vector[FlaggedCreative]] = Future.successful(Vector.empty)
+    def deleteAllForSite(p: String): Future[Int] = Future.successful(0)
     def insertApproved(p: String, c: String, ca: String, a: String, via: String): Future[Unit] =
       Future.successful(())
     def getApprovedCreativeIds(p: String): Future[Set[String]] = Future.successful(Set.empty)
@@ -404,6 +408,75 @@ class AdServerLifecycleSpec extends AnyWordSpec with Matchers with BeforeAndAfte
 
       adServer ! Protocol.EvictCampaignFromSlots(CampaignId("camp-none"), Set.empty)
       serveIndexProbe.expectNoMessage(500.millis)
+    }
+  }
+
+  "PurgeSiteData (site-deletion cascade)" should {
+
+    "purge the serve index, revoke approvals, reply ok, and close the host gate" in {
+      import org.apache.pekko.actor.testkit.typed.scaladsl.FishingOutcomes
+
+      val serveIndexProbe = testKit.createTestProbe[ServeIndexDData.Cmd]()
+      val pubSiteId = SiteId("test-pub-delete")
+
+      val store = new IgnoringPendingStore {
+        override def getApprovedCreativeAdvertisers(publisherId: String): Future[Map[String, String]] =
+          Future.successful(Map("creative-1" -> "adv-9"))
+        override def deleteAllForSite(publisherId: String): Future[Int] = Future.successful(7)
+      }
+
+      val adServer = testKit.spawn(
+        AdServer(
+          publisherId = pubSiteId,
+          store = store,
+          creativeRepo = new IgnoringCreativeRepo,
+          serveIndex = serveIndexProbe.ref,
+          sharding = sharding,
+          statsSnapshotRepo = NoOpCreativeStatsSnapshotRepo,
+          trafficShapeSnapshotRepo = NoOpTrafficShapeSnapshotRepo,
+          budgetEventTopic = mockBudgetTopic,
+          pacingStrategy = FixedThrottlePacing(0.0),
+          rng = new Random(42)
+        )
+      )
+
+      // Open the host gate, then delete the site.
+      adServer ! VerifiedHostUpdated(Some("test.example.com"))
+
+      val purgeProbe = testKit.createTestProbe[SiteDataPurged]()
+      adServer ! PurgeSiteData(purgeProbe.ref)
+
+      // The durable serve pools die.
+      serveIndexProbe.fishForMessage(2.seconds) {
+        case ServeIndexDData.RemoveAllBySite(id) if id == pubSiteId.value =>
+          FishingOutcomes.complete
+        case _ => FishingOutcomes.continueAndIgnore
+      }
+
+      // The SQL step resolves and the reply carries its row count.
+      val purged = purgeProbe.expectMessageType[SiteDataPurged](3.seconds)
+      purged.ok shouldBe true
+      purged.approvalRowsDeleted shouldBe 7
+
+      // Advertiser-side approval sets are told to forget the site (probe is
+      // shared across tests, so fish rather than expect head-of-queue).
+      advertiserProbe.fishForMessage(2.seconds) {
+        case r: AdvertiserEntity.RevokeCreativeApproval
+            if r.creativeId.value == "creative-1" && r.siteId == pubSiteId =>
+          FishingOutcomes.complete
+        case _ => FishingOutcomes.continueAndIgnore
+      }
+
+      // In-memory state was reset: the previously verified host is gone, so
+      // the serve gate answers not-verified for the same URL.
+      val selectProbe = testKit.createTestProbe[BatchSelectResult]()
+      adServer ! BatchSelect(
+        url = URL("http://test.example.com/page"),
+        slots = Vector(BatchSlotSpec(SlotId("slot-1"), 300, 250)),
+        classificationFreshnessWindowMs = 0L,
+        replyTo = selectProbe.ref
+      )
+      selectProbe.expectMessage(3.seconds, BatchHostNotVerified)
     }
   }
 }

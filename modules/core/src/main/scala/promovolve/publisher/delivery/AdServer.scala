@@ -76,6 +76,7 @@ object AdServer {
     Passivate,
     PendingItem,
     PendingList,
+    PurgeSiteData,
     RecordClick,
     RecordFold,
     RecordImpression,
@@ -86,6 +87,7 @@ object AdServer {
     RemoveTrustAnchor,
     RevokeCreativeApproval,
     ServeStats,
+    SiteDataPurged,
     TrustAnchorRemoved,
     Unflag,
     UnflagResult
@@ -3076,6 +3078,52 @@ private[delivery] class AdServer(
       case Passivate =>
         log.info("Passivating AdServer for site {} (admin request)", siteId.value)
         Behaviors.stopped
+
+      case Protocol.PurgeSiteData(replyTo) =>
+        log.info("Site {} deleted — purging serve pools, approvals, and serve state", siteId.value)
+        // Durable candidate pools: every siteId|slot entry dies. Without this
+        // the LMDB-durable pools keep serving cached winners after deletion.
+        serveIndex ! ServeIndexDData.RemoveAllBySite(siteId.value)
+        // Drop this site's traffic-ratio DData entry.
+        replicator ! Replicator.Update(
+          AdServer.TrafficRatioKey,
+          LWWMap.empty[SiteId, AdServer.TrafficRatioData],
+          Replicator.WriteLocal,
+          ddataUpdateAdapter
+        )(_.remove(selfUniqueAddress, siteId))
+        // SQL: read the approval rows first (they are the announce source for
+        // per-advertiser revocation), then drop everything the store holds.
+        store.getApprovedCreativeAdvertisers(siteId.value)
+          .flatMap(approved => store.deleteAllForSite(siteId.value).map(rows => (approved, rows)))
+          .onComplete {
+            case Success((approved, rows)) =>
+              ctx.self ! Protocol.SitePurgeDbDone(replyTo, approved, rows, None)
+            case Failure(ex) =>
+              ctx.self ! Protocol.SitePurgeDbDone(replyTo, Map.empty, 0, Some(ex.getMessage))
+          }
+        Behaviors.same
+
+      case Protocol.SitePurgeDbDone(replyTo, approved, rows, error) =>
+        error match {
+          case Some(err) =>
+            log.error("Site-delete purge DB step failed for {} — approvals kept, delete must be retried: {}",
+              siteId.value, err)
+          case None =>
+            // Announce to each advertiser BEFORE forgetting: Creative.approvedSites
+            // must drop this site, or a re-created site inherits old approvals.
+            approved.foreach { case (creativeId, advertiserId) =>
+              sharding.entityRefFor(AdvertiserEntity.TypeKey, advertiserId) !
+              AdvertiserEntity.RevokeCreativeApproval(CreativeId(creativeId), siteId, system.ignoreRef)
+            }
+            if (approved.nonEmpty)
+              log.info("Site-delete purge: revoked {} creative approvals for {}",
+                approved.size: java.lang.Integer, siteId.value)
+        }
+        replyTo ! Protocol.SiteDataPurged(siteId, rows, error.isEmpty)
+        // Full in-memory reset. The deleted SiteEntity is a tombstone and
+        // re-publishes nothing, so this state stays empty until a real
+        // re-create repopulates it.
+        behavior(State())
 
       case CleanupStalePending =>
         val now = Instant.now()

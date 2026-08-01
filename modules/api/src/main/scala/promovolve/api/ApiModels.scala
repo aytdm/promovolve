@@ -272,7 +272,11 @@ object ApiModels {
       matchedCategory: Option[String] = None,
       // Raw taxonomy id behind matchedCategory (absent for "Filler"), so
       // the dashboard can localize the display name by id.
-      matchedCategoryId: Option[String] = None
+      matchedCategoryId: Option[String] = None,
+      // URL of the page whose classification won the matchedCategory
+      // attribution — a slot reused across pages shows one label, and the
+      // dashboard needs to say which page it came from.
+      matchedPageUrl: Option[String] = None
   )
 
   case class Site(

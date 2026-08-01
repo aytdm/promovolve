@@ -570,6 +570,55 @@ object SiteEntity {
           }
 
           /**
+           * Withdraw every remaining DData entry this site published (pacing,
+           * ad-product blocklist, auto-approve, suspension). Without these a
+           * deleted site leaves orphaned cluster-wide entries forever — the
+           * tombstoned entity never refreshes them.
+           */
+          def removeSiteDDataEntries(): Unit = {
+            replicator ! Replicator.Update(PacingConfigKey, LWWMap.empty[SiteId, PacingConfig],
+              Replicator.WriteLocal, ddataResponseAdapter)(_.remove(selfUniqueAddress, siteId))
+            replicator ! Replicator.Update(AdProductBlocklistKey, LWWMap.empty[SiteId, CachedAdProductBlocklist],
+              Replicator.WriteLocal, ddataResponseAdapter)(_.remove(selfUniqueAddress, siteId))
+            replicator ! Replicator.Update(AutoApproveKey, LWWMap.empty[SiteId, CachedAutoApprove],
+              Replicator.WriteLocal, ddataResponseAdapter)(_.remove(selfUniqueAddress, siteId))
+            replicator ! Replicator.Update(SiteSuspendedKey, LWWMap.empty[SiteId, CachedSiteSuspended],
+              Replicator.WriteLocal, ddataResponseAdapter)(_.remove(selfUniqueAddress, siteId))
+            ctx.log.info("SiteEntity {} removed pacing/blocklist/auto-approve/suspension DData entries",
+              siteId.value)
+          }
+
+          /**
+           * Site-deletion cascade, entity share: cancel the runtime timers,
+           * withdraw every DData entry, unregister from the category
+           * registry, and reset the per-(category, site) taxonomy rankers so
+           * a re-created site starts cold. The durable-state wipe plus the
+           * tombstone recovery guard make the deletion permanent.
+           */
+          def purgeSiteRuntime(state: State): Unit = {
+            timers.cancel("floor-cpm-observation")
+            timers.cancel("refresh-demand")
+            timers.cancel("retry-demand")
+            removeVerifiedHost()
+            removeSiteDDataEntries()
+            categoryRegistry ! CategoryRegistry.UnregisterPublisher(siteId)
+            val cats: Set[String] =
+              state.demandCategories.getOrElse(Set.empty) ++
+              state.pageClassifications.valuesIterator.flatMap(_.categories.keysIterator) ++
+              state.config.map(_.taxonomyIds).getOrElse(Set.empty)
+            cats.foreach { cat =>
+              sharding.entityRefFor(promovolve.taxonomy.TaxonomyRankerEntity.TypeKey, s"$cat|${siteId.value}") !
+              promovolve.taxonomy.TaxonomyRankerEntity.Reset
+            }
+            if (cats.nonEmpty)
+              ctx.log.info("SiteEntity {} reset {} taxonomy rankers", siteId.value, cats.size: java.lang.Integer)
+            floorSweepOptimizer = None
+            floorSweepOptimizerByCategory = Map.empty
+            recentFloorObservations = Vector.empty
+            demandCategories = None
+          }
+
+          /**
            * Normalize a URL or domain to a lowercase host (including port if non-standard).
            * Strips scheme and path but keeps host:port.
            */
@@ -639,6 +688,124 @@ object SiteEntity {
             registerCategories(config.copy(taxonomyIds = normalizedIds))
           }
 
+          /**
+           * Arm the site's live runtime: DData publishes, floor-sweep
+           * optimizers, auctioneer replays, and the observation/demand
+           * timers. Called on recovery of a CONFIGURED site and from
+           * Initialize — never for a tombstone (deleted site) or a
+           * pre-Initialize shell, which must publish and persist nothing.
+           */
+          def startSiteRuntime(state: State): Unit = {
+            state.config.foreach { config =>
+              ctx.log.info(
+                "SiteEntity {} recovered, resuming with config for publisher {}",
+                siteId.value,
+                config.publisherId.value
+              )
+              setupFromConfig(config)
+            }
+            // Publish pacing config, ad product blocklist, and verified host to DData on recovery
+            publishPacingConfig(state.pacingConfig.copy(bidWeight = state.bidWeight,
+              floorCpm = state.floorCpm.toDouble))
+            publishAdProductBlocklist(state.adProductBlocklist)
+            publishAutoApprove(state.autoApproveEnabled)
+            publishSiteSuspended(state.suspended)
+            publishVerifiedHost(state.verifiedHost)
+            // Replay admin per-slot floor overrides to AuctioneerEntity so
+            // they survive restarts — they are the only per-slot overrides
+            // the auctioneer takes.
+            state.config.foreach { cfg =>
+              val adminMap = cfg.slots
+                .flatMap(s => s.floorOverride.map(cpm => SlotId(s.slotId) -> cpm))
+                .toMap
+              if (adminMap.nonEmpty)
+                auctioneerRef ! AuctioneerEntity.UpdateAdminSlotFloors(adminMap)
+            }
+            // Replay persisted page classifications to AuctioneerEntity so the
+            // auctioneer's `lastPage` is repopulated before the cluster sees
+            // serve traffic — PeriodicReauction has something to chew on
+            // without waiting for on-demand re-classification.
+            if (state.pageClassifications.nonEmpty) {
+              auctioneerRef ! AuctioneerEntity.RestoreClassifications(state.pageClassifications)
+              ctx.log.info(
+                "SiteEntity {} replayed {} page classifications to auctioneer",
+                siteId.value, state.pageClassifications.size: java.lang.Integer
+              )
+            }
+            // Restore the floor CPM sweep optimizer. Restored from the
+            // persisted `state.floorSweepSnapshot` if present, else starts
+            // fresh.
+            val sweep = new FloorSweepOptimizer(siteId, floorSweepConfig)
+            sweep.setInitialFloor(state.floorCpm.toDouble)
+            sweep.setMinFloor(state.minFloorCpm.toDouble)
+            state.floorSweepSnapshot match {
+              case Some(snap) =>
+                sweep.restore(snap)
+                ctx.log.info("SiteEntity {} restored sweep optimizer from persisted snapshot", siteId.value)
+              case None =>
+                ctx.log.info("SiteEntity {} sweep optimizer starts fresh", siteId.value)
+            }
+            floorSweepOptimizer = Some(sweep)
+            // Hydrate the observation history (the per-site decision-log
+            // dashboard) from persisted state — it survives restarts now;
+            // each observation tick folds the working var back into the
+            // persisted state.
+            recentFloorObservations = state.recentFloorObservations
+            // Per-category optimizers. Rebuilt
+            // from persisted per-category snapshots, mirroring the site-level
+            // restore above. Empty when the mode was never enabled.
+            if (state.floorSweepSnapshotByCategory.nonEmpty) {
+              state.floorSweepSnapshotByCategory.foreach { case (cat, snap) =>
+                val opt = new FloorSweepOptimizer(siteId, floorSweepConfig)
+                opt.setInitialFloor(state.floorCpmByCategory.getOrElse(cat, state.floorCpm).toDouble)
+                opt.setMinFloor(state.minFloorCpm.toDouble)
+                opt.restore(snap)
+                floorSweepOptimizerByCategory = floorSweepOptimizerByCategory.updated(cat, opt)
+              }
+              ctx.log.info("SiteEntity {} restored {} per-category sweep optimizers (mode={})",
+                siteId.value, state.floorSweepSnapshotByCategory.size: java.lang.Integer, "enforce")
+            }
+            // Floor observation interval. Two sources, in priority order:
+            //   1. FLOOR_OBSERVATION_INTERVAL_SECONDS env override — explicit
+            //      decoupling from day duration; lets us run real-day pacing
+            //      (revenue counters accumulate over 24h) while keeping sweep
+            //      cycles fast for observation.
+            //   2. Auto-scale with `dayDurationSeconds` (default) — keeps the
+            //      familiar "real day → 15 min ticks, fast sim-day → ~5s ticks"
+            //      behavior.
+            val daySeconds = state.pacingConfig.dayDurationSeconds
+            val floorObsInterval = sys.env.get("FLOOR_OBSERVATION_INTERVAL_SECONDS")
+              .flatMap(s => scala.util.Try(s.trim.toInt).toOption)
+              .filter(_ > 0)
+              .map(_.seconds)
+              .getOrElse {
+                if (daySeconds < 86400) {
+                  val scaled = math.max(5, (daySeconds.toDouble / 86400.0 * 900).toInt) // 900s = 15 min
+                  scaled.seconds
+                } else 15.minutes
+              }
+            // Hash-staggered initial delay so sites don't tick in lockstep
+            // (they all arm timers within the same post-roll seconds and
+            // then stay phase-locked forever — the other half of the wave).
+            val obsSplay = (math.abs(siteId.value.hashCode) % floorObsInterval.toSeconds.max(1)).seconds
+            timers.startTimerAtFixedRate("floor-cpm-observation", FloorCpmObservationTick, obsSplay,
+              floorObsInterval)
+            ctx.log.info("SiteEntity {} floor CPM sweep optimizer initialized (floor={}, obsInterval={}, splay={})",
+              siteId.value, state.floorCpm.toDouble, floorObsInterval, obsSplay)
+
+            // Start periodic demand category refresh (staggered likewise)
+            timers.startTimerWithFixedDelay("refresh-demand", RefreshDemandCategories,
+              (math.abs(siteId.value.hashCode) % 300).seconds, 5.minutes)
+            refreshDemandCategories()
+            // STRIPPED: on-recovery bootstrap crawl. Under on-demand classification
+            // we do NOT proactively crawl — a recovered site's lastPage is already
+            // repopulated from persisted pageClassifications via RestoreClassifications
+            // (above); anything not yet classified is filled lazily when a real
+            // visitor hits the page (serve -> needText -> /v1/classify-page). This is
+            // what stops every api restart from re-crawling the whole site.
+            // See docs/design/ON_DEMAND_CLASSIFICATION.md.
+          }
+
           // Command handler for DurableStateBehavior
           def commandHandler(state: State, command: Command): Effect[State] =
             command match {
@@ -675,7 +842,10 @@ object SiteEntity {
                   ctx.log.info("SiteEntity {} generated verification token, awaiting domain verification", siteId.value)
                   Effect
                     .persist(newState)
-                    .thenRun(_ => setupFromConfig(config))
+                    // Recovery no longer arms the runtime for config-less
+                    // shells (tombstone guard), so first-time initialization
+                    // must start it here: timers, publishes, floor sweep.
+                    .thenRun((st: State) => startSiteRuntime(st))
                     .thenReply(replyTo)(_ => Initialized(siteId))
                 }
 
@@ -1305,14 +1475,23 @@ object SiteEntity {
                 Effect.stop()
 
               case Delete =>
-                // Real deletion (from PublisherEntity.DeleteSite): clear the
-                // durable state so the siteId is re-creatable from scratch, and
-                // drop the verified host from DData so serving stops. A bare
-                // Shutdown used to leave both behind — a "deleted" site kept
-                // serving and its orphaned config shadowed any re-create.
+                // Real deletion: clear the durable state so the siteId is
+                // re-creatable from scratch, and withdraw the site's whole
+                // DData/registry/ranker footprint so serving stops for good.
                 ctx.log.info("SiteEntity {} deleting durable state", siteId.value)
-                removeVerifiedHost()
+                purgeSiteRuntime(state)
                 Effect.persist(State.empty(siteId)).thenStop()
+
+              case DeleteSiteData(replyTo) =>
+                // Acknowledged deletion for the cascade: the reply fires only
+                // after the empty state persisted, so the caller can trust
+                // (and retry) the delete instead of assuming it landed.
+                ctx.log.info("SiteEntity {} deleting durable state (cascade)", siteId.value)
+                purgeSiteRuntime(state)
+                Effect
+                  .persist(State.empty(siteId))
+                  .thenRun((_: State) => replyTo ! SiteDataDeleted(siteId))
+                  .thenStop()
 
               case ClassifyUrl(url, text, _section, slots, replyTo) =>
                 // On-demand, serve-triggered classification. Text is supplied by
@@ -1495,8 +1674,11 @@ object SiteEntity {
                 // Persist the last-known set so a restart recovers it instead of
                 // None — avoids skipping classification during the cold-start
                 // window while CampaignDirectory is unavailable. Persist on change
-                // only, to keep the write rate near zero.
-                if (next != state.demandCategories) Effect.persist(state.copy(demandCategories = next))
+                // only, to keep the write rate near zero. Never persist for an
+                // uninitialized shell: a tombstoned (deleted) site must not
+                // re-create its durable row.
+                if (state.isInitialized && next != state.demandCategories)
+                  Effect.persist(state.copy(demandCategories = next))
                 else Effect.none
 
               case DemandCategoriesRefreshFailed(ex) =>
@@ -1512,119 +1694,19 @@ object SiteEntity {
             emptyState = State.empty(siteId),
             commandHandler = commandHandler
           ).receiveSignal { case (state, org.apache.pekko.persistence.typed.state.RecoveryCompleted) =>
-            // On recovery, re-initialize from persisted config.
             // Hydrate the in-memory demand cache from persisted state so reads
             // and classification use the last-known set without asking the
             // singleton during its cold-start window.
             demandCategories = state.demandCategories
-            state.config.foreach { config =>
-              ctx.log.info(
-                "SiteEntity {} recovered, resuming with config for publisher {}",
-                siteId.value,
-                config.publisherId.value
-              )
-              setupFromConfig(config)
-            }
-            // Publish pacing config, ad product blocklist, and verified host to DData on recovery
-            publishPacingConfig(state.pacingConfig.copy(bidWeight = state.bidWeight,
-              floorCpm = state.floorCpm.toDouble))
-            publishAdProductBlocklist(state.adProductBlocklist)
-            publishAutoApprove(state.autoApproveEnabled)
-            publishSiteSuspended(state.suspended)
-            publishVerifiedHost(state.verifiedHost)
-            // Replay admin per-slot floor overrides to AuctioneerEntity so
-            // they survive restarts — they are the only per-slot overrides
-            // the auctioneer takes.
-            state.config.foreach { cfg =>
-              val adminMap = cfg.slots
-                .flatMap(s => s.floorOverride.map(cpm => SlotId(s.slotId) -> cpm))
-                .toMap
-              if (adminMap.nonEmpty)
-                auctioneerRef ! AuctioneerEntity.UpdateAdminSlotFloors(adminMap)
-            }
-            // Replay persisted page classifications to AuctioneerEntity so the
-            // auctioneer's `lastPage` is repopulated before the cluster sees
-            // serve traffic — PeriodicReauction has something to chew on
-            // without waiting for on-demand re-classification.
-            if (state.pageClassifications.nonEmpty) {
-              auctioneerRef ! AuctioneerEntity.RestoreClassifications(state.pageClassifications)
-              ctx.log.info(
-                "SiteEntity {} replayed {} page classifications to auctioneer",
-                siteId.value, state.pageClassifications.size: java.lang.Integer
-              )
-            }
-            // Restore the floor CPM sweep optimizer. Restored from the
-            // persisted `state.floorSweepSnapshot` if present, else starts
-            // fresh.
-            val sweep = new FloorSweepOptimizer(siteId, floorSweepConfig)
-            sweep.setInitialFloor(state.floorCpm.toDouble)
-            sweep.setMinFloor(state.minFloorCpm.toDouble)
-            state.floorSweepSnapshot match {
-              case Some(snap) =>
-                sweep.restore(snap)
-                ctx.log.info("SiteEntity {} restored sweep optimizer from persisted snapshot", siteId.value)
-              case None =>
-                ctx.log.info("SiteEntity {} sweep optimizer starts fresh", siteId.value)
-            }
-            floorSweepOptimizer = Some(sweep)
-            // Hydrate the observation history (the per-site decision-log
-            // dashboard) from persisted state — it survives restarts now;
-            // each observation tick folds the working var back into the
-            // persisted state.
-            recentFloorObservations = state.recentFloorObservations
-            // Per-category optimizers. Rebuilt
-            // from persisted per-category snapshots, mirroring the site-level
-            // restore above. Empty when the mode was never enabled.
-            if (state.floorSweepSnapshotByCategory.nonEmpty) {
-              state.floorSweepSnapshotByCategory.foreach { case (cat, snap) =>
-                val opt = new FloorSweepOptimizer(siteId, floorSweepConfig)
-                opt.setInitialFloor(state.floorCpmByCategory.getOrElse(cat, state.floorCpm).toDouble)
-                opt.setMinFloor(state.minFloorCpm.toDouble)
-                opt.restore(snap)
-                floorSweepOptimizerByCategory = floorSweepOptimizerByCategory.updated(cat, opt)
-              }
-              ctx.log.info("SiteEntity {} restored {} per-category sweep optimizers (mode={})",
-                siteId.value, state.floorSweepSnapshotByCategory.size: java.lang.Integer, "enforce")
-            }
-            // Floor observation interval. Two sources, in priority order:
-            //   1. FLOOR_OBSERVATION_INTERVAL_SECONDS env override — explicit
-            //      decoupling from day duration; lets us run real-day pacing
-            //      (revenue counters accumulate over 24h) while keeping sweep
-            //      cycles fast for observation.
-            //   2. Auto-scale with `dayDurationSeconds` (default) — keeps the
-            //      familiar "real day → 15 min ticks, fast sim-day → ~5s ticks"
-            //      behavior.
-            val daySeconds = state.pacingConfig.dayDurationSeconds
-            val floorObsInterval = sys.env.get("FLOOR_OBSERVATION_INTERVAL_SECONDS")
-              .flatMap(s => scala.util.Try(s.trim.toInt).toOption)
-              .filter(_ > 0)
-              .map(_.seconds)
-              .getOrElse {
-                if (daySeconds < 86400) {
-                  val scaled = math.max(5, (daySeconds.toDouble / 86400.0 * 900).toInt) // 900s = 15 min
-                  scaled.seconds
-                } else 15.minutes
-              }
-            // Hash-staggered initial delay so sites don't tick in lockstep
-            // (they all arm timers within the same post-roll seconds and
-            // then stay phase-locked forever — the other half of the wave).
-            val obsSplay = (math.abs(siteId.value.hashCode) % floorObsInterval.toSeconds.max(1)).seconds
-            timers.startTimerAtFixedRate("floor-cpm-observation", FloorCpmObservationTick, obsSplay,
-              floorObsInterval)
-            ctx.log.info("SiteEntity {} floor CPM sweep optimizer initialized (floor={}, obsInterval={}, splay={})",
-              siteId.value, state.floorCpm.toDouble, floorObsInterval, obsSplay)
-
-            // Start periodic demand category refresh (staggered likewise)
-            timers.startTimerWithFixedDelay("refresh-demand", RefreshDemandCategories,
-              (math.abs(siteId.value.hashCode) % 300).seconds, 5.minutes)
-            refreshDemandCategories()
-          // STRIPPED: on-recovery bootstrap crawl. Under on-demand classification
-          // we do NOT proactively crawl — a recovered site's lastPage is already
-          // repopulated from persisted pageClassifications via RestoreClassifications
-          // (above); anything not yet classified is filled lazily when a real
-          // visitor hits the page (serve -> needText -> /v1/classify-page). This is
-          // what stops every api restart from re-crawling the whole site.
-          // See docs/design/ON_DEMAND_CLASSIFICATION.md.
+            if (state.config.isEmpty) {
+              // TOMBSTONE (deleted site) or pre-Initialize shell: publish
+              // NOTHING, arm NO timers, persist NOTHING. The unguarded
+              // recovery used to re-publish pacing/suspension/verified-host
+              // and re-persist a demand-categories row here — exactly how a
+              // deleted site resurrected itself. Initialize starts the
+              // runtime for real sites; a tombstone stays inert forever.
+              ctx.log.info("SiteEntity {} recovered without config — staying dormant", siteId.value)
+            } else startSiteRuntime(state)
           }
         }
     }
@@ -2333,6 +2415,16 @@ object SiteEntity {
    * re-creatable from scratch afterwards.
    */
   case object Delete extends Command
+
+  /**
+   * Acknowledged variant of [[Delete]] for the site-deletion cascade: the
+   * API layer asks this so a lost message or failed persist surfaces as an
+   * error (and a retry) instead of a silent half-delete — the fire-and-forget
+   * tell was how "deleted" sites kept serving and later resurrected.
+   */
+  final case class DeleteSiteData(replyTo: ActorRef[SiteDataDeleted]) extends Command
+
+  final case class SiteDataDeleted(siteId: SiteId) extends promovolve.CborSerializable
 
   object State {
     def empty(siteId: SiteId): State = State(siteId, None, None, PacingConfig.default)

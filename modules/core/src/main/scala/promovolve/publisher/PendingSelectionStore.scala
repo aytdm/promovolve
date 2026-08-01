@@ -209,6 +209,14 @@ trait PendingSelectionStore {
 
   /** Get all flagged creatives for a publisher. */
   def getFlagged(publisherId: String): Future[Vector[FlaggedCreative]]
+
+  /**
+   * Site-deletion cascade: remove EVERYTHING this store holds for the site —
+   * pending queue, first-seen ages, approval decisions, trust anchors, and
+   * quarantined creatives. Returns the total rows removed. Earnings history
+   * lives elsewhere (tracking_events / settlement) and is not touched.
+   */
+  def deleteAllForSite(publisherId: String): Future[Int]
 }
 
 /**

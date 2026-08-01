@@ -89,9 +89,19 @@ object PublisherEntity {
         def shutdownSite(siteId: SiteId): Unit = {
           val siteRef = sharding.entityRefFor(SiteEntity.TypeKey, siteId.value)
           // Delete (not Shutdown): clears the site's durable state and its
-          // verified-host DData entry, so the id is re-creatable and serving
-          // stops. Shutdown alone left both behind.
+          // DData footprint, so the id is re-creatable and serving stops.
+          // The API-layer delete cascade asks SiteEntity.DeleteSiteData with
+          // an ack BEFORE this runs; this tell is idempotent backup for any
+          // direct caller of DeleteSite.
           siteRef ! SiteEntity.Delete
+          // Drop the per-site domain-blocklist DData entry — it is keyed by
+          // siteId and nothing else ever removes it once the site is gone.
+          replicator ! Replicator.Update(
+            DomainBlocklistCacheKey,
+            LWWMap.empty[SiteId, CachedDomainBlocklist],
+            Replicator.WriteLocal,
+            ctx.self
+          )(_.remove(node, siteId))
         }
 
         def cancelRetryTimer(): Unit = timers.cancel(retryTimerKey)

@@ -463,6 +463,18 @@ object ServeIndexDData {
             }
             Behaviors.same
 
+          case RemoveAllBySite(siteId) =>
+            val ns = siteId
+            knownNS += ns
+            ctx.log.info("Site deleted — removing ALL serve entries for site {}", siteId)
+            (0 until Buckets).foreach { bucket =>
+              adapter.askGet(
+                askRef => Replicator.Get(mapKey(ns, bucket), Replicator.ReadLocal, askRef),
+                rsp => GetBucketForSitePurge(ns, bucket, rsp)
+              )
+            }
+            Behaviors.same
+
           // --- Reads ---
           case Get(k, replyTo) =>
             val ns = pubOf(k)
@@ -809,6 +821,9 @@ object ServeIndexDData {
                 handleBucketRemoval(ns, b, rsp, s"advertiser ${advertiserId.value}",
                   _.advertiserId == advertiserId)
 
+              case GetBucketForSitePurge(ns, b, rsp) =>
+                handleBucketRemoval(ns, b, rsp, "site-delete purge", _ => true)
+
               // Complete GetKeysBySite bucket queries
               case GetBucketForKeys(siteId, b, rsp, _, aggregator) =>
                 val now = System.currentTimeMillis()
@@ -935,6 +950,13 @@ object ServeIndexDData {
   final case class RemoveAdvertiserBySite(siteId: String, advertiserId: AdvertiserId) extends Cmd
 
   /**
+   * Remove EVERY serve entry for a site — the site-deletion cascade. Without
+   * this the site's LMDB-durable candidate pools outlive the site and keep
+   * serving cached winners after the publisher deletes it.
+   */
+  final case class RemoveAllBySite(siteId: String) extends Cmd
+
+  /**
    * Get all keys (slotIds) for a given siteId.
    * Returns a list of slotId strings that have entries in the ServeIndex.
    */
@@ -1007,6 +1029,12 @@ object ServeIndexDData {
       ns: String,
       bucket: Int,
       advertiserId: AdvertiserId,
+      rsp: Replicator.GetResponse[LWWMap[String, ServeView]]
+  ) extends Internal
+
+  private final case class GetBucketForSitePurge(
+      ns: String,
+      bucket: Int,
       rsp: Replicator.GetResponse[LWWMap[String, ServeView]]
   ) extends Internal
 

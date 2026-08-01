@@ -191,6 +191,16 @@ object AuctioneerEntity {
       classifications: Map[String, SiteEntity.ClassificationEntry]
   ) extends Command
 
+  /**
+   * Site-deletion cascade: forget this site entirely. All auctioneer state
+   * is in-memory, so stopping the actor IS the reset — a remembered-entities
+   * restart comes back empty and idle, and the deleted SiteEntity (a
+   * tombstone) restores nothing into it.
+   */
+  final case class ClearSite(replyTo: ActorRef[SiteCleared]) extends Command
+
+  final case class SiteCleared(siteId: SiteId) extends promovolve.CborSerializable
+
   final case class AdSlotSpec(
       slotId: SlotId,
       declaredSizes: List[AdSize],
@@ -425,6 +435,11 @@ private final class AuctioneerEntity private (
       adminSlotFloorOverrides = floors
       scheduleReauction()
       Behaviors.same
+
+    case ClearSite(replyTo) =>
+      ctx.log.info("Site {} deleted — stopping auctioneer, discarding in-memory auction state", siteId)
+      replyTo ! SiteCleared(siteId)
+      Behaviors.stopped
 
     case RestoreClassifications(classifications) =>
       // Merge with whatever lastPage already holds. This arrives at

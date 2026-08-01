@@ -128,6 +128,7 @@ class AdServerSuspensionSpec extends AnyWordSpec with Matchers with BeforeAndAft
       Future.successful(None)
     def unflagCreative(p: String, c: String): Future[Option[FlaggedCreative]] = Future.successful(None)
     def getFlagged(p: String): Future[Vector[FlaggedCreative]] = Future.successful(Vector.empty)
+    def deleteAllForSite(p: String): Future[Int] = Future.successful(0)
     def insertApproved(p: String, c: String, ca: String, a: String, via: String): Future[Unit] =
       Future.successful(())
     def getApprovedCreativeIds(p: String): Future[Set[String]] = Future.successful(Set.empty)

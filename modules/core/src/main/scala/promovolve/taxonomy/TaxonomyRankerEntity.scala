@@ -208,6 +208,11 @@ object TaxonomyRankerEntity {
               bufferedState = Some(current.copy(stats = updatedStats))
               Effect.none
 
+            case Reset =>
+              ctx.log.info("TaxonomyRanker[{}|{}] reset (site deleted) — learned state wiped", categoryId, siteId)
+              bufferedState = None
+              Effect.persist(State.empty(categoryId, siteId))
+
             case RecordClick() =>
               val current = effectiveState(state)
               val tNow = nowMs
@@ -298,6 +303,12 @@ object TaxonomyRankerEntity {
    * Should only be called after a corresponding RecordImpression.
    */
   final case class RecordClick() extends Command
+
+  /**
+   * Site-deletion cascade: wipe this (category, site) ranker so a re-created
+   * site starts from cold priors instead of the deleted site's posteriors.
+   */
+  case object Reset extends Command
 
   /** Get current stats for debugging/monitoring (deterministic) */
   final case class GetStats(replyTo: ActorRef[StatsSnapshot]) extends Command

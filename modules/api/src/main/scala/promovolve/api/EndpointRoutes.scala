@@ -2430,11 +2430,53 @@ class EndpointRoutes(
   }
   private val deleteSiteLogic: ((String, String)) => Future[Either[ErrorResponse, Unit]] = {
     case (publisherId, siteId) =>
-      publisherRef(publisherId)
-        .ask[PublisherEntity.SiteDeleted](ref => PublisherEntity.DeleteSite(SiteId(siteId), ref))
-        .map(_ => Right(()))
-        .recover { case ex => Left(ErrorResponse("delete_site_failed", ex.getMessage)) }
+      // Site-deletion cascade — ordered and acknowledged. Everything
+      // operational dies: auction state, serve pools, approval queue and
+      // decisions, per-advertiser approvals, DData entries, taxonomy
+      // rankers, diagnostic SQL. Earnings history (tracking_events,
+      // settlement, publisher_sites) survives BY DESIGN. Every step is
+      // idempotent, so a failed step returns an error and the publisher's
+      // retry re-runs the whole cascade instead of silently half-deleting.
+      given Timeout = Timeout(30.seconds)
+      val cascade =
+        for {
+          // 1. Stop the auctioneer FIRST — it re-fills serve pools from its
+          //    in-memory page cache; purging pools while it lives is a race.
+          _ <- auctioneerRef(siteId).ask[AuctioneerEntity.SiteCleared](AuctioneerEntity.ClearSite(_))
+          // 2. Purge serve pools + approval queue/decisions + advertiser-side
+          //    approval sets, and reset the AdServer's in-memory state —
+          //    serving stops here.
+          purged <- adServerRef(siteId).ask[AdServer.SiteDataPurged](AdServer.PurgeSiteData(_))
+          _ <-
+            if (purged.ok) Future.unit
+            else Future.failed(new RuntimeException("approval purge failed — retry the delete"))
+          // 3. Clear the SiteEntity: durable state, DData entries, category
+          //    registry, taxonomy rankers. Acknowledged — a lost message or
+          //    failed persist fails the delete instead of half-applying it.
+          _ <- siteRef(siteId).ask[SiteEntity.SiteDataDeleted](SiteEntity.DeleteSiteData(_))
+          // 4. Remove from the publisher's site list (+ blocklist DData entry).
+          _ <- publisherRef(publisherId)
+            .ask[PublisherEntity.SiteDeleted](ref => PublisherEntity.DeleteSite(SiteId(siteId), ref))
+          // 5. Diagnostic SQL keyed by site. tracking_events stays (earnings).
+          _ <- deleteSiteDiagnostics(siteId)
+        } yield Right(())
+      cascade.recover { case ex => Left(ErrorResponse("delete_site_failed", ex.getMessage)) }
   }
+
+  /**
+   * Site-deletion cascade, SQL share: per-site diagnostic rows. Billing and
+   * earnings tables are deliberately NOT here.
+   */
+  private def deleteSiteDiagnostics(siteId: String): Future[Unit] =
+    dashboardDb.fold(Future.unit) { db =>
+      import slick.jdbc.PostgresProfile.api.*
+      db.run(DBIO.seq(
+        sqlu"DELETE FROM creative_stats_snapshot WHERE site_id = $siteId",
+        sqlu"DELETE FROM traffic_shape_snapshot WHERE site_id = $siteId",
+        sqlu"DELETE FROM floor_decisions WHERE site_id = $siteId",
+        sqlu"DELETE FROM mount_beacons WHERE pub = $siteId"
+      )).map(_ => ())
+    }
   private val getSitePacingConfigLogic: ((String, String)) => Future[Either[ErrorResponse, PacingConfig]] = {
     case (publisherId, siteId) =>
       val pacingF: Future[SiteEntity.PacingConfig] =
@@ -6156,7 +6198,7 @@ class EndpointRoutes(
 
   private def siteConfigToSlots(
       config: SiteEntity.SiteConfig,
-      slotCategories: Map[String, (String, Option[String])]
+      slotCategories: Map[String, SlotCategoryAttribution]
   ): Vector[SiteSlotConfig] =
     config.slots.map { s =>
       val cat = slotCategories.get(s.slotId)
@@ -6168,27 +6210,40 @@ class EndpointRoutes(
         priorQualityScore = s.prior.map(_.qualityScore),
         priorRegion = s.prior.map(_.region),
         priorAboveFold = s.prior.map(_.aboveFold),
-        matchedCategory = cat.map(_._1),
+        matchedCategory = cat.map(_.name),
         // "Filler" is a synthetic label, not a taxonomy id; only real
         // category names carry an id for dashboard-side localization.
-        matchedCategoryId = cat.flatMap(_._2)
+        matchedCategoryId = cat.flatMap(_.taxonomyId),
+        matchedPageUrl = cat.map(_.pageUrl)
       )
     }.toVector
 
   /**
-   * Build a slotId → (category name, taxonomy id) map from a site's
-   * per-page classifications. Each slot is attributed the top (highest
-   * confidence) IAB content category of the page(s) it was discovered on;
-   * a slot seen only on filler pages (no demand category) maps to
-   * ("Filler", None) — a synthetic label with no taxonomy id.
+   * Category label a slot inherits from the pages it was seen on, plus the
+   * page that won the attribution — a slot shared across many pages shows
+   * one label, so the dashboard needs to say WHICH page it came from.
+   */
+  private final case class SlotCategoryAttribution(
+      name: String,
+      taxonomyId: Option[String],
+      pageUrl: String
+  )
+
+  /**
+   * Build a slotId → category-attribution map from a site's per-page
+   * classifications. Each slot is attributed the top (highest confidence)
+   * IAB content category of the page(s) it was discovered on, together
+   * with the URL of that winning page; a slot seen only on filler pages
+   * (no demand category) maps to ("Filler", None) — a synthetic label
+   * with no taxonomy id.
    * Slots on not-yet-classified pages are simply absent from the map.
    */
   private def slotCategoryMap(
       classifications: Map[String, SiteEntity.ClassificationEntry]
-  ): Map[String, (String, Option[String])] = {
+  ): Map[String, SlotCategoryAttribution] = {
     val FillerKey = "__filler__"
-    val best = scala.collection.mutable.Map.empty[String, (String, Double)]
-    classifications.valuesIterator.foreach { entry =>
+    val best = scala.collection.mutable.Map.empty[String, (String, Double, String)]
+    classifications.foreach { case (url, entry) =>
       val candidate: (String, Double) =
         entry.categories.maxByOption(_._2) match {
           case Some((catId, score)) => (catId, score)
@@ -6196,21 +6251,25 @@ class EndpointRoutes(
         }
       entry.slots.foreach { ps =>
         best.get(ps.slotId) match {
-          case Some((_, curScore)) if curScore >= candidate._2 => ()
-          case _                                               => best.update(ps.slotId, candidate)
+          case Some((_, curScore, _)) if curScore >= candidate._2 => ()
+          case _                                                  => best.update(ps.slotId, (candidate._1, candidate._2, url))
         }
       }
     }
     best.view.mapValues {
-      case (FillerKey, _) => ("Filler", None)
-      case (catId, _)     =>
-        (promovolve.taxonomy.TieredCategory.get(catId).map(_.name).getOrElse(catId), Some(catId))
+      case (FillerKey, _, url) => SlotCategoryAttribution("Filler", None, url)
+      case (catId, _, url)     =>
+        SlotCategoryAttribution(
+          promovolve.taxonomy.TieredCategory.get(catId).map(_.name).getOrElse(catId),
+          Some(catId),
+          url
+        )
     }.toMap
   }
 
   private def buildSiteResponse(
       siteId: String, publisherId: String, config: SiteEntity.SiteConfig,
-      slotCategories: Map[String, (String, Option[String])] = Map.empty,
+      slotCategories: Map[String, SlotCategoryAttribution] = Map.empty,
       floorCpm: Option[String] = None, minFloorCpm: Option[String],
       bidWeight: Option[String] = None,
       acceptsFillerTraffic: Option[Boolean] = None,

@@ -429,6 +429,17 @@ final class SlickPendingSelectionStore(db: Database)(using ec: ExecutionContext)
     db.run(action)
   }
 
+  def deleteAllForSite(publisherId: String): Future[Int] = {
+    val action = for {
+      a <- selections.filter(_.publisherId === publisherId).delete
+      b <- firstSeenRows.filter(_.publisherId === publisherId).delete
+      c <- approvedCreatives.filter(_.publisherId === publisherId).delete
+      d <- trustAnchors.filter(_.publisherId === publisherId).delete
+      e <- flaggedCreatives.filter(_.publisherId === publisherId).delete
+    } yield a + b + c + d + e
+    db.run(action.transactionally)
+  }
+
   // ==================== Flagging / Quarantine ====================
 
   private val flaggedCreatives = TableQuery[FlaggedCreativeTable]

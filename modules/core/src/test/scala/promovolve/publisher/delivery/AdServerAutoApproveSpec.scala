@@ -163,6 +163,7 @@ class AdServerAutoApproveSpec extends AnyWordSpec with Matchers with BeforeAndAf
       Future.successful(None)
     def unflagCreative(p: String, c: String): Future[Option[FlaggedCreative]] = Future.successful(None)
     def getFlagged(p: String): Future[Vector[FlaggedCreative]] = Future.successful(Vector.empty)
+    def deleteAllForSite(p: String): Future[Int] = Future.successful(0)
     def insertApproved(p: String, c: String, ca: String, a: String, via: String): Future[Unit] = {
       insertedApproved.put(c, via)
       Future.successful(())
