@@ -43,6 +43,8 @@ type slotData struct {
 	PriorAboveFold    bool
 	HasPrior          bool
 	MatchedCategory   string // top IAB content category for the page hosting this slot; "" when not yet classified
+	MatchedPageURL    string // page whose classification won the MatchedCategory attribution
+	MatchedPagePath   string // path of MatchedPageURL, for compact display
 }
 
 type siteData struct {
@@ -135,6 +137,7 @@ func (h *Handler) renderPublisherSites(w http.ResponseWriter, r *http.Request, e
 				PriorAboveFold    *bool    `json:"priorAboveFold"`
 				MatchedCategory   *string  `json:"matchedCategory"`
 				MatchedCategoryID *string  `json:"matchedCategoryId"`
+				MatchedPageURL    *string  `json:"matchedPageUrl"`
 			} `json:"slots"`
 			TaxonomyIds          []string `json:"taxonomyIds"`
 			FloorCpm             string   `json:"floorCpm"`
@@ -216,6 +219,13 @@ func (h *Handler) renderPublisherSites(w http.ResponseWriter, r *http.Request, e
 				row.MatchedCategory = *sl.MatchedCategory
 				if sl.MatchedCategoryID != nil {
 					row.MatchedCategory = localizedName(catNames, *sl.MatchedCategoryID, row.MatchedCategory)
+				}
+				if sl.MatchedPageURL != nil {
+					row.MatchedPageURL = *sl.MatchedPageURL
+					row.MatchedPagePath = *sl.MatchedPageURL
+					if u, err := url.Parse(*sl.MatchedPageURL); err == nil && u.Path != "" {
+						row.MatchedPagePath = u.Path
+					}
 				}
 			}
 			slots = append(slots, row)

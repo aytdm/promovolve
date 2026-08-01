@@ -354,7 +354,7 @@
               <tr>
                 <th class="text-left py-1 font-normal">{{t "Slot"}}</th>
                 <th class="text-left py-1 font-normal">{{t "Size"}}</th>
-                <th class="text-left py-1 font-normal" title="{{t "Top IAB content category of the page this slot was found on — determines which campaigns can bid"}}">{{t "Matched Category"}}</th>
+                <th class="text-left py-1 font-normal" title="{{t "Top content category among the pages this slot appears on, shown with the page it came from. Informational — campaigns are matched per page"}}">{{t "Matched Category"}}</th>
                 <th class="text-left py-1 font-normal">{{t "Region"}}</th>
                 <th class="text-left py-1 font-normal" title="{{t "Slot quality score, 0..1"}}">{{t "Prior"}}</th>
                 <th class="text-left py-1 font-normal">{{t "Override"}} ({{sym}})</th>
@@ -371,6 +371,9 @@
                       <span class="badge badge-neutral">{{t "Filler"}}</span>
                     {{else}}
                       <span class="badge badge-info">{{t .MatchedCategory}}</span>
+                    {{end}}
+                    {{if .MatchedPagePath}}
+                      <div class="text-gray-400 font-mono truncate max-w-48" title="{{.MatchedPageURL}}">{{.MatchedPagePath}}</div>
                     {{end}}
                   {{else}}
                     <span class="text-gray-300" title="{{t "page not yet classified"}}">—</span>

@@ -754,7 +754,7 @@ var ja = map[string]string{
 	"Prior":                    "事前分布",
 	"Slot quality score, 0..1": "スロット品質スコア(0〜1)",
 	"Matched Category":         "マッチしたカテゴリー",
-	"Top IAB content category of the page this slot was found on — determines which campaigns can bid": "このスロットが見つかったページの最上位 IAB コンテンツカテゴリー — どのキャンペーンが入札できるかを決めます",
+	"Top content category among the pages this slot appears on, shown with the page it came from. Informational — campaigns are matched per page": "このスロットが現れるページ群の中で最も確信度の高いコンテンツカテゴリーと、その判定元ページ。表示のみの情報で、キャンペーンのマッチングはページ単位で行われます",
 	"page not yet classified": "ページは未分類",
 	"Save all overrides":      "すべての上書きを保存",
 	"Saved ✓":                 "保存しました ✓",
