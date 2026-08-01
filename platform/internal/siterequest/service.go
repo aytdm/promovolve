@@ -89,10 +89,15 @@ func (s *Service) Request(ctx context.Context, publisherID, requestedBy, siteID,
 
 // siteLive reports whether siteID currently exists on the core API under the
 // given owner. Body-based: a 200 with a matching id is live; an ErrorResponse
-// with code not_found is a stale projection row. Anything ambiguous
-// (unreachable core, unparseable body) counts as live so a blip degrades to
-// the old behavior — a spurious "already registered" the publisher can retry —
-// rather than parking a request the admin may not be able to approve.
+// whose code is a not-found variant is a stale projection row. The explicit-
+// publisher getSite path answers through requireOwnedSite, which returns
+// site_not_found both for a cleared site AND for an entity-ask failure — so
+// a core-side blip can admit a request that a truly live site would have
+// blocked. That is acceptable: approval is the authority (core rejects with
+// site_id_taken), so the worst case is a dead row the admin sees fail.
+// Transport-level ambiguity (unreachable core, unparseable body) still
+// counts as live, degrading to the old behavior — a spurious "already
+// registered" the publisher can retry.
 func (s *Service) siteLive(ctx context.Context, ownerID, siteID string) bool {
 	url := fmt.Sprintf("%s/v1/publishers/%s/sites/%s", s.coreAPIURL, ownerID, siteID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -112,9 +117,9 @@ func (s *Service) siteLive(ctx context.Context, ownerID, siteID string) bool {
 	if json.Unmarshal(body, &probe) != nil {
 		return true
 	}
-	// Only an explicit not_found proves staleness; every other outcome
+	// Only an explicit not-found code proves staleness; every other outcome
 	// (including odd 200s) keeps the conservative "live" answer.
-	return probe.Code != "not_found"
+	return probe.Code != "not_found" && probe.Code != "site_not_found"
 }
 
 // Approve provisions the site on the core API and then persists the decision.

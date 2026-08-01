@@ -19,6 +19,11 @@ func TestSiteLive(t *testing.T) {
 		want   bool
 	}{
 		{"live site", http.StatusOK, `{"id":"travel-example-com","domain":"travel.example.com"}`, true},
+		// requireOwnedSite answers the explicit-publisher path with
+		// site_not_found (HTTP 400) for a deleted site — the code observed
+		// live on GKE prod 2026-08-01. Plain not_found covers getSite's own
+		// branch.
+		{"deleted site (requireOwnedSite)", http.StatusBadRequest, `{"code":"site_not_found","message":"Site travel-example-com not found"}`, false},
 		{"deleted site", http.StatusNotFound, `{"code":"not_found","message":"Site travel-example-com not found"}`, false},
 		{"not_found regardless of status", http.StatusOK, `{"code":"not_found","message":"gone"}`, false},
 		{"unparseable body stays live", http.StatusOK, `<html>proxy error</html>`, true},
