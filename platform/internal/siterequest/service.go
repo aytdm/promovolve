@@ -60,10 +60,16 @@ func floorStrings(ctx context.Context, f FloorDefaults) (start, min string) {
 // up front: such a request could never be approved (core returns
 // site_id_taken at provision time), so accepting it would only park a
 // dead row in the admin queue.
+//
+// The publisher_sites projection outlives site deletion (it is the durable
+// revenue-attribution mapping for settlement), so a row there proves
+// history, not liveness — a deleted site must be re-registrable through
+// this flow. A projection hit is therefore confirmed against the core API
+// before it blocks the request.
 func (s *Service) Request(ctx context.Context, publisherID, requestedBy, siteID, domain, pageURL string) error {
 	if owner, found, err := s.repo.LiveSiteOwner(ctx, siteID, domain); err != nil {
 		return err
-	} else if found {
+	} else if found && s.siteLive(ctx, owner, siteID) {
 		if owner == publisherID {
 			return ErrSiteAlreadyOwned
 		}
@@ -79,6 +85,36 @@ func (s *Service) Request(ctx context.Context, publisherID, requestedBy, siteID,
 		req.RequestedBy = &requestedBy
 	}
 	return s.repo.Create(ctx, req)
+}
+
+// siteLive reports whether siteID currently exists on the core API under the
+// given owner. Body-based: a 200 with a matching id is live; an ErrorResponse
+// with code not_found is a stale projection row. Anything ambiguous
+// (unreachable core, unparseable body) counts as live so a blip degrades to
+// the old behavior — a spurious "already registered" the publisher can retry —
+// rather than parking a request the admin may not be able to approve.
+func (s *Service) siteLive(ctx context.Context, ownerID, siteID string) bool {
+	url := fmt.Sprintf("%s/v1/publishers/%s/sites/%s", s.coreAPIURL, ownerID, siteID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return true
+	}
+	resp, err := coreClient.Do(req)
+	if err != nil {
+		return true
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	var probe struct {
+		ID   string `json:"id"`
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(body, &probe) != nil {
+		return true
+	}
+	// Only an explicit not_found proves staleness; every other outcome
+	// (including odd 200s) keeps the conservative "live" answer.
+	return probe.Code != "not_found"
 }
 
 // Approve provisions the site on the core API and then persists the decision.

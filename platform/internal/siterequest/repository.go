@@ -74,10 +74,12 @@ func (r *Repository) Create(ctx context.Context, req *model.SiteRequest) error {
 	return tx.Commit(ctx)
 }
 
-// LiveSiteOwner looks the site up in the publisher_sites projection (the
-// live-site mirror the core API maintains on create): a hit by either the
-// sanitized site_id or the raw host means the site is already registered
-// and a new request for it can never be approved.
+// LiveSiteOwner looks the site up in the publisher_sites projection by
+// sanitized site_id or raw host. Despite the name, the projection is the
+// durable revenue-attribution mapping and rows OUTLIVE site deletion — a hit
+// proves the site existed at some point, not that it is live now. Callers
+// must confirm liveness against the core API before treating a hit as
+// "already registered" (see Service.siteLive).
 func (r *Repository) LiveSiteOwner(ctx context.Context, siteID, host string) (string, bool, error) {
 	var owner string
 	err := r.pool.QueryRow(ctx, `
