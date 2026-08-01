@@ -3081,6 +3081,13 @@ private[delivery] class AdServer(
 
       case Protocol.PurgeSiteData(replyTo) =>
         log.info("Site {} deleted — purging serve pools, approvals, and serve state", siteId.value)
+        // Per-URL caches held in instance vars OUTSIDE State — without this,
+        // previously classified URLs stay "fresh" for the whole freshness
+        // window after a re-create, the tag never re-sends page text, and
+        // the re-added site serves nothing on those pages for days.
+        pageCategoriesCache = Map.empty
+        classifiedAtMsByUrl = Map.empty
+        lastReauctionRequestMs = Map.empty
         // Durable candidate pools: every siteId|slot entry dies. Without this
         // the LMDB-durable pools keep serving cached winners after deletion.
         serveIndex ! ServeIndexDData.RemoveAllBySite(siteId.value)
