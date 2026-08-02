@@ -857,7 +857,7 @@ object SiteEntity {
                   .thenRun(_ => setupFromConfig(config))
                   .thenReply(replyTo)(_ => ConfigUpdated(siteId))
 
-              case ActivateServeSlots(discovered) =>
+              case ActivateServeSlots(url, discovered) =>
                 state.config match {
                   case Some(cfg) =>
                     val seen = cfg.slots.iterator.map(_.slotId).toSet
@@ -865,10 +865,18 @@ object SiteEntity {
                     if (added.isEmpty) Effect.none
                     else {
                       ctx.log.info(
-                        "SiteEntity {} activating {} serve-discovered slot(s): {}",
+                        "SiteEntity {} activating {} serve-discovered slot(s): {} (expiring freshness for {})",
                         siteId.value, added.size,
-                        added.map(_.slotId).mkString(",")
+                        added.map(_.slotId).mkString(","), url
                       )
+                      // Expire the page's freshness token: new slots mean the
+                      // page's ad geometry changed, and only a classification
+                      // pass measures their placement signals (category label,
+                      // page attribution, viewability prior). The next view
+                      // re-classifies and the dashboard row fills in, instead
+                      // of sitting at "—" until natural expiry (up to 48h).
+                      sharding.entityRefFor(delivery.AdServer.TypeKey, siteId.value) !
+                      delivery.AdServer.MarkClassified(URL(url), Instant.EPOCH)
                       Effect.persist(state.withConfig(cfg.copy(slots = cfg.slots ++ added)))
                     }
                   case None => Effect.none // unconfigured shell — nothing to attach to
@@ -2036,8 +2044,11 @@ object SiteEntity {
    * union-by-slotId semantics as classification-time activation: existing
    * rows are untouched (prior / admin floor override preserved); only
    * genuinely unseen slot ids are added. Fire-and-forget + idempotent.
+   * `url` = the page whose serve request discovered them; when slots are
+   * genuinely new its freshness token is expired so the NEXT view
+   * re-classifies and measures their placement signals.
    */
-  final case class ActivateServeSlots(slots: List[AdSlotConfig]) extends Command
+  final case class ActivateServeSlots(url: String, slots: List[AdSlotConfig]) extends Command
 
   final case class ConfigUpdated(siteId: SiteId) extends promovolve.CborSerializable
 

@@ -1083,6 +1083,7 @@ private[delivery] class AdServer(
       if (requestSlots.nonEmpty) {
         sharding.entityRefFor(promovolve.publisher.SiteEntity.TypeKey, siteId.value) !
         promovolve.publisher.SiteEntity.ActivateServeSlots(
+          url.value,
           requestSlots.map(s =>
             promovolve.publisher.SiteEntity.AdSlotConfig(
               slotId = s.slotId.value,
