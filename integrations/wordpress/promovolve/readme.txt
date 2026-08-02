@@ -4,7 +4,7 @@ Tags: ads, advertising, publisher
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.1.1
+Stable tag: 0.1.2
 License: Apache-2.0
 License URI: https://www.apache.org/licenses/LICENSE-2.0
 
@@ -74,6 +74,16 @@ reader "dog-ear" bookmarks in the browser's IndexedDB (7-day expiry). It sets
 no cookies. Visitors sending the Global Privacy Control signal receive no ads.
 
 == Changelog ==
+
+= 0.1.2 =
+* The automatic slot's configured size is now part of its identity: the
+  effective slot ID is `<id>_<w>x<h>` (e.g. `article-footer_300x250`), plus
+  the category/post suffix. Different sizes are different inventory — this
+  keeps floor learning and ad pools per shape, and changing the size cleanly
+  starts a fresh slot. NOTE: upgrading changes your automatic slot's ID once;
+  the ad server enrolls the new ID on its first request and the old rows
+  remain on the dashboard as history.
+* Settings page shows the derived slot ID under the size fields.
 
 = 0.1.1 =
 * Settings saves now purge page caches on the FIRST save too (the purge was

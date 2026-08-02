@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       PromoVolve Publisher
  * Description:       Connects this site to a PromoVolve ad server: prints the ad tag, serves the site-verification file, and places ad slots via shortcode.
- * Version:           0.1.1
+ * Version:           0.1.2
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            PromoVolve
@@ -151,7 +151,13 @@ add_shortcode( 'promovolve_slot', function ( $atts ) {
  *               ad pool per post — avoid on large sites).
  */
 function promovolve_auto_slot_id( $s ) {
-	$base = $s['auto_slot_id'];
+	// The configured size is part of the slot's identity (base_WxH): a
+	// 728x90 strip and a 300x250 rectangle are different inventory even at
+	// the same page position, and separate IDs keep floor learning and ad
+	// pools per shape. Changing the size therefore starts a fresh slot —
+	// the ad server enrolls it on its first request; the old size's
+	// dashboard rows stay behind as history.
+	$base = $s['auto_slot_id'] . '_' . (int) $s['auto_slot_w'] . 'x' . (int) $s['auto_slot_h'];
 	if ( 'category' === $s['auto_slot_scope'] ) {
 		$cats = get_the_category();
 		if ( ! empty( $cats ) ) {
@@ -383,6 +389,15 @@ function promovolve_render_settings_page() {
 							<input name="<?php echo esc_attr( PROMOVOLVE_OPTION ); ?>[auto_slot_id]" type="text" class="code" value="<?php echo esc_attr( $s['auto_slot_id'] ); ?>" aria-label="<?php esc_attr_e( 'Slot ID', 'promovolve' ); ?>">
 							<input name="<?php echo esc_attr( PROMOVOLVE_OPTION ); ?>[auto_slot_w]" type="number" min="1" style="width:6em;" value="<?php echo esc_attr( $s['auto_slot_w'] ); ?>" aria-label="<?php esc_attr_e( 'Width', 'promovolve' ); ?>"> ×
 							<input name="<?php echo esc_attr( PROMOVOLVE_OPTION ); ?>[auto_slot_h]" type="number" min="1" style="width:6em;" value="<?php echo esc_attr( $s['auto_slot_h'] ); ?>" aria-label="<?php esc_attr_e( 'Height', 'promovolve' ); ?>">
+						</p>
+						<p class="description">
+							<?php
+							printf(
+								/* translators: %s: the derived slot ID */
+								esc_html__( 'The size is part of the slot identity — this configuration produces slot ID %s (plus the category/post suffix below). Changing the size starts a fresh slot with its own stats; the old size&#8217;s dashboard rows remain as history.', 'promovolve' ),
+								'<code>' . esc_html( $s['auto_slot_id'] . '_' . (int) $s['auto_slot_w'] . 'x' . (int) $s['auto_slot_h'] ) . '</code>'
+							);
+							?>
 						</p>
 					</td>
 				</tr>
