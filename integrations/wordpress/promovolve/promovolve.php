@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       PromoVolve Publisher
  * Description:       Connects this site to a PromoVolve ad server: prints the ad tag, serves the site-verification file, and places ad slots via shortcode.
- * Version:           0.1.2
+ * Version:           0.1.3
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            PromoVolve
@@ -114,9 +114,16 @@ function promovolve_slot_html( $slot_id, $w, $h, $class = '' ) {
 		return '';
 	}
 	$class_attr = '' !== $class ? sprintf( ' class="%s"', esc_attr( $class ) ) : '';
+	// Inline sizing — the slot container is authoritative for the rendered
+	// ad's size (the banner fills 100% of it), and a bare div stretches to
+	// the theme's full content column: a 300x250 rendered ~700px wide.
+	// Same contract as the reference publisher CSS: fill the column UP TO
+	// the declared size, preserve the aspect ratio, centered.
+	$style = sprintf( 'display:block;width:100%%;max-width:%dpx;aspect-ratio:%d/%d;margin:16px auto;', $w, $w, $h );
 	return sprintf(
-		'<div%s data-promovolve-slot="%s" data-w="%d" data-h="%d"></div>',
+		'<div%s style="%s" data-promovolve-slot="%s" data-w="%d" data-h="%d"></div>',
 		$class_attr,
+		esc_attr( $style ),
 		esc_attr( $slot_id ),
 		$w,
 		$h

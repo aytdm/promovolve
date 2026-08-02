@@ -4,7 +4,7 @@ Tags: ads, advertising, publisher
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.1.2
+Stable tag: 0.1.3
 License: Apache-2.0
 License URI: https://www.apache.org/licenses/LICENSE-2.0
 
@@ -74,6 +74,12 @@ reader "dog-ear" bookmarks in the browser's IndexedDB (7-day expiry). It sets
 no cookies. Visitors sending the Global Privacy Control signal receive no ads.
 
 == Changelog ==
+
+= 0.1.3 =
+* Slot containers are now sized inline (fill the content column up to the
+  declared width, preserving aspect ratio, centered). Previously the bare
+  div stretched to the theme's full column width, so a 300x250 slot rendered
+  bloated. Applies to both the automatic slot and the shortcode.
 
 = 0.1.2 =
 * The automatic slot's configured size is now part of its identity: the

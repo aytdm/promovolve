@@ -857,6 +857,23 @@ object SiteEntity {
                   .thenRun(_ => setupFromConfig(config))
                   .thenReply(replyTo)(_ => ConfigUpdated(siteId))
 
+              case ActivateServeSlots(discovered) =>
+                state.config match {
+                  case Some(cfg) =>
+                    val seen = cfg.slots.iterator.map(_.slotId).toSet
+                    val added = discovered.filterNot(d => seen.contains(d.slotId))
+                    if (added.isEmpty) Effect.none
+                    else {
+                      ctx.log.info(
+                        "SiteEntity {} activating {} serve-discovered slot(s): {}",
+                        siteId.value, added.size,
+                        added.map(_.slotId).mkString(",")
+                      )
+                      Effect.persist(state.withConfig(cfg.copy(slots = cfg.slots ++ added)))
+                    }
+                  case None => Effect.none // unconfigured shell — nothing to attach to
+                }
+
               case GetConfig(replyTo) =>
                 Effect.none.thenReply(replyTo)(_ => ConfigResult(state.config))
 
@@ -2008,6 +2025,19 @@ object SiteEntity {
 
   /** Update site configuration */
   final case class UpdateConfig(config: SiteConfig, replyTo: ActorRef[ConfigUpdated]) extends Command
+
+  /**
+   * Activate slots discovered at SERVE time (AdServer's serve-miss
+   * self-heal). A slot renamed or added while its page's classification
+   * is still fresh never re-classifies — and classification was the ONLY
+   * path that added slots to the site inventory, so such a slot auctioned
+   * and served while staying invisible to the dashboard Slots table and
+   * per-slot floor learning (live 2026-08-02, WP auto-slot rename). Same
+   * union-by-slotId semantics as classification-time activation: existing
+   * rows are untouched (prior / admin floor override preserved); only
+   * genuinely unseen slot ids are added. Fire-and-forget + idempotent.
+   */
+  final case class ActivateServeSlots(slots: List[AdSlotConfig]) extends Command
 
   final case class ConfigUpdated(siteId: SiteId) extends promovolve.CborSerializable
 

@@ -1077,6 +1077,20 @@ private[delivery] class AdServer(
       }.toList
       sharding.entityRefFor(promovolve.auction.AuctioneerEntity.TypeKey, siteId.value) !
       promovolve.auction.AuctioneerEntity.Reevaluate(url, specs)
+      // Register the same slots into the site inventory (dashboard Slots
+      // table + per-slot floors) — idempotent union; without this a
+      // serve-enrolled slot auctions but never appears on the dashboard.
+      if (requestSlots.nonEmpty) {
+        sharding.entityRefFor(promovolve.publisher.SiteEntity.TypeKey, siteId.value) !
+        promovolve.publisher.SiteEntity.ActivateServeSlots(
+          requestSlots.map(s =>
+            promovolve.publisher.SiteEntity.AdSlotConfig(
+              slotId = s.slotId.value,
+              width = s.width,
+              height = s.height
+            )).toList
+        )
+      }
       log.info("Serve-miss self-heal: requested re-auction pub={} url={} slots={}",
         siteId.value, url.value, requestSlots.map(_.slotId.value).mkString(","))
     }
