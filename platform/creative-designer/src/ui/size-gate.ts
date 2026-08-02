@@ -1,15 +1,17 @@
-// Minimum-viewport gate. The designer shell (38px menu bar + 96px
-// size matrix + canvas header/foot + 260px sidebar) degrades into an
-// unusable crush below ~1024×640 instead of reflowing — so rather
-// than ship a broken-looking tool, cover it with an explanatory
-// overlay while the window is too small. The designer stays mounted
+// Minimum-viewport gate. The shell reflows well below its design
+// size — the toolbar wraps, the size-matrix strip scrolls, the
+// sidebar scrolls — and stays usable down to roughly 760×480
+// (verified in the vite harness). Below that the size-matrix chips
+// clip and the work surface crushes into unusability, so rather than
+// ship a broken-looking tool, cover it with an explanatory overlay
+// while the window is too small. The designer stays mounted
 // underneath: no state is lost, and the gate lifts the instant the
 // window grows past the minimum.
 
 import { tokens } from "./tokens";
 
-export const MIN_W = 1024;
-export const MIN_H = 640;
+export const MIN_W = 760;
+export const MIN_H = 480;
 
 export function mountSizeGate(): void {
   const gate = document.createElement("div");
@@ -46,7 +48,7 @@ export function mountSizeGate(): void {
     if (tooSmall) {
       detail.textContent =
         `Needs at least ${MIN_W}×${MIN_H} — currently ${w}×${h}. ` +
-        `Enlarge the window to continue editing; nothing is lost.`;
+        `Enlarge the window (or reduce browser zoom) to continue editing; nothing is lost.`;
     }
   };
   update();
