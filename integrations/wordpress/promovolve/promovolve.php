@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       PromoVolve Publisher
  * Description:       Connects this site to a PromoVolve ad server: prints the ad tag, serves the site-verification file, and places ad slots via shortcode.
- * Version:           0.1.0
+ * Version:           0.1.1
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            PromoVolve
@@ -237,12 +237,13 @@ function promovolve_sanitize_settings( $input ) {
 	return $clean;
 }
 
-add_action( 'update_option_' . PROMOVOLVE_OPTION, function () {
-	// Settings changes alter front-end markup (the ad tag, slot IDs), which
-	// page caches have already stored — on hosts like Hostinger, LiteSpeed
-	// caches pages for days and the new setting silently never applies.
-	// Purge the caches we can detect; each call is a no-op when that cache
-	// plugin is absent.
+/**
+ * Settings changes alter front-end markup (the ad tag, slot IDs), which page
+ * caches have already stored — on hosts like Hostinger, LiteSpeed caches pages
+ * for days and the new setting silently never applies. Purge every cache we
+ * can detect; each call is a no-op when that cache plugin is absent.
+ */
+function promovolve_purge_page_caches() {
 	do_action( 'litespeed_purge_all' );
 	if ( function_exists( 'wp_cache_clear_cache' ) ) {
 		wp_cache_clear_cache(); // WP Super Cache
@@ -253,10 +254,30 @@ add_action( 'update_option_' . PROMOVOLVE_OPTION, function () {
 	if ( function_exists( 'rocket_clean_domain' ) ) {
 		rocket_clean_domain(); // WP Rocket
 	}
+	if ( function_exists( 'sg_cachepress_purge_cache' ) ) {
+		sg_cachepress_purge_cache(); // SiteGround Optimizer
+	}
+	if ( function_exists( 'wpfc_clear_all_cache' ) ) {
+		wpfc_clear_all_cache(); // WP Fastest Cache
+	}
+	if ( class_exists( 'Cache_Enabler' ) && method_exists( 'Cache_Enabler', 'clear_complete_cache' ) ) {
+		Cache_Enabler::clear_complete_cache(); // Cache Enabler
+	}
+	do_action( 'breeze_clear_all_cache' );     // Breeze (Cloudways)
+	do_action( 'wphb_clear_page_cache' );      // Hummingbird
+	if ( function_exists( 'wpo_cache_flush' ) ) {
+		wpo_cache_flush(); // WP-Optimize
+	}
 	if ( function_exists( 'wp_cache_flush' ) ) {
 		wp_cache_flush(); // object cache (harmless, keeps option reads fresh)
 	}
-} );
+}
+
+// BOTH hooks: WordPress fires add_option_* the FIRST time the option row is
+// created and update_option_* thereafter — hooking only update means the
+// very first configuration is served from cache and "doesn't apply".
+add_action( 'add_option_' . PROMOVOLVE_OPTION, 'promovolve_purge_page_caches' );
+add_action( 'update_option_' . PROMOVOLVE_OPTION, 'promovolve_purge_page_caches' );
 
 add_action( 'admin_menu', function () {
 	add_options_page(
@@ -379,6 +400,7 @@ function promovolve_render_settings_page() {
 			</table>
 
 			<?php submit_button(); ?>
+			<p class="description"><?php esc_html_e( 'Saving purges the page caches of known caching plugins automatically. If this site also sits behind an external cache or CDN (e.g. Cloudflare page caching, a host-level cache), purge that one too — otherwise visitors keep the old markup until it expires.', 'promovolve' ); ?></p>
 		</form>
 
 		<?php if ( '' !== $tag_preview ) : ?>

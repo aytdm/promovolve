@@ -4,7 +4,7 @@ Tags: ads, advertising, publisher
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.1.0
+Stable tag: 0.1.1
 License: Apache-2.0
 License URI: https://www.apache.org/licenses/LICENSE-2.0
 
@@ -74,6 +74,17 @@ reader "dog-ear" bookmarks in the browser's IndexedDB (7-day expiry). It sets
 no cookies. Visitors sending the Global Privacy Control signal receive no ads.
 
 == Changelog ==
+
+= 0.1.1 =
+* Settings saves now purge page caches on the FIRST save too (the purge was
+  hooked only to option updates; WordPress fires a different hook when the
+  option row is first created, so the initial configuration could be served
+  stale from cache).
+* Broader purge coverage: SiteGround Optimizer, WP Fastest Cache, Cache
+  Enabler, Breeze, Hummingbird, WP-Optimize — in addition to LiteSpeed,
+  WP Super Cache, W3 Total Cache, and WP Rocket.
+* Settings page now notes that external caches/CDNs (e.g. Cloudflare page
+  caching) must be purged separately.
 
 = 0.1.0 =
 * Initial release: ad tag injection, well-known verification route,
