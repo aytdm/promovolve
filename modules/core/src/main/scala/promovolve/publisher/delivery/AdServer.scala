@@ -1059,13 +1059,26 @@ private[delivery] class AdServer(
   // waiting for the periodic backstop.
   private var lastReauctionRequestMs: Map[String, Long] = Map.empty
   private val selfHealThrottleMs: Long = 15000L
-  private def selfHealReauction(url: URL): Unit = {
+  private def selfHealReauction(url: URL, requestSlots: Vector[Protocol.BatchSlotSpec] = Vector.empty): Unit = {
     val now = System.currentTimeMillis()
     if (now - lastReauctionRequestMs.getOrElse(url.value, 0L) >= selfHealThrottleMs) {
       lastReauctionRequestMs = lastReauctionRequestMs.updated(url.value, now)
+      // Carry the requesting slots so a slot the cached classification
+      // doesn't know (renamed/added while the page stays fresh) enters the
+      // auction cycle on its first serve miss instead of staying dark
+      // until the classification expires.
+      val specs = requestSlots.map { s =>
+        val sz = promovolve.AdSize(s.width, s.height)
+        promovolve.auction.AuctioneerEntity.AdSlotSpec(
+          slotId = s.slotId,
+          declaredSizes = List(sz),
+          computedSize = sz
+        )
+      }.toList
       sharding.entityRefFor(promovolve.auction.AuctioneerEntity.TypeKey, siteId.value) !
-      promovolve.auction.AuctioneerEntity.Reevaluate(url)
-      log.info("Serve-miss self-heal: requested re-auction pub={} url={}", siteId.value, url.value)
+      promovolve.auction.AuctioneerEntity.Reevaluate(url, specs)
+      log.info("Serve-miss self-heal: requested re-auction pub={} url={} slots={}",
+        siteId.value, url.value, requestSlots.map(_.slotId.value).mkString(","))
     }
   }
 
@@ -2627,7 +2640,7 @@ private[delivery] class AdServer(
           case None =>
             // Index has nothing for this slot — ask the auctioneer to (re)populate
             // so the next serve fills, instead of waiting for the periodic backstop.
-            selfHealReauction(url)
+            selfHealReauction(url, slots)
             // Freshness token from the recorded classifiedAt: <=0 means never
             // classified OR stale → the ad tag (re)classifies; >0 means known +
             // fresh (ServeView merely lost) → self-heal alone repopulates it.
@@ -2638,7 +2651,7 @@ private[delivery] class AdServer(
             replyTo ! emptyOutcomes(Set.empty, reclassifyInMs = reclassify)
             behavior(state.copy(serveStats = serveStats.recordNoCandidates))
           case Some(view) if view.candidates.isEmpty =>
-            selfHealReauction(url)
+            selfHealReauction(url, slots)
             val reclassify = reclassifyInMsFor(url.value, classificationFreshnessWindowMs)
             replyTo ! emptyOutcomes(view.pageCategories, reclassifyInMs = reclassify)
             behavior(state.copy(serveStats = serveStats.recordNoCandidates))
@@ -2669,7 +2682,7 @@ private[delivery] class AdServer(
               // context must not serve), still counted as contentTooOld.
               // Re-auction covers the other stale flavor: classification
               // already refreshed but the view not yet repopulated.
-              selfHealReauction(url)
+              selfHealReauction(url, slots)
               replyTo ! emptyOutcomes(
                 view.pageCategories,
                 reclassifyInMs = reclassifyInMsFor(url.value, classificationFreshnessWindowMs)

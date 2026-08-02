@@ -150,8 +150,20 @@ object AuctioneerEntity {
       ts: Instant
   ) extends Command
 
-  /** Re-run the auction for a URL using the last cached classification & slots. */
-  final case class Reevaluate(url: URL) extends Command
+  /**
+   * Re-run the auction for a URL using the last cached classification & slots.
+   *
+   * `requestSlots` carries the slots the TRIGGERING serve request declared
+   * (empty from periodic/eviction senders). They are merged into the cached
+   * slot list before ranking — without this, a slot RENAMED (or added) on an
+   * already-classified page never auctions: the page is fresh so the ad tag
+   * never re-classifies (the only other path that refreshes the slot list),
+   * and every serve for the new slot id misses the index forever — observed
+   * live 2026-08-02 on a WP auto-slot rename. Default Nil keeps every other
+   * sender source-compatible and old-image nodes decode the message without
+   * the field during a rolling deploy (they just don't heal, as before).
+   */
+  final case class Reevaluate(url: URL, requestSlots: List[AdSlotSpec] = Nil) extends Command
 
   /** Update the floor CPM for this site (from publisher settings). */
   final case class UpdateFloorCpm(cpm: CPM) extends Command
@@ -479,19 +491,37 @@ private final class AuctioneerEntity private (
       }
       Behaviors.same
 
-    case Reevaluate(url) =>
+    case Reevaluate(url, requestSlots) =>
+      // Merge slots the triggering serve request declared but the cached
+      // classification doesn't know (renamed/added slots on a fresh page).
+      // Persisted back into lastPage so subsequent periodic re-auctions
+      // keep covering them without another serve-miss.
+      def mergedSlots(cached: List[AdSlotSpec], classifiedAt: Instant): List[AdSlotSpec] = {
+        val known = cached.map(_.slotId).toSet
+        val fresh = requestSlots.filterNot(s => known.contains(s.slotId))
+        if (fresh.isEmpty) cached
+        else {
+          val merged = cached ++ fresh
+          lastPage.get(url).foreach { case (sc, _, _) => lastPage = lastPage.updated(url, (sc, merged, classifiedAt)) }
+          ctx.log.info(
+            "Re-auction learned {} new slot(s) from serve request: site={} url={} slots={}",
+            fresh.size: java.lang.Integer, siteId, url, fresh.map(_.slotId.value).mkString(",")
+          )
+          merged
+        }
+      }
       lastPage.get(url) match {
-        case Some((scores, slots, _)) if scores.isEmpty =>
+        case Some((scores, slots, at)) if scores.isEmpty =>
           // Filler-classified URL (no contextual match). Re-fire the
           // filler auction so opted-in campaigns get a fresh shot —
           // this is what makes the advertiser's flag toggle propagate
           // to pages classified before they opted in.
           ctx.log.debug("🔁🫙 Filler re-auction: site={} url={}", siteId, url)
-          ctx.self ! FillerAuctionRequested(url, slots, Instant.now)
+          ctx.self ! FillerAuctionRequested(url, mergedSlots(slots, at), Instant.now)
           Behaviors.same
-        case Some((scores, slots, _)) =>
+        case Some((scores, slots, at)) =>
           ctx.log.debug("🔁 Re-auction triggered: site={} url={}", siteId, url)
-          startRanking(url, scores, slots)
+          startRanking(url, scores, mergedSlots(slots, at))
           Behaviors.same
         case None =>
           // Unknown page: either genuinely never classified (the ad tag will
