@@ -128,12 +128,19 @@ async function probeShortViewport(browser) {
   await port.locator("expandable-magazine-banner").click();
   await port.waitForTimeout(1500); // deal-in settles
   const openedPortrait = await overlayPresent(port);
+  // Rotation-letterbox guard: while the reader is open the document
+  // root background must be latched to the scrim tone (the browser
+  // paints orientation-change letterbox bands with THAT color — no
+  // overlay geometry can reach them).
+  const rootBg = () => port.evaluate(() => document.documentElement.style.backgroundColor);
+  const latchedWhileOpen = (await rootBg()) !== "";
   await port.setViewportSize({ width: 844, height: 390 });
   await port.waitForTimeout(1800); // close flight settles
   const closedOnRotate = !(await overlayPresent(port));
+  const restoredAfterClose = (await rootBg()) === "";
   await port.close();
 
-  return { directOk, openedPortrait, closedOnRotate };
+  return { directOk, openedPortrait, closedOnRotate, latchedWhileOpen, restoredAfterClose };
 }
 
 const browser = await chromium.launch();
@@ -159,11 +166,13 @@ for (const r of results) {
   if (verdict === "FIXED (remove from KNOWN)") failed++;
 }
 {
-  const ok = sv.directOk && sv.openedPortrait && sv.closedOnRotate;
+  const ok = sv.directOk && sv.openedPortrait && sv.closedOnRotate
+    && sv.latchedWhileOpen && sv.restoredAfterClose;
   if (!ok) failed++;
   console.log(
     `${(ok ? "ok" : "FAIL").padEnd(10)} ${"short-viewport".padEnd(22)} direct=${sv.directOk} ` +
-    `openedPortrait=${sv.openedPortrait} closedOnRotate=${sv.closedOnRotate}`
+    `openedPortrait=${sv.openedPortrait} closedOnRotate=${sv.closedOnRotate} ` +
+    `rootBgLatched=${sv.latchedWhileOpen} rootBgRestored=${sv.restoredAfterClose}`
   );
 }
 process.exit(failed ? 1 : 0);

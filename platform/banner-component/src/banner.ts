@@ -135,6 +135,30 @@ export class ExpandableMagazineBanner extends HTMLElement {
   // Framed-preview only: timer that hides the collapsed render AFTER the
   // expand animation, so the ad doesn't blank-out mid-fade (see _expand).
   private _collapseHideTimer: number | null = null;
+  // Rotation-letterbox guard (delivery only). During an orientation
+  // change the browser paints the not-yet-laid-out region with the
+  // DOCUMENT's root background — the publisher's page color, usually
+  // white — and no overlay geometry can reach it: it lies outside the
+  // page's paint entirely, so even an "infinitely" tall backdrop still
+  // flashes white bands. Most visible since the rotate-out auto-close:
+  // the reader is dark edge-to-edge, the phone tilts, white letterbox
+  // bands appear exactly where the backdrop "should" be. While the
+  // reader is open we latch the root background to the scrim tone so
+  // the letterbox fills dark; restored on every close path (_collapse)
+  // and on disconnect (SPA remounts mid-read).
+  private _rootBgRestore: (() => void) | null = null;
+  private latchRootBg(color: string): void {
+    if (this._rootBgRestore) return;
+    const root = document.documentElement;
+    const prev = root.style.getPropertyValue("background-color");
+    const prevPriority = root.style.getPropertyPriority("background-color");
+    root.style.setProperty("background-color", color);
+    this._rootBgRestore = () => {
+      this._rootBgRestore = null;
+      if (prev) root.style.setProperty("background-color", prev, prevPriority);
+      else root.style.removeProperty("background-color");
+    };
+  }
   // Removes the window/visualViewport resize listeners the mobile
   // sheet-stack installs to keep page heights pinned to the measured
   // reader height. Set on expand (mobile), called on collapse.
@@ -271,6 +295,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
   }
 
   disconnectedCallback(): void {
+    this._rootBgRestore?.();
     this.teardownVideoBg();
     window.removeEventListener("keydown", this.handleKeyDown);
     this.removeEventListener("dogear-fold", this.onDogearFold);
@@ -646,6 +671,9 @@ export class ExpandableMagazineBanner extends HTMLElement {
 
   private _collapse(): void {
     this._expanded = false;
+    // The reader is exiting — hand the rotation letterbox back to the
+    // publisher's own background before the site becomes visible.
+    this._rootBgRestore?.();
     // Cancel a pending deferred-hide (see _expand) so it can't blank the
     // collapsed ad after keep-frame has just restored it.
     if (this._collapseHideTimer) {
@@ -1638,6 +1666,9 @@ export class ExpandableMagazineBanner extends HTMLElement {
     // (Japanese content → 「閉じる」, otherwise "Close"). JA/EN for now.
     const closeLabel = pickCloseLabel(pages);
     const overlay = buildOverlay({ font, framed, background: overlayBg });
+    // Same tone as the scrim, so the rotation letterbox (see
+    // latchRootBg) is indistinguishable from the overlay margin.
+    if (!framed) this.latchRootBg(overlayBg);
     // Paper-back stock colour: one CSS var recolours every peeled surface
     // (flap, dog-ear tease, folded corner) while their fiber/mottle/sheen
     // texture layers ride on top unchanged. Unset → the default warm tone.
