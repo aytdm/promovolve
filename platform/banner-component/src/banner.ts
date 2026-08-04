@@ -669,7 +669,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
     }));
   }
 
-  private _collapse(): void {
+  private _collapse(instant = false): void {
     this._expanded = false;
     // The reader is exiting — hand the rotation letterbox back to the
     // publisher's own background before the site becomes visible.
@@ -718,6 +718,21 @@ export class ExpandableMagazineBanner extends HTMLElement {
     const closeX = overlay?.querySelector<HTMLElement>(".mobile-close-x");
     if (closeX) closeX.style.display = "none";
     if (overlay) {
+      if (instant) {
+        // Rotate-out close (and any other caller that must vanish NOW):
+        // no close effect, no flight. The OS rotation animation is
+        // already tearing the screen apart — an animation played into
+        // that window runs against stale geometry (the sheet flying
+        // toward a slot position measured in the OLD orientation: the
+        // observed mid-rotation scrollbar and cut-off close pill) and
+        // the exposed area shows the page's own painted background,
+        // which no ad-owned layer can cover mid-snapshot. Removing the
+        // overlay synchronously means the post-rotation frame is simply
+        // the article again — "tilting closed the ad", nothing broken.
+        overlay.remove();
+        restoreCollapsed();
+        if (framed) this.dispatchEvent(new CustomEvent("magazine-collapse", { bubbles: true, composed: true }));
+      } else {
       // Run the close effect (reverse of the open animation) before the
       // overlay is removed — in framed previews too, so the preview plays
       // the same open/close effect delivery does, then drops the frame.
@@ -779,6 +794,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
             if (framed) this.dispatchEvent(new CustomEvent("magazine-collapse", { bubbles: true, composed: true }));
           }, 400);
         }
+      }
       }
     }
     // Let external hosts (designer preview modal, custom wrappers,
@@ -1970,12 +1986,17 @@ export class ExpandableMagazineBanner extends HTMLElement {
     // with the short-viewport tap gate (wireCollapsedClick) — which
     // stops the reader from OPENING into that geometry — this makes the
     // cramped state unreachable: the reader exists only where it fits.
-    // The close is the normal user-visible flight back to the slot, not
-    // a teardown/restore (which is where the iOS layer-teardown flash
-    // lives); the collapsed banner is then in a short viewport, so the
-    // next tap goes direct to the LP — no dead end. Rotating back and
-    // tapping reopens at the cover like any close/reopen; the click
-    // beacon is per-serve idempotent so nothing double-counts.
+    // The close is INSTANT (_collapse(true)), not the flight: mid-
+    // rotation the OS is animating a stretched snapshot, the slot's
+    // coordinates are from the old orientation, and the exposed page
+    // area shows the site's own background — a flight played into that
+    // window renders broken (observed on-device: white bands, a page
+    // scrollbar, the close pill cut off). Vanishing synchronously makes
+    // the post-rotation frame simply the article again. The collapsed
+    // banner is then in a short viewport, so the next tap goes direct
+    // to the LP — no dead end. Rotating back and tapping reopens at the
+    // cover like any close/reopen; the click beacon is per-serve
+    // idempotent so nothing double-counts.
     //
     // Gated on the VIEWPORT being phone-landscape-shaped (short + touch),
     // NOT on isMobileReader: a landscape phone is 844px wide, fails the
@@ -1998,7 +2019,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
         }
         if (phoneLandscapeMq.matches) {
           phoneLandscapeMq.removeEventListener("change", onRotateOut);
-          this.closeViaFlight();
+          this._collapse(true);
         }
       };
       phoneLandscapeMq.addEventListener("change", onRotateOut);
