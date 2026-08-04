@@ -89,9 +89,57 @@ async function probe(browser, name) {
 const FIXTURES = ["quirks-mode", "css-bomb", "csp-strict", "trusted-types",
   "transformed-ancestor", "spa-remount", "zindex-war", "vertical-writing"];
 
+// Short-viewport delivery behaviors — probed with phone emulation, not
+// the shared 900×700 probe, so it gets its own function and verdict:
+//  1. DIRECT MODE: on a landscape phone (innerHeight < MIN_EXPAND_VH)
+//     a tap must open the LP in a new tab and fire the CTA pixel — and
+//     must NOT open the reader.
+//  2. ROTATE-OUT: a reader opened in portrait must auto-close (normal
+//     flight path) when the phone rotates to landscape.
+async function probeShortViewport(browser) {
+  const fixture = `http://127.0.0.1:${PORT}/tests/hostile/fixtures/short-viewport.html`;
+  const overlayPresent = (page) => page.evaluate(() => {
+    const el = document.querySelector("expandable-magazine-banner");
+    return !!el?.shadowRoot?.querySelector(".overlay");
+  });
+
+  // 1. Landscape phone: tap → LP popup + CTA pixel, no overlay.
+  const land = await browser.newPage({
+    viewport: { width: 844, height: 390 }, hasTouch: true, isMobile: true,
+  });
+  let ctaPixel = false;
+  land.on("request", (req) => { if (req.url().includes("_ctapixel.gif")) ctaPixel = true; });
+  await land.goto(fixture, { waitUntil: "load" });
+  await land.waitForTimeout(600);
+  const popupP = land.waitForEvent("popup", { timeout: 3000 }).catch(() => null);
+  await land.locator("expandable-magazine-banner").click();
+  const popup = await popupP;
+  await land.waitForTimeout(400);
+  const directOk = !!popup && popup.url().includes("_lp.html") && ctaPixel && !(await overlayPresent(land));
+  await popup?.close().catch(() => {});
+  await land.close();
+
+  // 2. Portrait phone: tap → reader opens; rotate → reader closes.
+  const port = await browser.newPage({
+    viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true,
+  });
+  await port.goto(fixture, { waitUntil: "load" });
+  await port.waitForTimeout(600);
+  await port.locator("expandable-magazine-banner").click();
+  await port.waitForTimeout(1500); // deal-in settles
+  const openedPortrait = await overlayPresent(port);
+  await port.setViewportSize({ width: 844, height: 390 });
+  await port.waitForTimeout(1800); // close flight settles
+  const closedOnRotate = !(await overlayPresent(port));
+  await port.close();
+
+  return { directOk, openedPortrait, closedOnRotate };
+}
+
 const browser = await chromium.launch();
 const results = [];
 for (const f of FIXTURES) results.push(await probe(browser, f));
+const sv = await probeShortViewport(browser);
 await browser.close();
 server.close();
 
@@ -109,5 +157,13 @@ for (const r of results) {
     (r.errors.length ? `  err: ${r.errors.join(" | ")}` : "")
   );
   if (verdict === "FIXED (remove from KNOWN)") failed++;
+}
+{
+  const ok = sv.directOk && sv.openedPortrait && sv.closedOnRotate;
+  if (!ok) failed++;
+  console.log(
+    `${(ok ? "ok" : "FAIL").padEnd(10)} ${"short-viewport".padEnd(22)} direct=${sv.directOk} ` +
+    `openedPortrait=${sv.openedPortrait} closedOnRotate=${sv.closedOnRotate}`
+  );
 }
 process.exit(failed ? 1 : 0);
