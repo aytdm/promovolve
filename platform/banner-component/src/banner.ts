@@ -1276,6 +1276,64 @@ export class ExpandableMagazineBanner extends HTMLElement {
     else el.addEventListener("loadedmetadata", freeze, { once: true });
   }
 
+  /** Stand-in surface for a POSTERLESS video page (pageSurface returned
+    * "transparent" — see its note on why that fallback needs covering):
+    * the frame the COLLAPSED banner is already showing, painted into a
+    * canvas under the reader's own <video>.
+    *
+    * The clip is the same file the collapsed ad has had decoded since the
+    * slot rendered, so this costs one drawImage and no network — the
+    * reader opens on the film instead of on the article showing through
+    * the pile. Drawing a cross-origin video TAINTS the canvas, which is
+    * fine: we only ever display it. (Reading it back — toDataURL for a
+    * CSS background — is what would throw, so don't.)
+    *
+    * Silently does nothing when there is no decoded frame to copy: a
+    * collapsed video for a different spec (only the cover shares the
+    * collapsed page's clip), or one that hasn't reached its first frame.
+    * The page then stays transparent, which is the documented fallback. */
+  private underlayCollapsedFrame(stage: HTMLElement, video: HTMLVideoElement, videoBg: VideoBg): void {
+    const cached = this._videoBgCache;
+    if (!cached || cached.key !== JSON.stringify(videoBg)) return;
+    const source = cached.el;
+    if (source.readyState < 2 || !source.videoWidth) return; // < HAVE_CURRENT_DATA: no frame yet
+
+    const canvas = document.createElement("canvas");
+    canvas.width = source.videoWidth;
+    canvas.height = source.videoHeight;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    try {
+      ctx.drawImage(source, 0, 0);
+    } catch {
+      return; // a decoder mid-seek can refuse the draw
+    }
+    Object.assign(canvas.style, {
+      position: "absolute",
+      inset: "0",
+      width: "100%",
+      height: "100%",
+      // Framed exactly like the clip that replaces it, so the hand-off
+      // doesn't shift the image.
+      objectFit: videoBg.fit ?? "cover",
+      pointerEvents: "none",
+      zIndex: "0",
+    });
+    // BEFORE the video in DOM order = underneath it (neither sets an
+    // explicit stacking order beyond z-index 0).
+    stage.insertBefore(canvas, video);
+
+    // Retire it as soon as the reader's own element has a frame of its
+    // own — one rAF past loadeddata so the swap lands on a painted
+    // frame rather than a blank one. A video that never loads keeps the
+    // still, which is the whole point of having it.
+    video.addEventListener(
+      "loadeddata",
+      () => requestAnimationFrame(() => canvas.remove()),
+      { once: true },
+    );
+  }
+
   private teardownVideoBg(): void {
     const cached = this._videoBgCache;
     if (!cached) return;
@@ -2224,6 +2282,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
   private createPageFromLayout(page: Page, index: number, cfg: BannerConfig): HTMLElement {
     const defaultFont = fontMain(cfg);
     const aspectCss = page.designAspect ?? cfg.designAspect ?? "16/9";
+    const surface = pageSurface(page);
 
     const el = document.createElement("div");
     el.className = `magazine-page page-${index}`;
@@ -2277,7 +2336,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
     // the magazine" matches the creative. Stays put during a page
     // turn — only the inner sheet rotates.
     pageBox.classList.add("paper-stack");
-    pageBox.style.setProperty("--leaf-bg", page.bg ?? "#0a0a0b");
+    pageBox.style.setProperty("--leaf-bg", surface.leaf);
 
     // The PEELING half: a thin leaf carrying the creative (stage) and
     // the dog-ear flap. animatePageTurn drives its clip-path per
@@ -2301,7 +2360,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
       position: "absolute",
       inset: "0",
       containerType: "size",
-      background: page.bg ?? "#0a0a0b",
+      background: surface.stage,
       overflow: "hidden",
       // The expanded magazine reader is always interactive — a tap
       // navigates to the LP and page-turns are draggable — so the sheet
@@ -2318,7 +2377,14 @@ export class ExpandableMagazineBanner extends HTMLElement {
     // view. Inserted first so subsequent layoutItemToNode calls stack
     // on top (DOM order decides z-stack; layout items don't set an
     // explicit z-index).
-    applyTextureBg(stage, page.textureBg, applyVideoBg(stage, page.videoBg));
+    const video = applyVideoBg(stage, page.videoBg);
+    // "transparent" is pageSurface's posterless fallback — the one case
+    // where the page has nothing of its own to show until the clip
+    // paints. Borrow the frame the collapsed ad already has decoded.
+    if (video && page.videoBg && surface.stage === "transparent") {
+      this.underlayCollapsedFrame(stage, video, page.videoBg);
+    }
+    applyTextureBg(stage, page.textureBg, video);
     applyLogo(stage, this.configData.logo);
 
     (page.layout ?? []).forEach((item, i) => {
@@ -3233,6 +3299,44 @@ function applyLogo(container: HTMLElement, logo: BannerConfig["logo"]): HTMLImag
   });
   container.appendChild(img);
   return img;
+}
+
+// ─── Page surface ──────────────────────────────────────────────────
+//
+// What an expanded page paints underneath its layout: the `stage`
+// background (the creative's own surface) and the `leaf` tone the sheet
+// beneath it carries (PAPER_CSS .paper-sheet / .paper-stack). They move
+// together — a stage that stops painting the page colour while the sheet
+// under it keeps painting it has changed nothing.
+//
+// A video background IS the page's surface, so the page paints no colour
+// of its own under it. The authored `bg` would only ever show in the gap
+// before the clip decodes its first frame — a flash of flat colour that
+// reads as a broken page, worst on the cover of a multi-page creative
+// where that gap is the reader's first sight of the ad. What fills the
+// gap instead is the video's own poster (the publish transcode writes one
+// for every clip), framed exactly as the clip will be, so the page opens
+// on the film's first frame and the video starts moving underneath it.
+//
+// A posterless draft falls through to transparent — the dimmed article
+// showing through, which reads as paper settling rather than a
+// mis-rendered page. That is the fallback rather than the rule because
+// the sheets BENEATH this one stay face-up in the pile (the dog-ear punch
+// reveals them by design — see updatePages), so a fully transparent cover
+// shows the next page's copy through itself until the clip paints.
+//
+// A TRANSLUCENT clip (opacity < 1) keeps the authored colour: there the
+// author is deliberately mixing the video into the page's background, so
+// the colour is part of the composition, not something the video hides.
+export function pageSurface(page: Page): { stage: string; leaf: string } {
+  const colour = page.bg ?? "#0a0a0b";
+  const video = page.videoBg;
+  if (!video?.src || (video.opacity ?? 1) < 1) return { stage: colour, leaf: colour };
+  const poster = video.poster
+    // url() takes a quoted string; escape what would close it early.
+    ? `url("${video.poster.replace(/["\\]/g, "\\$&")}") center / ${video.fit === "contain" ? "contain" : "cover"} no-repeat`
+    : "transparent";
+  return { stage: poster, leaf: "transparent" };
 }
 
 // ─── Video background ──────────────────────────────────────────────
