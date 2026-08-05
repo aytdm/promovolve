@@ -34,7 +34,7 @@ func (h *Handler) SetupPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.render(w, r, "setup.html", pageData{
-		Title:      "Set up PromoVolve",
+		Title:      "Set up Promovolve",
 		DevAuth:    h.devAuth,
 		Timezones:  preferenceTimezones,
 		Currencies: currencyOptions(),
@@ -264,7 +264,7 @@ func (h *Handler) SetupDev(w http.ResponseWriter, r *http.Request) {
 		Timezone:      r.FormValue("timezone"),
 	}
 	renderErr := func(msg string) {
-		h.render(w, r, "setup.html", pageData{Title: "Set up PromoVolve", DevAuth: h.devAuth, Error: msg,
+		h.render(w, r, "setup.html", pageData{Title: "Set up Promovolve", DevAuth: h.devAuth, Error: msg,
 			Timezones: preferenceTimezones, Currencies: currencyOptions()})
 	}
 

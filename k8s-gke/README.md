@@ -1,6 +1,6 @@
-# GKE deployment — the public PromoVolve cluster
+# GKE deployment — the public Promovolve cluster
 
-This is **the** deployment. PromoVolve is not operated as a business, so
+This is **the** deployment. Promovolve is not operated as a business, so
 there is no production tier above this — the cluster is deliberately
 staging-grade and cost-shaped (~**$65–75/mo**, see below).
 

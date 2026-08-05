@@ -5,7 +5,7 @@ import org.scalatest.wordspec.AnyWordSpec
 
 /**
  * Pins the advertiser-facing {curly} attribution-macro contract on the
- * landing URL. Context only — no user/device macro exists (PromoVolve does
+ * landing URL. Context only — no user/device macro exists (Promovolve does
  * not track people); this just lets the advertiser see which ad drove a
  * click in their own analytics.
  */

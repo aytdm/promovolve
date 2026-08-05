@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# k8s/up.sh — bring the PromoVolve stack UP on a local cluster from nothing.
+# k8s/up.sh — bring the Promovolve stack UP on a local cluster from nothing.
 #
 # WHY THIS EXISTS
 #   Docker Desktop's built-in (multi-node) Kubernetes does not survive a VM
@@ -69,7 +69,7 @@ KDIR="$(cd "$(dirname "$0")" && pwd)"
 kc() { kubectl -n "$NS" "$@"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-echo "PromoVolve k8s up — namespace '$NS'"
+echo "Promovolve k8s up — namespace '$NS'"
 
 # --- 0. preflight ----------------------------------------------------------
 CUR_CTX="$(kubectl config current-context 2>/dev/null || true)"

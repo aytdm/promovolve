@@ -407,7 +407,7 @@ final class ServeRoutes(
                                       version,
                                       // Fill the advertiser's {curly} attribution
                                       // macros from trusted auction context (no
-                                      // user data — PromoVolve doesn't track people).
+                                      // user data — Promovolve doesn't track people).
                                       LandingMacros.substitute(
                                         cand.landingUrl,
                                         LandingMacros.valuesFor(

@@ -1,6 +1,6 @@
 # Terraform — the GCP substrate
 
-Replicates PromoVolve's GCP footprint from nothing: project services, the
+Replicates Promovolve's GCP footprint from nothing: project services, the
 global static IP, the zonal GKE cluster + ARM Spot node pool, Workload
 Identity Federation for GitHub Actions CI, the DB-backup bucket/SA, and an
 optional monthly budget. Derived from the live deployment (project
@@ -35,7 +35,7 @@ way.
 - A GCP project with billing linked:
 
   ```sh
-  gcloud projects create <PROJECT_ID> --name="PromoVolve"
+  gcloud projects create <PROJECT_ID> --name="Promovolve"
   gcloud billing projects link <PROJECT_ID> --billing-account=<XXXXXX-XXXXXX-XXXXXX>
   ```
 

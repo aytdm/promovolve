@@ -1,7 +1,7 @@
 // Package currency holds the deployment's base currency — the single unit
 // every amount in the system is denominated in.
 //
-// PromoVolve is built for a small individual ad network: one operator, one
+// Promovolve is built for a small individual ad network: one operator, one
 // country. So there is exactly one currency per deployment, chosen at setup
 // and immutable afterwards. There is no conversion anywhere; an operator in
 // Japan runs the whole instance in JPY, one in Australia in AUD.

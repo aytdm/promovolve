@@ -26,7 +26,7 @@ type Service struct {
 
 func NewService(rpID string, rpOrigins []string, repo *Repository, users UserStore) (*Service, error) {
 	wa, err := webauthn.New(&webauthn.Config{
-		RPDisplayName: "PromoVolve",
+		RPDisplayName: "Promovolve",
 		RPID:          rpID,
 		RPOrigins:     rpOrigins,
 	})

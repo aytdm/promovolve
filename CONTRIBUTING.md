@@ -1,6 +1,6 @@
-# Contributing to PromoVolve
+# Contributing to Promovolve
 
-Thanks for your interest in improving PromoVolve. This project's premise is that
+Thanks for your interest in improving Promovolve. This project's premise is that
 an ad exchange can be **legible** — the auction, pricing, and pacing are meant to
 be readable and verifiable, not hidden. Contributions that keep it that way
 (clear code, honest docs, no dark patterns) are especially welcome.

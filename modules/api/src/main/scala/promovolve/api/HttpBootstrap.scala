@@ -471,7 +471,7 @@ object HttpBootstrap {
         .onComplete {
           case Success(binding) =>
             system.log.info(
-              "PromoVolve HTTP server started at http://{}:{}",
+              "Promovolve HTTP server started at http://{}:{}",
               binding.localAddress.getHostString,
               binding.localAddress.getPort
             )

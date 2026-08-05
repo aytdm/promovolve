@@ -1,6 +1,6 @@
 # Local dev on Docker Desktop Kubernetes
 
-Run the full PromoVolve stack (Postgres/TimescaleDB, Pekko api cluster,
+Run the full Promovolve stack (Postgres/TimescaleDB, Pekko api cluster,
 singleton, Go platform) on **Docker Desktop's built-in Kubernetes** from images
 you build locally — the fast inner loop, no Docker Hub push/pull.
 

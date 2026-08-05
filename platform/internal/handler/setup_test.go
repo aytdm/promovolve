@@ -94,7 +94,7 @@ func TestSetupTemplateRenders(t *testing.T) {
 	SetFS(platform.Templates, platform.Static)
 
 	data := pageData{
-		Title:      "Set up PromoVolve",
+		Title:      "Set up Promovolve",
 		DevAuth:    true, // render the dev form's timezone select too
 		Error:      "an error banner",
 		Timezones:  preferenceTimezones,

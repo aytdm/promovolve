@@ -1,4 +1,4 @@
-// Package billing is the double-entry ledger behind PromoVolve's billing &
+// Package billing is the double-entry ledger behind Promovolve's billing &
 // settlement design (docs/design/BILLING.md): prepaid advertiser wallets,
 // accrued publisher payables, and captured platform margin.
 //

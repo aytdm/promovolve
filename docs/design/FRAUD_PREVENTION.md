@@ -12,7 +12,7 @@
 
 ## Threat model — who actually attacks this network
 
-PromoVolve's structure eliminates most of the fraud taxonomy that plagues
+Promovolve's structure eliminates most of the fraud taxonomy that plagues
 programmatic advertising before any code is written:
 
 - **No reseller chain.** Every site is DNS/file-verified, admin-approved, and

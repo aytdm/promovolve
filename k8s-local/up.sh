@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# k8s-local/up.sh — run the PromoVolve stack on Docker Desktop Kubernetes from
+# k8s-local/up.sh — run the Promovolve stack on Docker Desktop Kubernetes from
 # LOCALLY-BUILT images, with no Docker Hub push/pull in the loop.
 #
 # WHY A SEPARATE SCRIPT FROM k8s/up.sh
@@ -67,7 +67,7 @@ ROOT="$(cd "$LDIR/.." && pwd)"                   # repo root
 kc() { kubectl --context "$EXPECTED_CTX" -n "$NS" "$@"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-echo "PromoVolve k8s-local up — context '$EXPECTED_CTX', namespace '$NS'"
+echo "Promovolve k8s-local up — context '$EXPECTED_CTX', namespace '$NS'"
 
 # --- 0. preflight ----------------------------------------------------------
 CUR_CTX="$(kubectl config current-context 2>/dev/null || true)"

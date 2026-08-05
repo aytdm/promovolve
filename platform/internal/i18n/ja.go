@@ -250,7 +250,7 @@ var ja = map[string]string{
 	// ── page titles (translated centrally in renderStatus) ──
 	"Login":              "ログイン",
 	"Your passkeys":      "あなたのパスキー",
-	"Set up PromoVolve":  "PromoVolve のセットアップ",
+	"Set up Promovolve":  "Promovolve のセットアップ",
 	"Approval":           "承認",
 	"Creative Editor":    "クリエイティブエディター",
 	"Account Requests":   "アカウント申請",

@@ -2,7 +2,7 @@
 #
 # k8s-gke/setup.sh — provision the GKE deployment from nothing (idempotent).
 #
-# THE deployment: PromoVolve has no production tier above this (we don't
+# THE deployment: Promovolve has no production tier above this (we don't
 # operate it as a business), so this cluster is deliberately staging-grade:
 #   • zonal (asia-northeast1-a) — the $74.40/mo free-tier credit covers the
 #     cluster management fee for ONE zonal cluster per billing account
@@ -72,7 +72,7 @@ CTX="${CTX:-gke_${PROJECT_ID}_${ZONE}_${CLUSTER}}"
 
 # Where the images live. The default is the maintainer's private Docker Hub —
 # the STAGING deployment, whose digests CI pins in k8s/kustomization.yaml.
-# Anyone else running PromoVolve for their own business overrides this and
+# Anyone else running Promovolve for their own business overrides this and
 # builds their own (see --build-images in the header). Left at the default
 # with no --build-images, this script behaves exactly as it always has.
 REGISTRY="${REGISTRY:-docker.io/hanishi}"
@@ -174,7 +174,7 @@ if [ "$DEPLOY_ONLY" -ne 1 ]; then
   if ! gcloud projects describe "$PROJECT_ID" >/dev/null 2>&1; then
     echo "    creating (if this fails with 'already exists', the global ID is"
     echo "    taken by someone else — re-run with PROJECT_ID=promovolve-<suffix>)"
-    gcloud projects create "$PROJECT_ID" --name="PromoVolve"
+    gcloud projects create "$PROJECT_ID" --name="Promovolve"
   fi
   BILLING="${BILLING_ACCOUNT:-$(gcloud billing accounts list --filter='open=true' --format='value(name)' | head -1)}"
   [ -n "$BILLING" ] || die "no open billing account visible; pass BILLING_ACCOUNT=..."

@@ -1,5 +1,5 @@
 # k8s/kind-cluster.yaml — a reproducible MULTI-NODE cluster for the realistic
-# (production-like) PromoVolve deployment.
+# (production-like) Promovolve deployment.
 #
 # Why: the app/entity tier runs 3 pods under REQUIRED pod anti-affinity (one
 # entity pod per node), so you need ≥3 SCHEDULABLE worker nodes. The control-

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# k8s/reset.sh — reset the PromoVolve runtime state on a Kubernetes cluster to
+# k8s/reset.sh — reset the Promovolve runtime state on a Kubernetes cluster to
 # a clean, known-good baseline.
 #
 # WHY THIS EXISTS
@@ -72,7 +72,7 @@ SINGLETON_REPLICAS="$(kc get statefulset promovolve-singleton -o jsonpath='{.spe
 # 2026-07-02) — 0 is a valid steady state; only restore what was running.
 { [ -n "${SINGLETON_REPLICAS:-}" ] && [ "$SINGLETON_REPLICAS" -ge 0 ] 2>/dev/null; } || SINGLETON_REPLICAS=0
 
-echo "PromoVolve k8s reset — namespace '$NS'"
+echo "Promovolve k8s reset — namespace '$NS'"
 if [ "$DDATA_ONLY" -eq 1 ]; then
   echo "  MODE: DData-only — wipes ServeIndex / classifications / approvals / floor /"
   echo "        remember-entities. KEEPS campaigns, creatives, sites, logins (Postgres)."

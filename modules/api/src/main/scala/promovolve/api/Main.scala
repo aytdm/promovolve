@@ -44,7 +44,7 @@ object Main {
       given ec: ExecutionContext = context.executionContext
 
       val roles = config.getStringList("pekko.cluster.roles").asScala.toSet
-      context.log.info("Starting PromoVolve node with roles: {}", roles.mkString(", "))
+      context.log.info("Starting Promovolve node with roles: {}", roles.mkString(", "))
 
       // Multi-pod clustering: form the cluster via Pekko Management +
       // Cluster Bootstrap using Kubernetes API discovery. Enabled only when

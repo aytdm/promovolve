@@ -1,4 +1,4 @@
--- PromoVolve PostgreSQL Schema
+-- Promovolve PostgreSQL Schema
 -- Run on first startup via docker-entrypoint-initdb.d
 
 -- ========================================

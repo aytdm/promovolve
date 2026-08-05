@@ -1,6 +1,6 @@
-# GKE overlay — the public PromoVolve deployment (permanently "staging-grade"
+# GKE overlay — the public Promovolve deployment (permanently "staging-grade"
 # by design: zonal cluster, one spot node, in-cluster Postgres — there is no
-# production tier above this, we don't operate PromoVolve as a business).
+# production tier above this, we don't operate Promovolve as a business).
 #
 # Inherits the full stack from ../k8s (same images/digests, same config — the
 # public hostnames promovolve.programmer.llc / ads.programmer.llc are already

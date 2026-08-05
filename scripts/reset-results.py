@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reset PromoVolve runtime results (tracking events, stats, daily spend
+"""Reset Promovolve runtime results (tracking events, stats, daily spend
 counters) WITHOUT touching the test fixture (publishers, advertisers,
 campaigns, creatives, approvals).
 

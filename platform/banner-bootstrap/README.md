@@ -1,6 +1,6 @@
 # banner-bootstrap
 
-Publisher-facing bootstrap script for PromoVolve ads. **The sole integration primitive publishers embed.** The `<expandable-magazine-banner>` custom element stays an internal renderer — the bootstrap loads it on demand from the URL the server returns with each winner.
+Publisher-facing bootstrap script for Promovolve ads. **The sole integration primitive publishers embed.** The `<expandable-magazine-banner>` custom element stays an internal renderer — the bootstrap loads it on demand from the URL the server returns with each winner.
 
 ## Why this exists
 

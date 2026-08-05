@@ -1,4 +1,4 @@
-# PromoVolve Dashboard Design System
+# Promovolve Dashboard Design System
 
 Scope: the Go-template dashboard (`platform/templates/`) — publisher + advertiser
 pages and login. The creative designer keeps its own dark theme for now; a later

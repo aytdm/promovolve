@@ -1,6 +1,6 @@
 # banner-component
 
-Source for `<expandable-magazine-banner>` — the Shadow DOM web component that renders PromoVolve's expandable magazine-style rich creatives.
+Source for `<expandable-magazine-banner>` — the Shadow DOM web component that renders Promovolve's expandable magazine-style rich creatives.
 
 ## Why this module exists
 
@@ -71,7 +71,7 @@ sequenceDiagram
     autonumber
     participant B as Browser
     participant P as Publisher origin<br/>(localhost:8888)
-    participant A as PromoVolve API<br/>(Scala, localhost:8080)
+    participant A as Promovolve API<br/>(Scala, localhost:8080)
     participant CDN as Cloudflare R2<br/>(pub-….r2.dev)
 
     Note over B,A: Page bootstrap

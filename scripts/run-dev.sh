@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Run PromoVolve API server in development mode
+# Run Promovolve API server in development mode
 #
 # Options:
 #   --clean        Clear ddata (remembered entities) before starting
@@ -88,7 +88,7 @@ if [ "$FRESH_START" = true ]; then
   docker exec promovolve-db psql -U promovolve -d promovolve -c "UPDATE projection_offset_store SET current_offset = 0;" 2>/dev/null
 fi
 
-echo "Starting PromoVolve API server..."
+echo "Starting Promovolve API server..."
 export LOG_LEVEL=${LOG_LEVEL:-INFO}
 
 # Load secrets from .env file

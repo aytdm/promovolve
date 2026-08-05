@@ -1,4 +1,4 @@
-# PromoVolve GCP substrate — everything BELOW the Kubernetes API.
+# Promovolve GCP substrate — everything BELOW the Kubernetes API.
 #
 # Derived from the live deployment (project `promovolve`) on 2026-07-15.
 # In-cluster resources (namespace, workloads, Ingress, ManagedCertificate,

@@ -8,7 +8,7 @@ package promovolve.api
  * chose to add, so their own analytics can attribute the visit to the ad.
  *
  * Privacy: context only — campaign / creative / site / category / slot. There
- * is deliberately NO macro that identifies the person or device; PromoVolve
+ * is deliberately NO macro that identifies the person or device; Promovolve
  * does not track people across sites. This just tells the advertiser, in their
  * own tools, which of their ads drove a click.
  *

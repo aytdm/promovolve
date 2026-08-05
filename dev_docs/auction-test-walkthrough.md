@@ -1,6 +1,6 @@
 # Auction Test Walkthrough
 
-How to drive end-to-end auction traffic through a running PromoVolve cluster for debugging or development.
+How to drive end-to-end auction traffic through a running Promovolve cluster for debugging or development.
 
 The recommended testing path is the scala-cli script `scripts/RunScenario.scala`, which orchestrates the production `/v1/...` flow in one shot, plus the Go simulator at `platform/cmd/simulate-traffic` (`go build ./cmd/simulate-traffic`) for steady-state load. (A few low-level `/test/*` debug endpoints still exist — e.g. `/test/bid`, `/test/direct-bid`, `/test/spend` in `AuctionRoutes.scala` — but `/test/register` and `/test/serve-index` are gone; campaign registration goes through `POST /v1/auction/categories/{category}/campaigns` and the serve index is inspected via `GET /v1/publishers/{id}/sites/{siteId}/serve-index`.)
 

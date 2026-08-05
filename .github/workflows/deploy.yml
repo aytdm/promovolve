@@ -1,4 +1,4 @@
-# Build + deploy to the GKE cluster (the public PromoVolve deployment —
+# Build + deploy to the GKE cluster (the public Promovolve deployment —
 # see k8s-gke/README.md).
 #
 # Flow: push to main -> build the CHANGED image(s) natively on an arm64
