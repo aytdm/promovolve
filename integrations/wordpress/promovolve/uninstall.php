@@ -1,6 +1,6 @@
 <?php
 /**
- * Removes the single option PromoVolve Publisher stores.
+ * Removes the single option Promovolve Publisher stores.
  */
 
 if ( ! defined( 'WP_UNINSTALL_PLUGIN' ) ) {

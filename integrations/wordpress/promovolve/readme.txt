@@ -1,28 +1,40 @@
-=== PromoVolve Publisher ===
+=== Promovolve Publisher ===
 Contributors: promovolve
 Tags: ads, advertising, publisher
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.1.3
+Stable tag: 0.2.0
 License: Apache-2.0
 License URI: https://www.apache.org/licenses/LICENSE-2.0
 
-The minimum connection layer between a WordPress site and a PromoVolve ad server.
+The minimum connection layer between a WordPress site and a Promovolve ad server.
 
 == Description ==
 
 This plugin does three things:
 
-1. **Prints the PromoVolve ad tag** on every front-end page, with the `data-pub`
+1. **Prints the Promovolve ad tag** on every front-end page, with the `data-pub`
    (site ID) and `data-api` (ads API base) attributes the loader requires.
 2. **Serves the site-verification file** at `/.well-known/promovolve.txt` so the
-   PromoVolve dashboard can verify domain ownership — no FTP or file manager needed.
-3. **Places ad slots**: a `[promovolve_slot]` shortcode for manual placement, plus
-   an optional automatic slot appended after the content of single posts and pages.
-   The automatic slot's identity is configurable: one shared slot ID site-wide,
-   one per WordPress category (recommended for blogs — keeps dashboard slot rows
-   and ad pools topical), or one per post.
+   Promovolve dashboard can verify domain ownership — no FTP or file manager needed.
+3. **Places ad slots** three ways:
+   * the **Promovolve ad slot block** — drop it exactly where you want the ad in
+     a post or page, in a Site Editor template or template part (one placement,
+     every post), or in a block widget area. The block previews the real
+     footprint, offers the common sizes, chooses its identity scope (shared /
+     per category / per post), and warns when two slots on a page share an ID;
+   * the `[promovolve_slot]` **shortcode** for the classic editor and theme
+     templates;
+   * an optional **automatic slot** appended after the content of single posts
+     and pages, for blanket placement without editing anything. Its identity is
+     configurable: one shared slot ID site-wide, one per WordPress category
+     (recommended for blogs — keeps dashboard slot rows and ad pools topical),
+     or one per post. On a block theme, putting the block in your Single
+     template does the same job and lets you choose the position; on a classic
+     theme there is no Site Editor, so this is the only way to cover every post
+     without editing each one. The settings page recommends whichever applies
+     to the theme you are running.
 
 There is nothing else to configure. Slots need no pre-registration — they
 self-activate on first serve. Page classification happens on demand from the
@@ -33,14 +45,15 @@ visitor's browser, so pages behind logins or noindex still work.
 1. Upload the `promovolve` folder to `/wp-content/plugins/`, or upload the zip
    via Plugins → Add New → Upload Plugin.
 2. Activate the plugin.
-3. On the PromoVolve dashboard, register your site (its URL) and wait for
+3. On the Promovolve dashboard, register your site (its URL) and wait for
    operator approval.
-4. In WordPress under Settings → PromoVolve, fill in the Site ID, Ads API base
+4. In WordPress under Settings → Promovolve, fill in the Site ID, Ads API base
    URL, and ad loader script URL from your operator, and paste the verification
    token from the dashboard Sites page.
 5. Back on the dashboard, click Verify.
-6. Place slots with `[promovolve_slot id="sidebar-top" w="300" h="250"]` or
-   enable the automatic after-content slot.
+6. Place slots with the "Promovolve ad slot" block (search for *Promovolve* in
+   the block inserter), with `[promovolve_slot id="sidebar-top" w="300" h="250"]`,
+   or by enabling the automatic after-content slot.
 
 == Frequently Asked Questions ==
 
@@ -63,7 +76,7 @@ a TXT record at `_promovolve.<your-host>` with the value
 
 = Does each subdomain need its own setup? =
 
-Yes. PromoVolve treats every host as a separate site (only `www` and the bare
+Yes. Promovolve treats every host as a separate site (only `www` and the bare
 domain are merged), each with its own site ID, verification, and settings.
 
 = What data does the tag collect? =
@@ -74,6 +87,38 @@ reader "dog-ear" bookmarks in the browser's IndexedDB (7-day expiry). It sets
 no cookies. Visitors sending the Global Privacy Control signal receive no ads.
 
 == Changelog ==
+
+= 0.2.0 =
+* New **Promovolve ad slot** block. Place slots from the editor instead of
+  settling for the after-content automatic slot: post and page content, Site
+  Editor templates and template parts, and block widget areas all work. The
+  block shows the ad's real footprint while editing, offers the common sizes
+  (any custom size is fine too), supports the standard margin controls, and
+  warns when another slot on the page already uses the same ID — a page fills
+  only the first slot of any given ID.
+* Block slots follow the automatic slot's identity rule: the effective
+  dashboard ID is `<id>_<w>x<h>`, shown live in the block sidebar. Shortcode
+  IDs are unchanged and still used verbatim.
+* Blocks have the same **Slot identity** choice as the automatic slot — shared,
+  per category, or per post. This matters for a block placed in a template,
+  which is one placement rendering on every post: without it, such a slot could
+  only ever be a single shared inventory row. The suffix applies on single posts
+  and pages; on archives, where there is no unambiguous current post, the shared
+  ID is used.
+* A slot ID is now rendered at most **once per page**, whichever way it was
+  placed. The ad loader has always filled only the first element with a given
+  slot ID, so every repeat was dead markup that still reserved its box — an
+  empty hole that could never fill. Archives hit this without anyone making a
+  mistake: a theme that renders full post content repeated every in-content
+  slot once per listed post. Responses that carry several renders at once (the
+  REST API, feeds, editor previews) are deliberately exempt.
+* The settings page now tailors its placement advice to your theme. "Put the
+  block in your Single template" is impossible to follow on a classic theme,
+  which has no Site Editor — there, the automatic slot is presented as the
+  zero-touch option instead. On a block theme it is presented as the fallback
+  for posts you would rather not edit.
+* No new build step: the block ships as plain JavaScript, so the plugin folder
+  remains copy-and-go.
 
 = 0.1.3 =
 * Slot containers are now sized inline (fill the content column up to the

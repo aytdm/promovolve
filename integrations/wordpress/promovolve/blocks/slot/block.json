@@ -1,0 +1,26 @@
+{
+	"$schema": "https://schemas.wp.org/trunk/block.json",
+	"apiVersion": 3,
+	"name": "promovolve/slot",
+	"title": "Promovolve ad slot",
+	"category": "widgets",
+	"icon": "megaphone",
+	"description": "Place a Promovolve ad slot anywhere in the editor. The slot fills after the page is served an approved ad.",
+	"keywords": [ "ad", "ads", "advertising", "banner", "promovolve" ],
+	"textdomain": "promovolve",
+	"attributes": {
+		"slotId": { "type": "string", "default": "in-content" },
+		"w": { "type": "number", "default": 300 },
+		"h": { "type": "number", "default": 250 },
+		"scope": { "type": "string", "default": "site" }
+	},
+	"supports": {
+		"html": false,
+		"spacing": { "margin": true },
+		"align": false
+	},
+	"example": {
+		"attributes": { "slotId": "in-content", "w": 300, "h": 250 }
+	},
+	"editorScript": "promovolve-slot-block"
+}

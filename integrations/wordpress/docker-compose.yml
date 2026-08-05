@@ -1,0 +1,39 @@
+# Throwaway WordPress for developing and verifying the publisher plugin.
+#
+#   docker compose up -d          # http://localhost:8088 — run the installer once
+#   docker compose down -v        # discard the site entirely
+#
+# The plugin folder is bind-mounted, so edits are live on refresh (hard-reload
+# the editor after touching blocks/slot/editor.js — the script is versioned by
+# PROMOVOLVE_VERSION, not by mtime).
+services:
+  db:
+    image: mariadb:11
+    environment:
+      MARIADB_DATABASE: wordpress
+      MARIADB_USER: wordpress
+      MARIADB_PASSWORD: wordpress
+      MARIADB_ROOT_PASSWORD: wordpress
+    volumes:
+      - db:/var/lib/mysql
+
+  wordpress:
+    image: wordpress:6-php8.3-apache
+    depends_on:
+      - db
+    ports:
+      - "8088:80"
+    environment:
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_NAME: wordpress
+      WORDPRESS_DB_USER: wordpress
+      WORDPRESS_DB_PASSWORD: wordpress
+      # Surface plugin notices/deprecations instead of a white screen.
+      WORDPRESS_DEBUG: 1
+    volumes:
+      - wp:/var/www/html
+      - ./promovolve:/var/www/html/wp-content/plugins/promovolve
+
+volumes:
+  db:
+  wp:
