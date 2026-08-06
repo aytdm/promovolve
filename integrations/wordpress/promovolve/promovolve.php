@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Promovolve Publisher
  * Description:       Connects this site to a Promovolve ad server: prints the ad tag, serves the site-verification file, and places ad slots via editor block or shortcode.
- * Version:           0.2.0
+ * Version:           0.2.1
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Promovolve
@@ -16,7 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 const PROMOVOLVE_OPTION  = 'promovolve_settings';
-const PROMOVOLVE_VERSION = '0.2.0';
+const PROMOVOLVE_VERSION = '0.2.1';
 
 /**
  * Settings with defaults applied.
@@ -341,6 +341,129 @@ function promovolve_render_slot_block( $attributes ) {
 }
 
 /* -------------------------------------------------------------------------
+ * Verification-file probe
+ * ---------------------------------------------------------------------- */
+
+const PROMOVOLVE_WELLKNOWN_TRANSIENT = 'promovolve_wellknown_status';
+const PROMOVOLVE_VERIFIED_TRANSIENT  = 'promovolve_verification_status';
+
+/**
+ * Ask the ad server whether this site is verified.
+ *
+ * The serve endpoint already answers this: its host gate replies 403
+ * (BatchHostNotVerified) for an unverified site or a host mismatch, and that
+ * check runs BEFORE the auction, so an unverified probe costs the server
+ * nothing. Sending an EMPTY impression list keeps the verified case just as
+ * cheap — the request passes the gate, finds no slots to fill, and returns
+ * `seatbid: []`, so it can neither reserve budget nor enroll a slot id. (It
+ * does count as one request arrival, which is why the answer is cached and
+ * only fetched when an admin opens this page.)
+ *
+ * Worth asking directly rather than inferring from the verification file:
+ * verification is one-time and persisted server-side, so a site stays verified
+ * long after the file stops being served — which is exactly what a
+ * remove-and-reinstall of this plugin produces.
+ *
+ * @return string 'verified' | 'unverified' | 'unknown'
+ */
+function promovolve_verification_status( $s ) {
+	if ( '' === $s['site_id'] || '' === $s['api_base'] ) {
+		return 'unknown'; // Nothing to ask with.
+	}
+	$cached = get_transient( PROMOVOLVE_VERIFIED_TRANSIENT );
+	if ( is_string( $cached ) && '' !== $cached ) {
+		return $cached;
+	}
+
+	$response = wp_remote_post(
+		untrailingslashit( $s['api_base'] ) . '/v1/serve/batch',
+		array(
+			'timeout' => 5,
+			'headers' => array( 'Content-Type' => 'application/json' ),
+			'body'    => wp_json_encode( array(
+				'pub' => $s['site_id'],
+				'url' => home_url( '/' ),
+				'imp' => array(),
+			) ),
+		)
+	);
+
+	if ( is_wp_error( $response ) ) {
+		$state = 'unknown';
+	} else {
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		if ( 200 === $code || 204 === $code ) {
+			// 204 = operator-suspended: the host gate passed, so the site IS
+			// verified. Suspension is a separate condition with its own
+			// dashboard surface; do not report it as a verification failure.
+			$state = 'verified';
+		} elseif ( 403 === $code ) {
+			$state = 'unverified';
+		} else {
+			$state = 'unknown';
+		}
+	}
+
+	// Short cache: this decides whether the token field appears at all, so a
+	// publisher who has just verified should see it disappear promptly.
+	set_transient( PROMOVOLVE_VERIFIED_TRANSIENT, $state, 5 * MINUTE_IN_SECONDS );
+	return $state;
+}
+
+/**
+ * What does the world ACTUALLY see at /.well-known/promovolve.txt?
+ *
+ * The settings field alone cannot answer that. Uninstalling the plugin
+ * deletes its option (uninstall.php), so a remove-and-reinstall leaves the
+ * token box empty while the file may still be served by something else
+ * entirely — a static file uploaded over FTP, or a previous install. An empty
+ * box then reads as "verification is broken" when it usually isn't:
+ * verification is one-time and persisted server-side, so an already-verified
+ * site stays verified with no token here at all.
+ *
+ * Fetching the URL is the only way to state the real situation.
+ *
+ * @return array{state:string,token:string,code:int} state is one of
+ *         'serving' | 'foreign' | 'missing' | 'unknown'.
+ */
+function promovolve_wellknown_status( $configured_token ) {
+	$cached = get_transient( PROMOVOLVE_WELLKNOWN_TRANSIENT );
+	if ( is_array( $cached ) ) {
+		return $cached;
+	}
+
+	$url      = home_url( '/.well-known/promovolve.txt' );
+	$response = wp_remote_get( $url, array( 'timeout' => 5, 'redirection' => 2 ) );
+
+	if ( is_wp_error( $response ) ) {
+		// Many hosts block loopback requests. Say so rather than reporting a
+		// missing file — a wrong "not served" would send publishers chasing
+		// a problem that isn't there.
+		$status = array( 'state' => 'unknown', 'token' => '', 'code' => 0 );
+	} else {
+		$code = (int) wp_remote_retrieve_response_code( $response );
+		$body = trim( (string) wp_remote_retrieve_body( $response ) );
+		$hit  = array();
+		if ( 200 === $code && preg_match( '/promovolve-site-verification=([A-Za-z0-9-]+)/', $body, $hit ) ) {
+			$found = $hit[1];
+			$status = array(
+				// 'foreign' = a token is being served that this plugin is not
+				// the source of. Worth distinguishing: it means the publisher
+				// has a static file (or another install) doing the job.
+				'state' => ( '' !== $configured_token && $found === $configured_token ) ? 'serving' : 'foreign',
+				'token' => $found,
+				'code'  => $code,
+			);
+		} else {
+			$status = array( 'state' => 'missing', 'token' => '', 'code' => $code );
+		}
+	}
+
+	set_transient( PROMOVOLVE_WELLKNOWN_TRANSIENT, $status, MINUTE_IN_SECONDS );
+	return $status;
+}
+
+/* -------------------------------------------------------------------------
  * Settings
  * ---------------------------------------------------------------------- */
 
@@ -405,6 +528,12 @@ function promovolve_sanitize_settings( $input ) {
  * can detect; each call is a no-op when that cache plugin is absent.
  */
 function promovolve_purge_page_caches() {
+	// The saved token decides whether we serve the verification file at all,
+	// so the live probe's answer is stale the moment settings change.
+	delete_transient( PROMOVOLVE_WELLKNOWN_TRANSIENT );
+	// site_id / api_base are what the verification probe asks WITH, so a
+	// settings change can invalidate its answer too.
+	delete_transient( PROMOVOLVE_VERIFIED_TRANSIENT );
 	do_action( 'litespeed_purge_all' );
 	if ( function_exists( 'wp_cache_clear_cache' ) ) {
 		wp_cache_clear_cache(); // WP Super Cache
@@ -503,22 +632,78 @@ function promovolve_render_settings_page() {
 			</table>
 
 			<h2><?php esc_html_e( 'Site verification', 'promovolve' ); ?></h2>
+			<?php
+			$verification = promovolve_verification_status( $s );
+			if ( 'verified' === $verification ) :
+				// Verified: the token has no remaining purpose, so the field is
+				// not rendered at all rather than left as a puzzle. Omitting the
+				// input is safe — the sanitizer keeps any saved value when the
+				// key is absent from the submission. If verification is ever
+				// lost (a deleted-and-re-added site starts unverified), the probe
+				// returns 403 and the field comes back on its own.
+				?>
+				<p style="padding:8px 10px;border-left:4px solid #00a32a;background:#fff;max-width:46em;">
+					<strong><?php esc_html_e( 'This site is verified.', 'promovolve' ); ?></strong>
+					<?php esc_html_e( 'Verification is one-time and held by the ad server, so there is nothing to configure here. The token field is hidden because it is no longer needed; it reappears automatically if this site ever needs verifying again.', 'promovolve' ); ?>
+				</p>
+			<?php else : ?>
 			<table class="form-table" role="presentation">
 				<tr>
 					<th scope="row"><label for="promovolve-token"><?php esc_html_e( 'Verification token', 'promovolve' ); ?></label></th>
 					<td>
 						<input name="<?php echo esc_attr( PROMOVOLVE_OPTION ); ?>[verification_token]" id="promovolve-token" type="text" class="regular-text code" value="<?php echo esc_attr( $s['verification_token'] ); ?>">
-						<p class="description"><?php esc_html_e( 'Paste the token (or the full promovolve-site-verification=… line) from the dashboard Sites page, then click Verify there.', 'promovolve' ); ?></p>
-						<?php if ( '' !== $s['verification_token'] ) : ?>
-							<p class="description">
-								<?php
-								printf(
-									/* translators: %s: verification file URL */
-									esc_html__( 'This plugin now serves the verification file at %s.', 'promovolve' ),
-									'<a href="' . esc_url( home_url( '/.well-known/promovolve.txt' ) ) . '" target="_blank"><code>' . esc_html( home_url( '/.well-known/promovolve.txt' ) ) . '</code></a>'
-								);
-								?>
+						<?php if ( 'unverified' === $verification ) : ?>
+							<p class="description" style="padding:8px 10px;border-left:4px solid #dba617;background:#fff;">
+								<?php esc_html_e( 'The ad server does not recognise this site as verified yet. Paste the token below, then click Verify on the dashboard Sites page.', 'promovolve' ); ?>
 							</p>
+						<?php endif; ?>
+						<p class="description"><?php esc_html_e( 'Needed only until you click Verify on the dashboard — verification is one-time. An already-verified site stays verified even with this box empty, so a blank field after reinstalling the plugin is not a fault.', 'promovolve' ); ?></p>
+						<p class="description"><?php esc_html_e( 'Paste the token (or the full promovolve-site-verification=… line) from the dashboard Sites page, then click Verify there.', 'promovolve' ); ?></p>
+
+						<?php
+						// Ground truth beats the saved setting: report what the
+						// URL actually returns right now.
+						$wk     = promovolve_wellknown_status( $s['verification_token'] );
+						$wk_url = home_url( '/.well-known/promovolve.txt' );
+						$link   = '<a href="' . esc_url( $wk_url ) . '" target="_blank"><code>' . esc_html( $wk_url ) . '</code></a>';
+						?>
+						<p class="description" style="margin-top:10px;padding:8px 10px;border-left:4px solid <?php
+							echo esc_attr( 'missing' === $wk['state'] ? '#dba617' : ( 'unknown' === $wk['state'] ? '#c3c4c7' : '#00a32a' ) );
+						?>;background:#fff;">
+							<?php
+							switch ( $wk['state'] ) {
+								case 'serving':
+									printf(
+										/* translators: %s: verification file URL */
+										esc_html__( 'Live check: this plugin is serving the verification file at %s.', 'promovolve' ),
+										$link // phpcs:ignore WordPress.Security.EscapeOutput -- built from esc_url/esc_html above.
+									);
+									break;
+								case 'foreign':
+									printf(
+										/* translators: 1: verification file URL, 2: the token found there */
+										esc_html__( 'Live check: %1$s already returns a token (%2$s), but it is not coming from this plugin — most likely a static file left on the server. Verification will work as-is. Paste that token above only if you want the plugin to own the file.', 'promovolve' ),
+										$link, // phpcs:ignore WordPress.Security.EscapeOutput -- built from esc_url/esc_html above.
+										'<code>' . esc_html( $wk['token'] ) . '</code>'
+									);
+									break;
+								case 'missing':
+									printf(
+										/* translators: %s: verification file URL */
+										esc_html__( 'Live check: %s returns nothing. That only matters if this site is not verified yet — check the dashboard Sites page. If it already shows as verified, no action is needed.', 'promovolve' ),
+										$link // phpcs:ignore WordPress.Security.EscapeOutput -- built from esc_url/esc_html above.
+									);
+									break;
+								default:
+									printf(
+										/* translators: %s: verification file URL */
+										esc_html__( 'Live check: could not reach %s from this server (many hosts block loopback requests). Open it in a browser tab to see what visitors get.', 'promovolve' ),
+										$link // phpcs:ignore WordPress.Security.EscapeOutput -- built from esc_url/esc_html above.
+									);
+							}
+							?>
+						</p>
+						<?php if ( '' !== $s['verification_token'] ) : ?>
 							<p class="description">
 								<?php esc_html_e( 'DNS fallback if the file URL is unreachable (e.g. WordPress installed in a subdirectory):', 'promovolve' ); ?><br>
 								<code>_promovolve.<?php echo esc_html( $host ); ?></code> TXT
@@ -528,6 +713,7 @@ function promovolve_render_settings_page() {
 					</td>
 				</tr>
 			</table>
+			<?php endif; // 'verified' hides the token field entirely ?>
 
 			<h2><?php esc_html_e( 'Ad slots', 'promovolve' ); ?></h2>
 			<p>

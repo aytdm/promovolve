@@ -4,7 +4,7 @@ Tags: ads, advertising, publisher
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.2.0
+Stable tag: 0.2.1
 License: Apache-2.0
 License URI: https://www.apache.org/licenses/LICENSE-2.0
 
@@ -87,6 +87,32 @@ reader "dog-ear" bookmarks in the browser's IndexedDB (7-day expiry). It sets
 no cookies. Visitors sending the Global Privacy Control signal receive no ads.
 
 == Changelog ==
+
+= 0.2.1 =
+* **The verification token field is gone once the site is verified.** The plugin
+  now asks the ad server directly instead of guessing: the serve endpoint's host
+  gate answers 403 for an unverified site, and it runs before the auction, so
+  the check is free. An empty impression list keeps the verified case free too —
+  it passes the gate, finds no slots, and returns an empty seatbid, so it can
+  neither reserve budget nor enroll a slot id. Verified sites see a short "this
+  site is verified" confirmation and nothing to fill in; unverified ones get the
+  field plus a note that the server does not recognise them yet. The field
+  reappears by itself if verification is ever lost, and any saved token survives
+  a save while the field is hidden.
+* The Site verification section now reports what `/.well-known/promovolve.txt`
+  actually returns, instead of only showing what is saved here. Removing the
+  plugin deletes its settings, so a reinstall leaves the token box empty while
+  the file may still be served by something else — and an empty box read as
+  "verification is broken" when it usually isn't. The live check distinguishes
+  four cases: this plugin is serving the file; a token is served but from
+  somewhere else (a leftover static file); nothing is served; and the check
+  could not run because the host blocks loopback requests. A 200 response that
+  is really an HTML catch-all page counts as "nothing served" — checking only
+  the status code would report a file that does not exist.
+* Made the token's lifecycle explicit: it is needed only until you click Verify,
+  verification is one-time, and an already-verified site stays verified with the
+  box empty. Removing the redundant "this plugin now serves the file" line,
+  which the live check states more accurately.
 
 = 0.2.0 =
 * New **Promovolve ad slot** block. Place slots from the editor instead of
