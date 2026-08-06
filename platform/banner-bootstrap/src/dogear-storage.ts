@@ -321,6 +321,14 @@ export interface Counted {
   creativeId: string;
   countedAt: number;
   expiresAt: number;
+  // Set once the matching unfold has been reported to the server. The
+  // server's retention metric is (folds - unfolds)/folds, so an unfold
+  // may only be sent against a fold we actually reported, and only
+  // once — folds are deduped per creative, and an undeduped unfold
+  // would let a fold/unfold/refold cycle drive the numerator negative.
+  // Absent on records written before unfold reporting existed, which
+  // reads as "not yet reported" and is the correct default.
+  unfoldReportedAt?: number;
 }
 
 /** Returns true if the server has been told about a fresh fold for
@@ -377,6 +385,55 @@ export async function markCounted(creativeId: string, expiresAt: number): Promis
     tx.oncomplete = () => resolve();
     tx.onerror = () => resolve();
     tx.onabort = () => resolve();
+  });
+}
+
+/** Claim the right to report ONE unfold for this creative, atomically.
+ *
+ *  Returns true exactly once per counted fold. The unfold beacon is the
+ *  mirror of the fold beacon, so it inherits the same dedup: a fold
+ *  that was never reported (deduped as a refold, or pinned in an
+ *  earlier window) has nothing for the server to subtract, and a
+ *  second unfold of the same fold would double-subtract. Both cases
+ *  return false and the caller sends nothing.
+ *
+ *  Deliberately does NOT delete the counted record — see clearCounted
+ *  below. The claim flag rides on the same record so it expires with
+ *  it, and check-and-set happen in one transaction so two unfold
+ *  events in the same tick can't both claim.
+ */
+export async function claimUnfoldReport(creativeId: string): Promise<boolean> {
+  let db: IDBDatabase;
+  try {
+    db = await openDb();
+  } catch {
+    return false;
+  }
+  return new Promise<boolean>((resolve) => {
+    const tx = db.transaction(COUNTED_STORE, "readwrite");
+    const store = tx.objectStore(COUNTED_STORE);
+    const req = store.get(creativeId);
+    req.onsuccess = () => {
+      const rec = req.result as Counted | undefined;
+      // No reported fold to pair with — nothing to report.
+      if (!rec) {
+        resolve(false);
+        return;
+      }
+      const now = Date.now();
+      if (now >= rec.expiresAt) {
+        store.delete(creativeId);
+        resolve(false);
+        return;
+      }
+      if (rec.unfoldReportedAt !== undefined) {
+        resolve(false);
+        return;
+      }
+      store.put({ ...rec, unfoldReportedAt: now } satisfies Counted);
+      resolve(true);
+    };
+    req.onerror = () => resolve(false);
   });
 }
 

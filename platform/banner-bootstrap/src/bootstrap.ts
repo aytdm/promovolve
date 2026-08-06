@@ -35,8 +35,8 @@
 //      display:none so they don't leave reserved space.
 
 import {
-  clearPin, clearPinsByCreativeIds, getAllPins, markCounted, pinExpiresAt, setPin,
-  wasCounted,
+  claimUnfoldReport, clearPin, clearPinsByCreativeIds, getAllPins, markCounted, pinExpiresAt,
+  setPin, wasCounted,
   type Pin,
 } from "./dogear-storage.js";
 import { attachLpPrefetch } from "./lp-prefetch.js";
@@ -302,13 +302,33 @@ function attachDogearListeners(
     })();
   });
   banner.addEventListener("dogear-unfold", () => {
-    // No /v1/dogear-event POST — unfolds are deliberately silent
-    // server-side ("don't accept unfold"). Clear the local pin so the
-    // next page load auctions normally instead of re-honoring the pin.
-    // We intentionally do NOT clearCounted: keeping the dedup record
-    // means a refold inside the same window stays silent and doesn't
-    // cycle the fold posterior.
-    void clearPin(slot.id);
+    void (async () => {
+      // Clear the local pin first so the next page load auctions
+      // normally instead of re-honoring it. This is the part the user
+      // actually asked for; the beacon below is telemetry and must
+      // never be able to stop it.
+      await clearPin(slot.id);
+      // Report the unfold. The server has always accepted this event
+      // (TrackRoutes "unfold" → logUnfold) and feeds it to the pin
+      // retention metric (folds - unfolds)/folds — but the client never
+      // sent it, so `unfolds` was 0 on every row ever written and the
+      // metric read a constant 100%.
+      //
+      // Gated on claimUnfoldReport so exactly one unfold is sent per
+      // fold we reported: an unpaired unfold (refold-deduped fold, or a
+      // pin honored from an earlier window) has nothing to subtract.
+      // We still do NOT clearCounted — keeping the dedup record means a
+      // refold inside the same window stays silent and doesn't cycle
+      // the fold posterior the auction scores on.
+      if (!(await claimUnfoldReport(winner.creativeId))) return;
+      await postDogearEvent({
+        pub:        config.pub,
+        url:        window.location.href,
+        creativeId: winner.creativeId,
+        slotId:     slot.id,
+        event:      "unfold",
+      });
+    })();
   });
 }
 

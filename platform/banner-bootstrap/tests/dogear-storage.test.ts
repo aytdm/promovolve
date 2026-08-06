@@ -163,6 +163,52 @@ describe("dogear-storage", () => {
     expect((await storage.getPin("s1"))?.creativeId).toBe("c1");
   });
 
+  // claimUnfoldReport is the dedup that keeps the server's retention
+  // metric — (folds - unfolds)/folds — well-formed. Folds are deduped
+  // per creative, so unfolds must be too: exactly one reported unfold
+  // per reported fold, never more, never unpaired.
+  it("claimUnfoldReport grants once per counted fold, then refuses", async () => {
+    const storage = await loadStorage();
+    await storage.markCounted("c1", defaultExpiry(Date.now()));
+    expect(await storage.claimUnfoldReport("c1")).toBe(true);
+    expect(await storage.claimUnfoldReport("c1")).toBe(false);
+    expect(await storage.claimUnfoldReport("c1")).toBe(false);
+  });
+
+  it("claimUnfoldReport refuses when no fold was ever reported", async () => {
+    // The fold was deduped as a refold, or the pin came from an earlier
+    // window — either way the server has nothing to subtract.
+    const storage = await loadStorage();
+    expect(await storage.claimUnfoldReport("never-counted")).toBe(false);
+  });
+
+  it("claimUnfoldReport refuses against an expired counted record", async () => {
+    const storage = await loadStorage();
+    await storage.markCounted("c1", Date.now() - 1000);
+    expect(await storage.claimUnfoldReport("c1")).toBe(false);
+  });
+
+  it("claiming an unfold leaves the fold dedup armed (no posterior cycling)", async () => {
+    // clearCounted is deliberately NOT called on unfold: a refold inside
+    // the same window must stay silent so it can't cycle the fold
+    // posterior the auction scores on.
+    const storage = await loadStorage();
+    await storage.markCounted("c1", defaultExpiry(Date.now()));
+    await storage.claimUnfoldReport("c1");
+    expect(await storage.wasCounted("c1")).toBe(true);
+  });
+
+  it("a fresh fold after clearCounted can report its own unfold again", async () => {
+    // Revocation path: creative_removed clears the dedup slate, so a
+    // resurrected campaign's fold/unfold pair is reportable afresh.
+    const storage = await loadStorage();
+    await storage.markCounted("c1", defaultExpiry(Date.now()));
+    expect(await storage.claimUnfoldReport("c1")).toBe(true);
+    await storage.clearCounted("c1");
+    await storage.markCounted("c1", defaultExpiry(Date.now()));
+    expect(await storage.claimUnfoldReport("c1")).toBe(true);
+  });
+
   it("setPin then clearPin then setPin (refold flow) works end-to-end", async () => {
     // Spec scenario: reader folds → unfolds → folds again. Each fold is
     // an independent CPF event; the IDB store records the latest.
