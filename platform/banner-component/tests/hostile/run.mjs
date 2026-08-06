@@ -16,12 +16,23 @@ import { extname, join } from "path";
 import { chromium } from "playwright";
 
 const ROOT = new URL("../..", import.meta.url).pathname;
-const MIME = { ".html": "text/html", ".js": "text/javascript", ".map": "application/json" };
+const MIME = {
+  ".html": "text/html", ".js": "text/javascript", ".map": "application/json",
+  // The video fixture's clip + poster. A wrong type here means no decode
+  // and a silently pointless test.
+  ".mp4": "video/mp4", ".jpg": "image/jpeg",
+};
 
 const server = createServer(async (req, res) => {
   try {
-    const path = join(ROOT, decodeURIComponent(new URL(req.url, "http://x").pathname));
+    const url = new URL(req.url, "http://x");
+    const path = join(ROOT, decodeURIComponent(url.pathname));
     const body = await readFile(path);
+    // ?stall=<ms> holds the response back. The video fixture uses it to
+    // recreate the window this suite exists to police: a clip that has
+    // not decoded yet, with the ad already on the page.
+    const stall = Number(url.searchParams.get("stall") ?? 0);
+    if (stall > 0) await new Promise((r) => setTimeout(r, stall));
     res.writeHead(200, { "content-type": MIME[extname(path)] ?? "application/octet-stream" });
     res.end(body);
   } catch {
@@ -143,10 +154,91 @@ async function probeShortViewport(browser) {
   return { directOk, openedPortrait, closedOnRotate, latchedWhileOpen, restoredAfterClose };
 }
 
+// A video background must never let the page's own colour reach the
+// screen — not in the ad box while the clip is still arriving, and not on
+// the reader's cover. Both used to happen, in two separate render paths
+// (fixed 86d37c3 + 61cef0b): the box painted `bg` and revealed as soon as
+// IMAGES were ready, and the reader's page painted `bg` under the video.
+// Neither is visible to the eye for more than a moment, which is exactly
+// why it needs a machine with a stopwatch.
+//
+// The fixture's cover carries bg #ff00ff so the reader check can name the
+// exact colour that must never reach the sheet. The BOX is checked
+// differently: a posterless clip legitimately keeps its colour there and
+// paints the film on top, so what matters is not whether the colour is
+// SET but whether it was ever left VISIBLE — the ad on screen with no
+// poster painted and no frame decoded. That is `blankMs`, and it is the
+// blink itself, in milliseconds.
+//
+// Sampling starts at "commit", NOT "load": the load event waits on the
+// media element, so by then the very window under test is over.
+const FORBIDDEN_BG = "rgb(255, 0, 255)";
+async function probeVideoBg(browser, { poster }) {
+  const name = poster ? "video-bg-poster" : "video-bg-noposter";
+  const page = await browser.newPage({ viewport: { width: 900, height: 700 } });
+  const errors = [];
+  page.on("pageerror", (e) => errors.push(String(e).slice(0, 200)));
+  await page.goto(
+    `http://127.0.0.1:${PORT}/tests/hostile/fixtures/video-bg.html${poster ? "?poster=1" : ""}`,
+    { waitUntil: "commit" },
+  );
+
+  const t0 = Date.now();
+  const samples = [];
+  for (let i = 0; i < 70; i++) { // ~3.5s at 50ms — covers the 1.2s stall + the 2s cap
+    const s = await page.evaluate(() => {
+      const root = document.querySelector("expandable-magazine-banner")?.shadowRoot;
+      const banner = root?.querySelector(".banner");
+      const box = root?.querySelector(".design-box");
+      if (!box || !banner) return null;
+      const cs = getComputedStyle(box);
+      const v = root.querySelector("video");
+      return {
+        visible: getComputedStyle(banner).opacity === "1",
+        bgImage: cs.backgroundImage !== "none",
+        bgColor: cs.backgroundColor,
+        videoReady: v ? v.readyState : 0,
+      };
+    }).catch(() => null);
+    if (s) samples.push({ t: Date.now() - t0, ...s });
+    if (samples.length && samples[samples.length - 1].videoReady >= 2 && samples.some((x) => x.visible)) break;
+    await page.waitForTimeout(50);
+  }
+
+  const shown = samples.filter((s) => s.visible);
+  const revealAt = shown.length ? shown[0].t : null;
+  // The ad is on screen with nothing of the film up: no poster painted
+  // AND the clip has no frame yet. This is the blink, in milliseconds.
+  const blank = shown.filter((s) => !s.bgImage && s.videoReady < 2);
+  const blankMs = blank.length ? blank[blank.length - 1].t - blank[0].t + 50 : 0;
+  // What the ad was painting the moment it appeared — the poster, or a
+  // decoded frame. Reported so a pass says WHY it passed.
+  const atReveal = !shown.length ? "never-revealed"
+    : shown[0].bgImage ? "poster" : shown[0].videoReady >= 2 ? "frame" : "nothing";
+
+  // …and the reader's cover, which is the other render path.
+  let readerColourSeen = null;
+  await page.locator("expandable-magazine-banner").first().click();
+  await page.waitForTimeout(1500); // deal-in settles
+  readerColourSeen = await page.evaluate((forbidden) => {
+    const stage = document.querySelector("expandable-magazine-banner")
+      ?.shadowRoot?.querySelector(".page-0 .paper-stage");
+    if (!stage) return null; // reader never opened — reported as a failure below
+    return getComputedStyle(stage).backgroundColor === forbidden;
+  }, FORBIDDEN_BG);
+
+  await page.close();
+  return { name, poster, revealAt, blankMs, atReveal, readerColourSeen, errors: errors.slice(0, 2) };
+}
+
 const browser = await chromium.launch();
 const results = [];
 for (const f of FIXTURES) results.push(await probe(browser, f));
 const sv = await probeShortViewport(browser);
+const vids = [
+  await probeVideoBg(browser, { poster: true }),
+  await probeVideoBg(browser, { poster: false }),
+];
 await browser.close();
 server.close();
 
@@ -173,6 +265,21 @@ for (const r of results) {
     `${(ok ? "ok" : "FAIL").padEnd(10)} ${"short-viewport".padEnd(22)} direct=${sv.directOk} ` +
     `openedPortrait=${sv.openedPortrait} closedOnRotate=${sv.closedOnRotate} ` +
     `rootBgLatched=${sv.latchedWhileOpen} rootBgRestored=${sv.restoredAfterClose}`
+  );
+}
+for (const v of vids) {
+  // Same bar for both paths — the film or nothing, never the page colour.
+  // The posterless run additionally proves the reveal WAITED for the clip:
+  // with no still to show, appearing early can only mean appearing blank.
+  const waited = v.poster || (v.revealAt ?? 0) >= 900; // stall is 1200ms
+  const ok = v.revealAt !== null && v.blankMs === 0
+    && v.readerColourSeen === false && waited;
+  if (!ok) failed++;
+  console.log(
+    `${(ok ? "ok" : "FAIL").padEnd(10)} ${v.name.padEnd(22)} revealAt=${v.revealAt}ms ` +
+    `blank=${v.blankMs}ms atReveal=${v.atReveal} pageColourInReader=${v.readerColourSeen}` +
+    (v.poster ? "" : ` waitedForClip=${waited}`) +
+    (v.errors.length ? `  err: ${v.errors.join(" | ")}` : "")
   );
 }
 process.exit(failed ? 1 : 0);
