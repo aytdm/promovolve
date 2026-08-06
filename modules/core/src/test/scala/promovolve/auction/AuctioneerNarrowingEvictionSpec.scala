@@ -195,7 +195,12 @@ class AuctioneerNarrowingEvictionSpec extends AnyWordSpec with Matchers with Bef
       Thread.sleep(300) // let the entity finish setup + subscriptions
 
       val staleUrl = "https://pub.example/stale-page"
-      val staleTs = Instant.now().minusSeconds(60).toEpochMilli // well past a 1s TTL
+      // Seed it FRESH and let it age into staleness. Restore now applies the
+      // same freshness predicate cleanup does — it refuses anything already
+      // past the window — so an already-stale seed would simply never land,
+      // leaving cleanup nothing to evict. With a 1s window and a 300ms
+      // cleanup tick, this page is stale within the fishing budget below.
+      val staleTs = Instant.now().toEpochMilli
       ref ! AuctioneerEntity.RestoreClassifications(
         Map(staleUrl -> ClassificationEntry(
           categories = Map("100" -> 0.9),

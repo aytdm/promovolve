@@ -90,6 +90,15 @@ class AuctioneerRestoreIdempotenceSpec extends AnyWordSpec with Matchers with Be
 
   override def afterAll(): Unit = testKit.shutdownTestKit()
 
+  // Timestamps must be RELATIVE TO NOW: restore drops anything older than
+  // classificationFreshnessWindow (48h by default), so the fixed epoch
+  // values this spec once used (ts=1000 → 1970) would now be filtered as
+  // stale and restore nothing.
+  private val nowMs: Long = System.currentTimeMillis()
+  private val freshMs: Long = nowMs - 1.hour.toMillis
+  private val newerMs: Long = nowMs - 30.minutes.toMillis
+  private val staleMs: Long = nowMs - 72.hours.toMillis
+
   private def entry(ts: Long): SiteEntity.ClassificationEntry =
     SiteEntity.ClassificationEntry(
       categories = Map("100" -> 0.9),
@@ -124,20 +133,20 @@ class AuctioneerRestoreIdempotenceSpec extends AnyWordSpec with Matchers with Be
       val url = "https://site-restore.example/page"
 
       // 1. Unseen page restores: freshness token repopulated.
-      auctioneer ! AuctioneerEntity.RestoreClassifications(Map(url -> entry(1000L)))
+      auctioneer ! AuctioneerEntity.RestoreClassifications(Map(url -> entry(freshMs)))
       val first = nextMarkClassified()
       first.url.value shouldBe url
-      first.classifiedAt shouldBe Instant.ofEpochMilli(1000L)
+      first.classifiedAt shouldBe Instant.ofEpochMilli(freshMs)
 
       // 2. Identical resend (the periodic tick's steady state) restores
       //    nothing; 3. a strictly newer entry restores again. Ordering
-      //    proves 2: had the resend restored, its MarkClassified(1000)
+      //    proves 2: had the resend restored, its MarkClassified(freshMs)
       //    would arrive BEFORE the newer one on the same actor pair.
-      auctioneer ! AuctioneerEntity.RestoreClassifications(Map(url -> entry(1000L)))
-      auctioneer ! AuctioneerEntity.RestoreClassifications(Map(url -> entry(2000L)))
+      auctioneer ! AuctioneerEntity.RestoreClassifications(Map(url -> entry(freshMs)))
+      auctioneer ! AuctioneerEntity.RestoreClassifications(Map(url -> entry(newerMs)))
       val second = nextMarkClassified()
       second.url.value shouldBe url
-      second.classifiedAt shouldBe Instant.ofEpochMilli(2000L)
+      second.classifiedAt shouldBe Instant.ofEpochMilli(newerMs)
 
       // Stop the entity inside the 1s debounce window: the kicked
       // re-auction would otherwise fan out into ranking machinery this
@@ -147,8 +156,44 @@ class AuctioneerRestoreIdempotenceSpec extends AnyWordSpec with Matchers with Be
       testKit.stop(auctioneer)
 
       // Nothing further reached AdServer (the identical resend restored
-      // nothing — its MarkClassified(1000) would have preceded `second`).
+      // nothing — its MarkClassified(freshMs) would have preceded `second`).
       adServerProbe.expectNoMessage(300.millis)
+    }
+
+    // SiteEntity never prunes its persisted pageClassifications, so its
+    // 5-minute resend always carries pages past the freshness window. Once
+    // CleanupStaleContent evicts one, `lastPage.get(url)` is None — and
+    // None.forall(_) is TRUE — so the entry came straight back with its
+    // original stale timestamp, and the two chased each other forever.
+    // Live on 2026-08-06: "Restored 11 page classifications" on EVERY tick,
+    // PeriodicReauction warning about the same never-shrinking stale set,
+    // and a wasted re-auction each time. Restore must apply the same
+    // freshness predicate cleanup does.
+    "drop entries older than the freshness window so cleanup's eviction sticks" in {
+      val topic = testKit.spawn(
+        Topic[CampaignEntity.CampaignChanged](s"campaign-changed-${java.util.UUID.randomUUID()}")
+      )
+      val auctioneer = testKit.spawn(
+        AuctioneerEntity(SiteId("site-restore-stale"), sharding, budgetTopic, topic)
+      )
+      val staleUrl = "https://site-restore-stale.example/old"
+      val freshUrl = "https://site-restore-stale.example/current"
+
+      // A resend carrying both: only the fresh one may come through, and the
+      // stale one must not reach AdServer even as an unseen URL.
+      auctioneer ! AuctioneerEntity.RestoreClassifications(
+        Map(staleUrl -> entry(staleMs), freshUrl -> entry(freshMs))
+      )
+      val restored = nextMarkClassified()
+      restored.url.value shouldBe freshUrl
+      restored.classifiedAt shouldBe Instant.ofEpochMilli(freshMs)
+
+      // Resending the stale entry alone — the steady state after an eviction
+      // — must be a true no-op: nothing restored, nothing marked classified.
+      auctioneer ! AuctioneerEntity.RestoreClassifications(Map(staleUrl -> entry(staleMs)))
+
+      testKit.stop(auctioneer)
+      adServerProbe.expectNoMessage(500.millis)
     }
   }
 }

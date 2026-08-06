@@ -457,24 +457,52 @@ private final class AuctioneerEntity private (
       // Merge with whatever lastPage already holds. This arrives at
       // SiteEntity recovery AND on its periodic refresh tick (the resend
       // heals an incarnation of THIS entity that spawned empty between
-      // SiteEntity recoveries — live 2026-07-13). Idempotent: entries we
-      // already hold at the same-or-newer timestamp are skipped, so the
-      // steady-state resend restores nothing and kicks nothing. Persisted
-      // entries don't go through eviction here — CleanupStaleContent
-      // prunes anything older than classificationFreshnessWindow on its next tick.
+      // SiteEntity recoveries — live 2026-07-13). Idempotent for entries we
+      // already hold at the same-or-newer timestamp, so the steady-state
+      // resend restores nothing and kicks nothing.
+      //
+      // STALE ENTRIES MUST BE FILTERED HERE, not left to CleanupStaleContent.
+      // SiteEntity never prunes its persisted pageClassifications, so its
+      // resend always carries the old ones; `lastPage.get(url)` is None for
+      // anything cleanup just evicted, and None.forall(_) is TRUE — so every
+      // evicted page was immediately restored with its original stale
+      // timestamp. Cleanup and the resend then chased each other forever:
+      // live on 2026-08-06, two sites logged "Restored 11"/"Restored 6" on
+      // every 5-minute tick and PeriodicReauction warned about the same
+      // never-shrinking stale set, each restore also firing a pointless
+      // re-auction. Same predicate as CleanupStaleContent, so a page cleanup
+      // would drop can never come back through this door.
+      val restoreCutoff =
+        Instant.now().minus(java.time.Duration.ofSeconds(cfg.classificationFreshnessWindow.toSeconds))
       var restored = 0
+      var skippedStale = 0
       classifications.foreach { case (urlStr, entry) =>
         val url = URL(urlStr)
         val tsInst = Instant.ofEpochMilli(entry.classifiedAt)
-        val isNew = lastPage.get(url).forall { case (_, _, haveTs) => tsInst.isAfter(haveTs) }
-        if (isNew) {
-          val slots = entry.slots.iterator.map(_.toAdSlotSpec).toList
-          lastPage = lastPage.updated(url, (entry.categories, slots, tsInst))
-          // Repopulate AdServer's freshness token after a restart so restored
-          // pages (incl. no-bidder ones) aren't treated as cold on first serve.
-          adServer ! AdServer.MarkClassified(url, tsInst)
-          restored += 1
+        if (!tsInst.isAfter(restoreCutoff)) {
+          skippedStale += 1
+        } else {
+          val isNew = lastPage.get(url).forall { case (_, _, haveTs) => tsInst.isAfter(haveTs) }
+          if (isNew) {
+            val slots = entry.slots.iterator.map(_.toAdSlotSpec).toList
+            lastPage = lastPage.updated(url, (entry.categories, slots, tsInst))
+            // Repopulate AdServer's freshness token after a restart so restored
+            // pages (incl. no-bidder ones) aren't treated as cold on first serve.
+            adServer ! AdServer.MarkClassified(url, tsInst)
+            restored += 1
+          }
         }
+      }
+      if (skippedStale > 0) {
+        // Not a warning: the resend legitimately carries everything SiteEntity
+        // has ever classified. Visible so the persisted set's growth is
+        // observable rather than silent.
+        ctx.log.debug(
+          "Restore skipped {} classifications older than {} (site={})",
+          skippedStale: java.lang.Integer,
+          cfg.classificationFreshnessWindow,
+          siteId
+        )
       }
       if (restored > 0) {
         ctx.log.info(
