@@ -35,7 +35,14 @@ async function seedPin(storage: typeof import("../src/dogear-storage")): Promise
     lastSeenAt: foldedAt,
     expiresAt: foldedAt + SEVEN_DAYS,
   });
-  await storage.markCounted("cr-1");
+  // Same expiry as the pin. Omitting it (this call used to pass only the
+  // creativeId) writes expiresAt: undefined, and every freshness check is
+  // `now >= rec.expiresAt` — NaN-false — so the record reads fresh forever
+  // and sweepExpired never reclaims it. The seed then wasn't the state the
+  // bootstrap actually writes, and claimUnfoldReport reads the same field.
+  // Nothing caught it: tsconfig only includes src/, so tests are neither
+  // typechecked nor linted.
+  await storage.markCounted("cr-1", foldedAt + SEVEN_DAYS);
 }
 
 const winner = (dogear?: { honored: boolean; reason?: string }) => ({
