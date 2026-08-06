@@ -1470,6 +1470,16 @@ export class ExpandableMagazineBanner extends HTMLElement {
     // we inject it into .design-box, which every render path builds.
     const designBox = this.shadowRoot.querySelector<HTMLElement>(".design-box");
     if (designBox) {
+      // Same rule the reader follows (pageSurface): a clip that covers the
+      // page paints the page — so the box opens on the clip's poster
+      // instead of the authored colour, which would otherwise show as a
+      // flat blink until the video decodes its first frame. Set inline,
+      // never in the <style> block above — see posterBackground. Collapsed
+      // has no transparent fallback: a posterless clip keeps the colour
+      // (an ad box must not show the article through it) and the reveal
+      // gate below waits for its first frame instead.
+      const poster = posterBackground(page.videoBg);
+      if (poster) designBox.style.background = poster;
       applyTextureBg(designBox, page.textureBg, this.applyVideoBgCached(designBox, page.videoBg));
       // Logo is an EXPANDED-view element. In the collapsed render it shows
       // ONLY in the designer (edit mode), so the author can place it on the
@@ -1551,7 +1561,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
   private revealWhenImagesReady(root: HTMLElement): void {
     const CAP_MS = 2000;
     const imgs = Array.from(root.querySelectorAll("img"));
-    const waits = imgs.map((img) => {
+    const waits: Promise<unknown>[] = imgs.map((img) => {
       if (img.complete && img.naturalWidth > 0) return Promise.resolve();
       if (typeof img.decode === "function") return img.decode().catch(() => undefined);
       return new Promise<void>((res) => {
@@ -1559,6 +1569,19 @@ export class ExpandableMagazineBanner extends HTMLElement {
         img.addEventListener("error", () => res(), { once: true });
       });
     });
+    // A video background is part of "appear whole" too: revealing before
+    // its first frame is the flat-colour blink the poster exists to
+    // prevent. Only clips with NO poster are waited on — a poster is
+    // already painting the film's first frame (see posterBackground), so
+    // holding the slot for the clip on top of it would delay the ad for
+    // nothing. The same CAP_MS bounds the wait either way.
+    for (const video of root.querySelectorAll("video")) {
+      if (video.poster || video.readyState >= 2) continue; // HAVE_CURRENT_DATA: a frame is up
+      waits.push(new Promise<void>((res) => {
+        video.addEventListener("loadeddata", () => res(), { once: true });
+        video.addEventListener("error", () => res(), { once: true });
+      }));
+    }
     const cap = new Promise<void>((res) => setTimeout(res, CAP_MS));
     Promise.race([Promise.all(waits), cap]).then(() => {
       // A re-render replaces the shadow DOM wholesale; touching the old
@@ -3330,13 +3353,28 @@ function applyLogo(container: HTMLElement, logo: BannerConfig["logo"]): HTMLImag
 // the colour is part of the composition, not something the video hides.
 export function pageSurface(page: Page): { stage: string; leaf: string } {
   const colour = page.bg ?? "#0a0a0b";
-  const video = page.videoBg;
-  if (!video?.src || (video.opacity ?? 1) < 1) return { stage: colour, leaf: colour };
-  const poster = video.poster
-    // url() takes a quoted string; escape what would close it early.
-    ? `url("${video.poster.replace(/["\\]/g, "\\$&")}") center / ${video.fit === "contain" ? "contain" : "cover"} no-repeat`
-    : "transparent";
-  return { stage: poster, leaf: "transparent" };
+  if (!videoCoversPage(page.videoBg)) return { stage: colour, leaf: colour };
+  return { stage: posterBackground(page.videoBg) ?? "transparent", leaf: "transparent" };
+}
+
+/** True when the clip is the page's WHOLE surface — so nothing the page
+  * paints under it is ever meant to be seen. A translucent clip is not:
+  * there the author is mixing the video into the page's own background. */
+function videoCoversPage(videoBg: VideoBg | undefined): boolean {
+  return !!videoBg?.src && (videoBg.opacity ?? 1) >= 1;
+}
+
+/** CSS background that paints the clip's poster, framed exactly as the
+  * clip will be, so the hand-off from still to moving image doesn't shift
+  * the picture. Null when there is no poster to paint (or the clip isn't
+  * the whole surface). Callers must apply it as an inline style, NEVER
+  * interpolated into a <style> block: the URL comes from creative JSON,
+  * and a `</style>` inside it would close the element and let markup in. */
+function posterBackground(videoBg: VideoBg | undefined): string | null {
+  if (!videoCoversPage(videoBg) || !videoBg?.poster) return null;
+  // url() takes a quoted string; escape what would close it early.
+  const src = videoBg.poster.replace(/["\\]/g, "\\$&");
+  return `url("${src}") center / ${videoBg.fit === "contain" ? "contain" : "cover"} no-repeat`;
 }
 
 // ─── Video background ──────────────────────────────────────────────
