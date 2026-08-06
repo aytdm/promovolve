@@ -133,6 +133,7 @@ interface PromovolveConfig {
   batchEndpoint?: string;     // default `${apiBase}/v1/serve/batch`
   dogearEventEndpoint?: string; // default `${apiBase}/v1/dogear-event`
   batchTimeoutMs?: number;    // default 1000
+  batchRetryDelayMs?: number; // default 300; 0 disables the retry
   collapseEmptyDivs?: boolean;   // default true
 }
 
@@ -169,6 +170,14 @@ const config: PromovolveConfig = {
   // setConfig() take effect on the next request.
   apiBase: "",
   batchTimeoutMs: 1000,
+  // A single transient fetch failure used to cost the whole pageview its
+  // ad: runBatch returned answered:false and nothing retried. On mobile,
+  // where one radio handoff or a moment of weak signal drops a request,
+  // that turned a sub-second blip into a visibly missing ad. Observed
+  // live 2026-08-06: 11 consecutive `network` heartbeats over 52s from
+  // one phone, then normal renders the moment a request got through.
+  // Worst case with the retry is batchTimeout + this delay + batchTimeout.
+  batchRetryDelayMs: 300,
   // Leave the slot's placeholder visible when an auction returns no
   // winner. Matches the legacy promovolve-ad.js behavior — publishers
   // see their dashed-border placeholder for unfilled slots, which is
@@ -417,10 +426,7 @@ function collapseEmpty(slot: Slot): void {
   if (host) host.style.display = "none";
 }
 
-async function runBatch(
-  slotsToServe: Slot[],
-  pinHints: PinHint[],
-): Promise<{
+interface BatchOutcome {
   results: Map<string, BatchImpResult>;
   stalePins: string[];
   needClassify: boolean;
@@ -429,13 +435,48 @@ async function runBatch(
   // (broken integration) must not look alike to the health panel.
   answered: boolean;
   failReason?: string;
-}> {
+}
+
+/**
+ * Is this failure worth one more attempt?
+ *
+ * Transport failures (`network`, `timeout`) and server-side 5xx are
+ * momentary by nature — the retry exists for exactly those. A 4xx is not:
+ * a wrong pub id or malformed body fails identically every time, and
+ * retrying would only double the load coming off a misconfigured site.
+ */
+export function isTransientFailure(failReason: string | undefined): boolean {
+  if (!failReason) return false;
+  return (
+    failReason === "network" ||
+    failReason === "timeout" ||
+    /^http_5\d\d$/.test(failReason)
+  );
+}
+
+export async function runBatch(
+  slotsToServe: Slot[],
+  pinHints: PinHint[],
+): Promise<BatchOutcome> {
   const body: BatchServeReq = {
     pub: config.pub,
     url: window.location.href,
     imp: slotsToServe.map((s) => ({ id: s.id, w: s.w, h: s.h })),
     pins: pinHints.length > 0 ? pinHints : undefined,
   };
+
+  const first = await batchAttempt(body);
+  const delayMs = config.batchRetryDelayMs ?? 0;
+  if (first.answered || delayMs <= 0 || !isTransientFailure(first.failReason)) {
+    return first;
+  }
+  await new Promise((resolve) => window.setTimeout(resolve, delayMs));
+  // The second attempt's reason is the one reported: it describes how the
+  // pageview actually ended, which is what the health panel is for.
+  return batchAttempt(body);
+}
+
+async function batchAttempt(body: BatchServeReq): Promise<BatchOutcome> {
   const controller = new AbortController();
   const timeout = window.setTimeout(() => controller.abort(), config.batchTimeoutMs);
   try {
