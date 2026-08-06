@@ -491,7 +491,24 @@ object FloorSweepOptimizer {
       cycleRevenue: Double,
       cycleImps: Long,
       candidates: Vector[FloorDecisionCandidate]
-  )
+  ) {
+
+    /**
+     * True when this cycle re-elected the floor the previous cycle already
+     * picked — nothing was decided, so it earns no journal row. Callers gate
+     * `journalDecision` on `!isNoOp`, which is what the monopoly and
+     * zero-servable branches have always done via their own `prev` check.
+     *
+     * Compares against `prevArgmax` (the optimizer's own last pick) rather
+     * than the site's persisted floor: the APPLIED floor can sit below the
+     * argmax when `secondCap` clamps it, and gating on that would let every
+     * capped category keep writing repeats.
+     *
+     * A first cycle has `prevArgmax = None` and is never a no-op — the
+     * optimizer's opening pick is real news.
+     */
+    def isNoOp: Boolean = prevArgmax.contains(argmaxFloor)
+  }
 
   /**
    * Phase tag stored as a plain String. Sealed-trait case-objects are

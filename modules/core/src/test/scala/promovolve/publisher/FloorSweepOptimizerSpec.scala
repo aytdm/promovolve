@@ -32,6 +32,58 @@ class FloorSweepOptimizerSpec extends AnyWordSpec with Matchers {
     }
   }
 
+  "CycleDecision.isNoOp (decision-journal change gate)" should {
+
+    def decision(argmax: Double, prev: Option[Double]) =
+      FloorSweepOptimizer.CycleDecision(
+        argmaxFloor = argmax,
+        prevArgmax = prev,
+        cycleRevenue = 0.0,
+        cycleImps = 0L,
+        candidates = Vector(FloorDecisionCandidate(argmax, 0.0, 0L))
+      )
+
+    "keep the opening cycle (no previous pick is real news)" in {
+      decision(20.0, None).isNoOp shouldBe false
+    }
+
+    "keep a cycle that moved the floor" in {
+      decision(24.0, Some(20.0)).isNoOp shouldBe false
+    }
+
+    "drop a cycle that re-elected the same floor" in {
+      decision(20.0, Some(20.0)).isNoOp shouldBe true
+    }
+
+    "drop the no-bid steady state a single-candidate range produces every cycle" in {
+      // Production shape (prod, 2026-07-27..08-06): a category with no bids
+      // collapses to one candidate at minFloor, so every cycle re-elects it.
+      // Ungated, that wrote 2212 of 2578 floor_decisions rows as identical
+      // repeats. Drive the real optimizer through several cycles (7 ticks
+      // each here) and assert only the opening one is journalled.
+      val opt = new FloorSweepOptimizer(
+        siteId,
+        FloorSweepOptimizer.Config(candidateCount = 8, ticksPerCandidate = 4, exploitTicks = 2)
+      )
+      opt.setMinFloor(20.0)
+      opt.setInitialFloor(20.0)
+
+      val journalled = Vector.newBuilder[FloorSweepOptimizer.CycleDecision]
+      // No recordAuctionOutcome / recordServedImpression at all: no bids,
+      // no revenue — exactly the parked categories on prod.
+      (1 to 60).foreach { _ =>
+        opt.observe().flatMap(_.completedCycle).filterNot(_.isNoOp).foreach(journalled += _)
+      }
+
+      val rows = journalled.result()
+      rows.map(_.argmaxFloor).distinct shouldBe Vector(20.0)
+      withClue(s"expected only the opening cycle to journal, got ${rows.size} rows: ") {
+        rows.size shouldBe 1
+      }
+      rows.head.prevArgmax shouldBe None
+    }
+  }
+
   "FloorSweepOptimizer.pickBest" should {
     "return argmax of revenue across candidates" in {
       val results = Map(

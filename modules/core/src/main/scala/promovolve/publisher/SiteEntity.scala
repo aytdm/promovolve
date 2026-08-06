@@ -402,7 +402,18 @@ object SiteEntity {
                     .max(state.minFloorCpm.toDouble)
                   floors = floors.updated(cat, CPM(applied))
                   snaps = snaps.updated(cat, opt.snapshot())
-                  r.flatMap(_.completedCycle).foreach { d =>
+                  // Change-gated like the monopoly and zero-servable branches
+                  // above. A cycle that re-elects the floor it already picked
+                  // is not a decision worth a row: on a category with no bids
+                  // the range collapses to a single candidate at minFloor and
+                  // every cycle re-elects it, which wrote ~86% of
+                  // floor_decisions as identical repeats (2212 of 2578 rows
+                  // over 10 days) and left the dashboard's floor-over-time
+                  // chart reading mostly noise.
+                  //
+                  // See CycleDecision.isNoOp for why the gate compares against
+                  // the cycle's own prevArgmax and not the persisted floor.
+                  r.flatMap(_.completedCycle).filterNot(_.isNoOp).foreach { d =>
                     decisions = decisions :+ (cat -> d)
                     ctx.log.info(
                       "SiteEntity {} [{}] per-category floor cat={} argmax={} prev={} cycleRev={} imps={}",
@@ -1429,7 +1440,10 @@ object SiteEntity {
                             // a crash before the persist replays Init, which
                             // re-derives the same payload — writing pre-persist
                             // would double-write. Site-wide (None) + per-category.
-                            completedCycle.foreach(d => journalDecision(None, d))
+                            // Same change gate as the per-category sweep: the
+                            // site-level cycle re-elects its range minimum
+                            // every cycle on a site with no fallback traffic.
+                            completedCycle.filterNot(_.isNoOp).foreach(d => journalDecision(None, d))
                             catDecisions.foreach { case (cat, d) => journalDecision(Some(cat), d) }
                           }
                         case None =>
