@@ -700,8 +700,28 @@ class DashboardProjectionHandler extends SlickHandler[TrackingEvent] {
   /**
    * Dog-ear unfold event. Telemetry only — bumps the unfolds counters so
    * the dashboard can compute pin retention as (folds - unfolds) / folds.
-   * No spend impact. UPDATE-only (no INSERT) because every unfold was
-   * preceded by a fold, which already created the row.
+   * No spend impact.
+   *
+   * UPSERT, mirroring processFold exactly. This was UPDATE-only, justified
+   * as "every unfold was preceded by a fold, which already created the
+   * row" — true only if the unfold lands in the SAME bucket as its fold.
+   * A pin lives up to 7 days, so the unfold routinely arrives in a later
+   * hour or day; for `campaign_hourly_stats` sharing the fold's bucket is
+   * the rare case, not the rule. Those UPDATEs matched zero rows and the
+   * unfold vanished from the rollups, surviving only in tracking_events
+   * and the unbucketed campaign_stats — an undercount that reads as
+   * higher retention than reality.
+   *
+   * The reasoning was never load-bearing in production because the client
+   * never sent an unfold at all (0 rows ever). It became reachable when
+   * the bootstrap started reporting them, so it is fixed here rather than
+   * left to silently bias the first real numbers this metric produces.
+   *
+   * Consequence to expect: a bucketed row can now be created by an unfold
+   * alone, so `campaign_daily_stats` / `campaign_hourly_stats` may hold
+   * rows with impressions = 0. The report handles that (csvECPM returns
+   * empty on zero impressions); such a day is genuinely a day the reader
+   * dropped a bookmark without the campaign delivering.
    */
   private def processUnfold(e: TrackingEvent): DBIO[Done] = {
     val hourBucket = e.eventTime.truncatedTo(ChronoUnit.HOURS)
@@ -710,12 +730,15 @@ class DashboardProjectionHandler extends SlickHandler[TrackingEvent] {
       val dayBucket = e.eventTime.atZone(advZone).toLocalDate
 
       val updates = for {
+        // No last_unfold_at column to mirror the fold's last_fold_at.
         _ <- e.campaignId match {
           case Some(campId) if campId.nonEmpty =>
             sqlu"""
-            UPDATE campaign_stats
-            SET unfolds = unfolds + 1, updated_at = NOW()
-            WHERE campaign_id = $campId
+            INSERT INTO campaign_stats (campaign_id, advertiser_id, unfolds, updated_at)
+            VALUES ($campId, ${e.advertiserId}, 1, NOW())
+            ON CONFLICT (campaign_id) DO UPDATE SET
+              unfolds = campaign_stats.unfolds + 1,
+              updated_at = NOW()
           """
           case _ => DBIO.successful(0)
         }
@@ -723,9 +746,11 @@ class DashboardProjectionHandler extends SlickHandler[TrackingEvent] {
         _ <- e.campaignId match {
           case Some(campId) if campId.nonEmpty =>
             sqlu"""
-            UPDATE creative_stats
-            SET unfolds = unfolds + 1, updated_at = NOW()
-            WHERE creative_id = ${e.creativeId} AND campaign_id = $campId
+            INSERT INTO creative_stats (creative_id, campaign_id, advertiser_id, unfolds, updated_at)
+            VALUES (${e.creativeId}, $campId, ${e.advertiserId}, 1, NOW())
+            ON CONFLICT (creative_id, campaign_id) DO UPDATE SET
+              unfolds = creative_stats.unfolds + 1,
+              updated_at = NOW()
           """
           case _ => DBIO.successful(0)
         }
@@ -733,9 +758,11 @@ class DashboardProjectionHandler extends SlickHandler[TrackingEvent] {
         _ <- e.campaignId match {
           case Some(campId) if campId.nonEmpty =>
             sqlu"""
-            UPDATE campaign_hourly_stats
-            SET unfolds = unfolds + 1, updated_at = NOW()
-            WHERE campaign_id = $campId AND hour_bucket = $hourBucket
+            INSERT INTO campaign_hourly_stats (campaign_id, hour_bucket, unfolds, updated_at)
+            VALUES ($campId, $hourBucket, 1, NOW())
+            ON CONFLICT (campaign_id, hour_bucket) DO UPDATE SET
+              unfolds = campaign_hourly_stats.unfolds + 1,
+              updated_at = NOW()
           """
           case _ => DBIO.successful(0)
         }
@@ -743,9 +770,11 @@ class DashboardProjectionHandler extends SlickHandler[TrackingEvent] {
         _ <- e.campaignId match {
           case Some(campId) if campId.nonEmpty =>
             sqlu"""
-            UPDATE campaign_daily_stats
-            SET unfolds = unfolds + 1, updated_at = NOW()
-            WHERE campaign_id = $campId AND day_bucket = $dayBucket
+            INSERT INTO campaign_daily_stats (campaign_id, day_bucket, unfolds, updated_at)
+            VALUES ($campId, $dayBucket, 1, NOW())
+            ON CONFLICT (campaign_id, day_bucket) DO UPDATE SET
+              unfolds = campaign_daily_stats.unfolds + 1,
+              updated_at = NOW()
           """
           case _ => DBIO.successful(0)
         }
@@ -753,9 +782,11 @@ class DashboardProjectionHandler extends SlickHandler[TrackingEvent] {
         _ <- e.advertiserId match {
           case Some(advId) if advId.nonEmpty =>
             sqlu"""
-            UPDATE advertiser_summary
-            SET total_unfolds = total_unfolds + 1, updated_at = NOW()
-            WHERE advertiser_id = $advId
+            INSERT INTO advertiser_summary (advertiser_id, total_unfolds, updated_at)
+            VALUES ($advId, 1, NOW())
+            ON CONFLICT (advertiser_id) DO UPDATE SET
+              total_unfolds = advertiser_summary.total_unfolds + 1,
+              updated_at = NOW()
           """
           case _ => DBIO.successful(0)
         }
