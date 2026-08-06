@@ -437,6 +437,13 @@ object SiteEntity {
           // bid-chain latency a lottery (the 2s JRA replies, 2026-07-25).
           // Now: push only when the map actually changed. A restarted
           // auctioneer still gets the current map via AuctioneerStarted.
+          //
+          // NOTE (2026-08-06): the commit that added this helper (59a06c4)
+          // never wired it into the observation tick — the tick kept pushing
+          // unconditionally, so this dampening was dead code for ~2 weeks
+          // while the comment claimed it was live. The staggered timers from
+          // that same commit DID land, so the sites never re-synchronised;
+          // what remained was one full-site re-auction per site per minute.
           var lastPushedCategoryFloors: Option[Map[String, CPM]] = None
 
           def pushCategoryFloorsIfChanged(floors: Map[String, CPM]): Unit =
@@ -445,6 +452,21 @@ object SiteEntity {
               auctioneerRef ! AuctioneerEntity.UpdateCategoryFloors(
                 floors.map { case (k, v) => CategoryId(k) -> v }
               )
+            }
+
+          // Same dampening for the SITE floor. `observe()` returns
+          // Some(ObserveResult) on every candidate advance and every cycle
+          // Init whether or not the floor actually moved — on a site parked
+          // at a single-candidate range (no bids observed, range collapses
+          // to minFloor) that is an unchanged floor pushed once per cycle,
+          // forever, each one costing a full-site re-auction. Gate on the
+          // value, not on the fact that the sweep emitted a result.
+          var lastPushedSiteFloor: Option[CPM] = None
+
+          def pushSiteFloorIfChanged(floor: CPM): Unit =
+            if (!lastPushedSiteFloor.contains(floor)) {
+              lastPushedSiteFloor = Some(floor)
+              auctioneerRef ! AuctioneerEntity.UpdateFloorCpm(floor)
             }
 
           // Cached traffic ratio from AdServer (published via DData)
@@ -942,6 +964,10 @@ object SiteEntity {
                 Effect
                   .persist(newState)
                   .thenRun { _ =>
+                    // Operator edit: push unconditionally (the gate is only
+                    // there to swallow the sweep's unchanged re-emissions),
+                    // but keep it in sync so the next tick doesn't re-push.
+                    lastPushedSiteFloor = Some(cpm)
                     auctioneerRef ! AuctioneerEntity.UpdateFloorCpm(cpm)
                     publishPacingConfig(state.pacingConfig.copy(bidWeight = state.bidWeight, floorCpm = cpm.toDouble))
                   }
@@ -1034,6 +1060,7 @@ object SiteEntity {
                 // otherwise wait for the next floor CHANGE — re-arm it with
                 // the current maps unconditionally on this handshake.
                 lastPushedCategoryFloors = Some(state.floorCpmByCategory)
+                lastPushedSiteFloor = Some(state.floorCpm)
                 auctioneerRef ! AuctioneerEntity.UpdateFloorCpm(state.floorCpm)
                 auctioneerRef ! AuctioneerEntity.UpdateCategoryFloors(
                   state.floorCpmByCategory.map { case (k, v) => CategoryId(k) -> v }
@@ -1427,13 +1454,11 @@ object SiteEntity {
                             .withCategoryFloors(catFloors, catSnaps)
                             .withRecentFloorObservations(recentFloorObservations)
                           Effect.persist(newState).thenRun { _ =>
-                            auctioneerRef ! AuctioneerEntity.UpdateFloorCpm(cpm)
+                            pushSiteFloorIfChanged(cpm)
                             // Enforce mode: push the learned per-category floors to
                             // the auctioneer (bid collection) — it forwards them to
                             // AdServer on CandidatesCollected for serve-time pricing.
-                            auctioneerRef ! AuctioneerEntity.UpdateCategoryFloors(
-                              newState.floorCpmByCategory.map { case (k, v) => CategoryId(k) -> v }
-                            )
+                            pushCategoryFloorsIfChanged(newState.floorCpmByCategory)
                             publishPacingConfig(state.pacingConfig.copy(bidWeight = state.bidWeight,
                               floorCpm = cpm.toDouble))
                             // Journal completed-cycle decisions AFTER the persist:
@@ -1456,9 +1481,7 @@ object SiteEntity {
                           Effect.persist(ns).thenRun { _ =>
                             // Keep the auctioneer's per-category map fresh between
                             // site-floor changes (per-category sweeps drift too).
-                            auctioneerRef ! AuctioneerEntity.UpdateCategoryFloors(
-                              ns.floorCpmByCategory.map { case (k, v) => CategoryId(k) -> v }
-                            )
+                            pushCategoryFloorsIfChanged(ns.floorCpmByCategory)
                             catDecisions.foreach { case (cat, d) => journalDecision(Some(cat), d) }
                           }
                       }
