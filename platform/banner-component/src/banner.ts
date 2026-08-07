@@ -977,12 +977,17 @@ export class ExpandableMagazineBanner extends HTMLElement {
     else this.prev();
   }
 
-  // ── Interactive corner-peel (thumb-driven forward turn) ──────────────
-  // A peel only starts from the BOTTOM HALF of the sheet — the natural
-  // "grab a lower corner" affordance — but the fold itself always peels
-  // from the bottom peel-side corner regardless of where the thumb is.
-  // Structural (not a feel knob), so it stays a constant.
-  private static readonly PEEL_GRAB_ZONE = 0.5;
+  // ── Interactive peel (thumb-driven forward turn) ─────────────────────
+  // The whole sheet is grabbable. A bottom-half-only grab zone used to
+  // live here, from the retired rotating-crease model: back then the
+  // fold peeled from the bottom corner, so a grab up top would have bent
+  // paper nowhere near the thumb. That model is gone — CURL_TUNE.releaseT
+  // is 0, which pins the bend at zero every frame (paper.ts), so the
+  // sheet is RIGID and simply lifts and slides, x following the drag
+  // linearly. A rigid sheet moves identically whether it was grabbed
+  // high or low, so the zone bought nothing and cost an invisible
+  // midline: the same forward drag peeled below it and fell through to
+  // the 50px threshold swipe above it — two physics, ~4x apart.
 
   /** The resolved paper-weight feel preset for this creative — the source
     * of every peel tuning value (pull gain, commit line, flick, spring). */
@@ -1000,9 +1005,11 @@ export class ExpandableMagazineBanner extends HTMLElement {
   }
 
   /** Try to start a thumb-driven peel of the current page. Returns true
-    * if a peel engaged (pointerdown landed in the bottom-half grab zone
-    * of the top sheet, a next page exists, and no turn is in flight). */
-  private beginPeel(clientX: number, clientY: number): boolean {
+    * if a peel engaged (a next page exists — or this is the last sheet,
+    * which flies off and closes the reader — and no turn is in flight).
+    * Anywhere on the sheet grabs: the sheet is rigid, so where the thumb
+    * landed does not change the motion. */
+  private beginPeel(clientX: number): boolean {
     if (this._peel || this._finishTurn || this._reducedMotion) return false;
     const pages = this.pagesData;
     const overlay = this.shadowRoot?.querySelector<HTMLElement>(".overlay");
@@ -1021,8 +1028,6 @@ export class ExpandableMagazineBanner extends HTMLElement {
     if (!turning || (!isLast && !under) || !sheet) return false;
 
     const rect = sheet.getBoundingClientRect();
-    // Grab zone: bottom half of the sheet only.
-    if (clientY < rect.top + rect.height * (1 - ExpandableMagazineBanner.PEEL_GRAB_ZONE)) return false;
 
     const rtl = resolveReadingRtl(this.configData, pages);
     const feel = this.paperFeel();
@@ -1793,7 +1798,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
     // never arm on a press that lands directly on a control.
     const PEEL_SLOP = 8;
     let dragStartX: number | null = null;
-    let armX = 0, armY = 0;
+    let armX = 0;
     let armed = false; // pointerdown was a peel candidate, awaiting slop
     // Swipe/drag turns hold off while a dog-ear tease is mid-tween (the
     // one-per-open demonstration right after the banner is clicked, or a
@@ -1806,7 +1811,6 @@ export class ExpandableMagazineBanner extends HTMLElement {
       if (teasing()) { dragStartX = null; armed = false; return; }
       dragStartX = e.clientX;
       armX = e.clientX;
-      armY = e.clientY;
       const tgt = e.target as HTMLElement | null;
       // A press ON a control (close pill, nav arrows, CTA link) is that
       // control's — never a peel.
@@ -1825,7 +1829,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
       // Slop crossed in the forward direction — try to grab the page from
       // where the press began. One-shot: disarm regardless of outcome.
       armed = false;
-      if (this.beginPeel(armX, armY)) {
+      if (this.beginPeel(armX)) {
         try { overlay.setPointerCapture(e.pointerId); } catch { /* older engines */ }
         e.preventDefault();
         this.movePeel(e.clientX);
@@ -1846,7 +1850,18 @@ export class ExpandableMagazineBanner extends HTMLElement {
       // A swipe that began just before the tease started still lands
       // here — drop it rather than turning the page under the tween.
       if (teasing()) return;
-      if (Math.abs(diff) > 50) this.swipeNavigate(diff > 0);
+      if (Math.abs(diff) <= 50) return;
+      const swipedLeft = diff > 0;
+      // FORWARD is manipulation and belongs to the peel, which can now
+      // start anywhere on the sheet — so a forward drag that reaches here
+      // is one the peel declined (mid-flight turn, a press that began on
+      // a control), and firing a 50px nav turn behind its back is exactly
+      // the two-physics split this path used to cause. BACKWARD is not a
+      // manipulation at all — the sheet is gone, off past the edge — it is
+      // navigation, so a flick and a played animation is the honest form.
+      // Reduced motion has no peel at all, so it keeps both directions.
+      const rtl = resolveReadingRtl(this.configData, this.pagesData);
+      if (swipedLeft === rtl || this._reducedMotion) this.swipeNavigate(swipedLeft);
     };
     overlay.addEventListener("pointerup", endPointer);
     overlay.addEventListener("pointercancel", endPointer);
