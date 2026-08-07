@@ -78,7 +78,74 @@ export function pinExpiresAt(
   return FOREVER;
 }
 
+// Hard deadline on EVERY IndexedDB call. WebKit can leave
+// `indexedDB.open()` — and individual requests on an open connection —
+// without ever firing onsuccess, onerror OR onblocked. Nothing throws
+// and nothing logs; the promise simply never settles.
+//
+// That is not a storage problem, it is a blank-page problem: the
+// bootstrap awaits getAllPins() before it sends /v1/serve/batch, so a
+// hung open means no serve request, no render, and a slot left at its
+// reserved height — an empty white box. collapseEmptyDivs can't save it
+// either, because that runs downstream of the batch too. Reported on
+// real iPhones, intermittent, worse on reload, never on Chrome.
+//
+// 400ms against the batch's own 1000ms budget: long enough that a
+// healthy device (sub-millisecond, in-process) never trips it, short
+// enough that a wedged one still gets its ad. Losing the read costs the
+// bookmark for THIS pageview only — nothing is deleted, so the pin is
+// honored again on the next load.
+const IDB_TIMEOUT_MS = 400;
+
 let dbPromise: Promise<IDBDatabase> | null = null;
+
+/**
+ * Run an IndexedDB operation under the deadline, resolving to `fallback`
+ * if the open or the request doesn't answer in time. Never rejects — the
+ * dog-ear store is an enhancement, and no caller should have to guard
+ * against it to stay alive.
+ *
+ * `run` receives the open db and a resolve callback; it keeps each
+ * operation's own success/error handling exactly as it was, so the
+ * behaviour on a *failing* IndexedDB is unchanged. Only the previously
+ * unhandled case — one that never answers at all — is new.
+ */
+function idb<T>(
+  fallback: T,
+  run: (db: IDBDatabase, resolve: (value: T) => void) => void,
+): Promise<T> {
+  return new Promise<T>((resolve) => {
+    let settled = false;
+    const done = (value: T): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value);
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      // Drop the cached connection. If the OPEN is what hung, every
+      // later call would otherwise await the same dead promise for the
+      // life of the page; clearing it lets the next call try afresh.
+      dbPromise = null;
+      console.warn("[promovolve] indexedDB timed out — serving without dog-ear state");
+      done(fallback);
+    }, IDB_TIMEOUT_MS);
+    openDb().then(
+      (db) => {
+        if (settled) return;
+        try {
+          run(db, done);
+        } catch {
+          // A transaction can throw synchronously (InvalidStateError on a
+          // connection the OS closed under us).
+          done(fallback);
+        }
+      },
+      () => done(fallback),
+    );
+  });
+}
 
 function openDb(): Promise<IDBDatabase> {
   if (dbPromise) return dbPromise;
@@ -119,14 +186,8 @@ function isFresh(pin: Pin, now: number = Date.now()): boolean {
  *  pass (read-time cleanup). Returns null when no pin exists, the pin
  *  expired, or IndexedDB is unavailable.
  */
-export async function getPin(slotId: string): Promise<Pin | null> {
-  let db: IDBDatabase;
-  try {
-    db = await openDb();
-  } catch {
-    return null;
-  }
-  return new Promise<Pin | null>((resolve) => {
+export function getPin(slotId: string): Promise<Pin | null> {
+  return idb<Pin | null>(null, (db, resolve) => {
     const tx = db.transaction(STORE, "readwrite");
     const store = tx.objectStore(STORE);
     const req = store.get(slotId);
@@ -154,14 +215,8 @@ export async function getPin(slotId: string): Promise<Pin | null> {
  *  server-side, so the user never encounters their pinned creative
  *  in some random slot on a different page.
  */
-export async function getAllPins(): Promise<Pin[]> {
-  let db: IDBDatabase;
-  try {
-    db = await openDb();
-  } catch {
-    return [];
-  }
-  return new Promise<Pin[]>((resolve) => {
+export function getAllPins(): Promise<Pin[]> {
+  return idb<Pin[]>([], (db, resolve) => {
     const tx = db.transaction(STORE, "readwrite");
     const store = tx.objectStore(STORE);
     const req = store.getAll();
@@ -185,14 +240,8 @@ export async function getAllPins(): Promise<Pin[]> {
  *  "visited" the pinned creative. No-op when no pin exists or
  *  IndexedDB is unavailable.
  */
-export async function touchPin(slotId: string, now: number = Date.now()): Promise<void> {
-  let db: IDBDatabase;
-  try {
-    db = await openDb();
-  } catch {
-    return;
-  }
-  return new Promise<void>((resolve) => {
+export function touchPin(slotId: string, now: number = Date.now()): Promise<void> {
+  return idb<void>(undefined, (db, resolve) => {
     const tx = db.transaction(STORE, "readwrite");
     const store = tx.objectStore(STORE);
     const req = store.get(slotId);
@@ -214,14 +263,8 @@ export async function touchPin(slotId: string, now: number = Date.now()): Promis
 /** Write or replace a pin. Refolding the same slot overwrites the
  *  prior record with new page + foldedAt.
  */
-export async function setPin(pin: Pin): Promise<void> {
-  let db: IDBDatabase;
-  try {
-    db = await openDb();
-  } catch {
-    return;
-  }
-  return new Promise<void>((resolve) => {
+export function setPin(pin: Pin): Promise<void> {
+  return idb<void>(undefined, (db, resolve) => {
     const tx = db.transaction(STORE, "readwrite");
     tx.objectStore(STORE).put(pin);
     tx.oncomplete = () => resolve();
@@ -233,14 +276,8 @@ export async function setPin(pin: Pin): Promise<void> {
 /** Delete a pin. No-op if the pin doesn't exist or IndexedDB is
  *  unavailable.
  */
-export async function clearPin(slotId: string): Promise<void> {
-  let db: IDBDatabase;
-  try {
-    db = await openDb();
-  } catch {
-    return;
-  }
-  return new Promise<void>((resolve) => {
+export function clearPin(slotId: string): Promise<void> {
+  return idb<void>(undefined, (db, resolve) => {
     const tx = db.transaction(STORE, "readwrite");
     tx.objectStore(STORE).delete(slotId);
     tx.oncomplete = () => resolve();
@@ -274,14 +311,8 @@ export async function clearPinsByCreativeIds(creativeIds: string[]): Promise<voi
  *  us a campaign endAt and that endAt has passed. Cheap — IndexedDB
  *  cursors on a per-origin store with at most ~hundreds of entries.
  */
-export async function sweepExpired(): Promise<void> {
-  let db: IDBDatabase;
-  try {
-    db = await openDb();
-  } catch {
-    return;
-  }
-  return new Promise<void>((resolve) => {
+export function sweepExpired(): Promise<void> {
+  return idb<void>(undefined, (db, resolve) => {
     const tx = db.transaction([STORE, COUNTED_STORE], "readwrite");
     const now = Date.now();
     const pinCursor = tx.objectStore(STORE).openCursor();
@@ -333,14 +364,8 @@ export interface Counted {
 
 /** Returns true if the server has been told about a fresh fold for
  *  this creativeId. Stale entries are deleted in the same pass. */
-export async function wasCounted(creativeId: string): Promise<boolean> {
-  let db: IDBDatabase;
-  try {
-    db = await openDb();
-  } catch {
-    return false;
-  }
-  return new Promise<boolean>((resolve) => {
+export function wasCounted(creativeId: string): Promise<boolean> {
+  return idb<boolean>(false, (db, resolve) => {
     const tx = db.transaction(COUNTED_STORE, "readwrite");
     const store = tx.objectStore(COUNTED_STORE);
     const req = store.get(creativeId);
@@ -368,14 +393,8 @@ export async function wasCounted(creativeId: string): Promise<boolean> {
  *  expiry (or DEFAULT_TTL_MS) so dedup outlives a refold cycle but
  *  not the natural campaign window.
  */
-export async function markCounted(creativeId: string, expiresAt: number): Promise<void> {
-  let db: IDBDatabase;
-  try {
-    db = await openDb();
-  } catch {
-    return;
-  }
-  return new Promise<void>((resolve) => {
+export function markCounted(creativeId: string, expiresAt: number): Promise<void> {
+  return idb<void>(undefined, (db, resolve) => {
     const tx = db.transaction(COUNTED_STORE, "readwrite");
     tx.objectStore(COUNTED_STORE).put({
       creativeId,
@@ -402,14 +421,8 @@ export async function markCounted(creativeId: string, expiresAt: number): Promis
  *  it, and check-and-set happen in one transaction so two unfold
  *  events in the same tick can't both claim.
  */
-export async function claimUnfoldReport(creativeId: string): Promise<boolean> {
-  let db: IDBDatabase;
-  try {
-    db = await openDb();
-  } catch {
-    return false;
-  }
-  return new Promise<boolean>((resolve) => {
+export function claimUnfoldReport(creativeId: string): Promise<boolean> {
+  return idb<boolean>(false, (db, resolve) => {
     const tx = db.transaction(COUNTED_STORE, "readwrite");
     const store = tx.objectStore(COUNTED_STORE);
     const req = store.get(creativeId);
@@ -443,14 +456,8 @@ export async function claimUnfoldReport(creativeId: string): Promise<boolean> {
  *  unfold — unfolding shouldn't re-arm "I haven't told the server",
  *  otherwise unfold→refold flips dedup on every cycle.
  */
-export async function clearCounted(creativeId: string): Promise<void> {
-  let db: IDBDatabase;
-  try {
-    db = await openDb();
-  } catch {
-    return;
-  }
-  return new Promise<void>((resolve) => {
+export function clearCounted(creativeId: string): Promise<void> {
+  return idb<void>(undefined, (db, resolve) => {
     const tx = db.transaction(COUNTED_STORE, "readwrite");
     tx.objectStore(COUNTED_STORE).delete(creativeId);
     tx.oncomplete = () => resolve();

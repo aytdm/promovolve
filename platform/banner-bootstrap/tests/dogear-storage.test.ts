@@ -209,6 +209,77 @@ describe("dogear-storage", () => {
     expect(await storage.claimUnfoldReport("c1")).toBe(true);
   });
 
+  // The iOS Safari blank-page bug. WebKit can leave indexedDB.open() — or a
+  // request on an open connection — without firing ANY callback. The
+  // bootstrap awaits getAllPins() before it sends /v1/serve/batch, so an
+  // unbounded wait there means no serve request and an empty white slot.
+  // Nothing throws, so none of this shows up as an error.
+
+  /** An indexedDB whose open() never calls back. */
+  const hangingOpen = (): IDBFactory =>
+    ({ open: () => ({ onsuccess: null, onerror: null, onblocked: null, onupgradeneeded: null }) }) as unknown as IDBFactory;
+
+  /** An indexedDB that opens fine but whose requests never call back. */
+  const hangingRequest = (): IDBFactory =>
+    ({
+      open: () => {
+        const req: Record<string, unknown> = {
+          onsuccess: null, onerror: null, onblocked: null, onupgradeneeded: null,
+          result: {
+            transaction: () => ({
+              objectStore: () => ({ getAll: () => ({}), get: () => ({}), put: () => ({}), delete: () => ({}) }),
+            }),
+          },
+        };
+        setTimeout(() => (req.onsuccess as (() => void) | null)?.(), 0);
+        return req;
+      },
+    }) as unknown as IDBFactory;
+
+  it("getAllPins falls back to [] when the open never answers", async () => {
+    globalThis.indexedDB = hangingOpen();
+    const storage = await loadStorage();
+    await expect(storage.getAllPins()).resolves.toEqual([]);
+  });
+
+  it("getAllPins falls back to [] when the request never answers", async () => {
+    globalThis.indexedDB = hangingRequest();
+    const storage = await loadStorage();
+    await expect(storage.getAllPins()).resolves.toEqual([]);
+  });
+
+  it("a hung open does not poison later calls (cached promise is dropped)", async () => {
+    // Without clearing the module-level dbPromise, every later call would
+    // await the same dead promise for the life of the page — one wedged
+    // open would take out dog-ear state until a reload.
+    globalThis.indexedDB = hangingOpen();
+    const storage = await loadStorage();
+    await expect(storage.getAllPins()).resolves.toEqual([]);
+
+    globalThis.indexedDB = new IDBFactory(); // IndexedDB recovers
+    const t = Date.now();
+    await storage.setPin({
+      slotId: "s1", creativeId: "c1", page: 0, foldedAt: t, lastSeenAt: t, expiresAt: defaultExpiry(t),
+    });
+    expect((await storage.getPin("s1"))?.creativeId).toBe("c1");
+  });
+
+  it("every fallback matches the pre-existing failure behaviour", async () => {
+    // A hang must degrade exactly like an unavailable IndexedDB, not
+    // differently — claimUnfoldReport in particular must stay false so a
+    // wedged store can't emit an unpaired unfold.
+    globalThis.indexedDB = hangingOpen();
+    const s = await loadStorage();
+    await expect(s.getPin("s1")).resolves.toBeNull();
+    await expect(s.wasCounted("c1")).resolves.toBe(false);
+    await expect(s.claimUnfoldReport("c1")).resolves.toBe(false);
+    await expect(s.setPin({
+      slotId: "s1", creativeId: "c1", page: 0, foldedAt: 1, lastSeenAt: 1, expiresAt: 2,
+    })).resolves.toBeUndefined();
+    await expect(s.clearPin("s1")).resolves.toBeUndefined();
+    await expect(s.sweepExpired()).resolves.toBeUndefined();
+  });
+
   it("setPin then clearPin then setPin (refold flow) works end-to-end", async () => {
     // Spec scenario: reader folds → unfolds → folds again. Each fold is
     // an independent CPF event; the IDB store records the latest.
