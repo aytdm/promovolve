@@ -22,6 +22,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const SOURCE = resolve(__dirname, "../dist/expandable-magazine-banner.js");
+const SOURCE_MAP = resolve(__dirname, "../dist/expandable-magazine-banner.js.map");
 const REPO_ROOT = resolve(__dirname, "../../..");
 const ENV_FILE = resolve(REPO_ROOT, "scripts/.env");
 
@@ -66,6 +67,33 @@ await client.send(
     CacheControl: "public, max-age=31536000, immutable",
   }),
 );
+
+// Source map. The bundle ends with `//# sourceMappingURL=
+// expandable-magazine-banner.js.map`, resolved relative to the bundle —
+// and this one only ever publishes under js/, so a single copy serves it.
+// Without it, every browser with devtools open 404s on the map and the
+// banner is only debuggable as minified code.
+//
+// Short max-age rather than immutable: vite names the map WITHOUT a
+// hash, so each build overwrites it. The current bundle and its map
+// always publish together; an older hashed bundle resolves to the newest
+// map and shows wrong line numbers, which is the accepted trade.
+if (existsSync(SOURCE_MAP)) {
+  const mapBody = readFileSync(SOURCE_MAP);
+  const mapKey = "js/expandable-magazine-banner.js.map";
+  console.log(`Uploading ${(mapBody.length / 1024).toFixed(2)} KB to s3://${R2_BUCKET}/${mapKey} (source map, max-age=300)`);
+  await client.send(
+    new PutObjectCommand({
+      Bucket: R2_BUCKET,
+      Key: mapKey,
+      Body: mapBody,
+      ContentType: "application/json; charset=utf-8",
+      CacheControl: "public, max-age=300",
+    }),
+  );
+} else {
+  console.warn(`No source map at ${SOURCE_MAP} — publishing without it (devtools will 404).`);
+}
 
 const url = CDN_BASE_URL ? `${CDN_BASE_URL}/${key}` : `<CDN_BASE_URL>/${key}`;
 console.log(`Published: ${url}`);

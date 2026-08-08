@@ -18,6 +18,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const SOURCE = resolve(__dirname, "../dist/promovolve-bootstrap.js");
+const SOURCE_MAP = resolve(__dirname, "../dist/promovolve-bootstrap.js.map");
 const REPO_ROOT = resolve(__dirname, "../../..");
 const ENV_FILE = resolve(REPO_ROOT, "scripts/.env");
 
@@ -77,6 +78,43 @@ await client.send(
     CacheControl: "public, max-age=300",
   }),
 );
+
+// Source map. The bundle ends with `//# sourceMappingURL=
+// promovolve-bootstrap.js.map`, which the browser resolves RELATIVE to
+// whichever copy it loaded — so the same map has to exist at two paths:
+//
+//   js/promovolve-bootstrap.<hash>.js  →  js/promovolve-bootstrap.js.map
+//   promovolve-ad.js       (root)      →  /promovolve-bootstrap.js.map
+//
+// Without them every browser with devtools open 404s on the map and you
+// debug minified code — which is exactly what happened while chasing the
+// iOS Safari blank-slot bug. The repo is public, so the map exposes
+// nothing; an inspectable ad tag is the point.
+//
+// max-age matches the stable alias rather than the immutable bundle:
+// vite names the map WITHOUT a hash, so it is overwritten every build.
+// The alias and its map always publish together and therefore always
+// agree. An older hashed bundle will resolve to the newest map and show
+// wrong line numbers — acceptable, since the hashed URLs exist for
+// cache-busting on the backend, not for debugging.
+if (existsSync(SOURCE_MAP)) {
+  const mapBody = readFileSync(SOURCE_MAP);
+  const mapKB = (mapBody.length / 1024).toFixed(2);
+  for (const mapKey of ["js/promovolve-bootstrap.js.map", "promovolve-bootstrap.js.map"]) {
+    console.log(`Uploading ${mapKB} KB to s3://${R2_BUCKET}/${mapKey} (source map, max-age=300)`);
+    await client.send(
+      new PutObjectCommand({
+        Bucket: R2_BUCKET,
+        Key: mapKey,
+        Body: mapBody,
+        ContentType: "application/json; charset=utf-8",
+        CacheControl: "public, max-age=300",
+      }),
+    );
+  }
+} else {
+  console.warn(`No source map at ${SOURCE_MAP} — publishing without it (devtools will 404).`);
+}
 
 const url = CDN_BASE_URL ? `${CDN_BASE_URL}/${key}` : `<CDN_BASE_URL>/${key}`;
 const stableUrl = CDN_BASE_URL ? `${CDN_BASE_URL}/${STABLE_KEY}` : `<CDN_BASE_URL>/${STABLE_KEY}`;
