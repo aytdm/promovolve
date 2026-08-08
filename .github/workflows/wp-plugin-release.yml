@@ -1,0 +1,103 @@
+# Package the WordPress publisher plugin and attach the zip to a GitHub
+# Release, so a publisher can install it from Plugins → Add New → Upload
+# Plugin without cloning the monorepo and running a shell script.
+#
+# The built zip is gitignored (the blanket `**/dist/` rule), so the Release
+# asset is the ONLY distribution channel until/unless the plugin is listed on
+# WordPress.org. Nothing else publishes it.
+#
+# Independent of deploy.yml on purpose: this fires on a tag, never on an
+# ordinary push, so releasing the plugin cannot roll the cluster and a
+# platform deploy cannot publish a plugin.
+name: WP plugin release
+
+on:
+  push:
+    tags: ["wp-v*"]
+  # Cut a release from the Actions UI without tagging locally. gh creates the
+  # tag against the checked-out commit, so the two can't disagree.
+  workflow_dispatch:
+
+permissions:
+  contents: write # create the release and upload the asset
+
+jobs:
+  release:
+    name: Build zip → GitHub Release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          fetch-depth: 0 # gh release needs history to resolve/create the tag
+
+      # build-zip.sh refuses to package when the plugin header Version, the
+      # PROMOVOLVE_VERSION constant and readme.txt's Stable tag disagree — so
+      # a skewed release fails HERE rather than shipping an archive whose
+      # editor.js cache-buster points at the wrong version.
+      - name: Build the plugin zip
+        run: integrations/wordpress/build-zip.sh
+
+      - name: Resolve version, guard the tag
+        id: v
+        run: |
+          set -euo pipefail
+          main=integrations/wordpress/promovolve/promovolve.php
+          version=$(sed -n 's/^ \* Version:[[:space:]]*\([0-9][^[:space:]]*\).*/\1/p' "$main" | head -1)
+          [ -n "$version" ] || { echo "could not read Version from $main" >&2; exit 1; }
+          zip="integrations/wordpress/dist/promovolve-${version}.zip"
+          [ -f "$zip" ] || { echo "expected $zip, not found — did build-zip.sh change its output name?" >&2; exit 1; }
+
+          # A tag that disagrees with the plugin is the same class of skew
+          # build-zip.sh exists to refuse; catch it rather than publish a
+          # wp-v0.2.2 release containing 0.2.1.
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "wp-v${version}" ]; then
+            echo "tag ${GITHUB_REF_NAME} does not match plugin version ${version} (expected wp-v${version})" >&2
+            exit 1
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=wp-v$version"  >> "$GITHUB_OUTPUT"
+          echo "zip=$zip"          >> "$GITHUB_OUTPUT"
+
+      # Release notes come from the plugin's own readme.txt changelog rather
+      # than --generate-notes: in a monorepo the generated commit list would be
+      # mostly platform work that has nothing to do with the plugin.
+      - name: Extract this version's changelog
+        run: |
+          set -euo pipefail
+          awk -v v="= ${{ steps.v.outputs.version }} =" '
+            $0 == v { grab = 1; next }
+            grab && /^= /  { exit }
+            grab && /^== / { exit }
+            grab           { print }
+          ' integrations/wordpress/promovolve/readme.txt > notes.md
+          if [ ! -s notes.md ]; then
+            echo "No changelog entry for ${{ steps.v.outputs.version }} in readme.txt." > notes.md
+          fi
+          {
+            echo
+            echo "---"
+            echo "Install: WordPress → Plugins → Add New → Upload Plugin → \`$(basename "${{ steps.v.outputs.zip }}")\`."
+          } >> notes.md
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag='${{ steps.v.outputs.tag }}'
+          zip='${{ steps.v.outputs.zip }}'
+          # Idempotent: re-running a release replaces the asset instead of
+          # failing, which matters when a first attempt dies after the release
+          # row exists but before the upload.
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "Release $tag exists — updating notes and replacing the asset"
+            gh release edit "$tag" --notes-file notes.md
+          else
+            gh release create "$tag" \
+              --title "Promovolve Publisher ${{ steps.v.outputs.version }}" \
+              --notes-file notes.md \
+              --target "$GITHUB_SHA"
+          fi
+          gh release upload "$tag" "$zip" --clobber
+          echo "Published $tag with $(basename "$zip")"
