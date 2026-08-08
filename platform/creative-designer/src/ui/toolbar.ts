@@ -13,6 +13,8 @@ import { commitDeleteSelection } from "./confirm-delete";
 import type { Store } from "../store";
 import type { DesignerState, LayoutItem, RectItem, TextItem } from "../types";
 import { pickContrast } from "../color-contrast";
+import { loadBrandKit } from "../brand-kit";
+import { headlineFontOf } from "../presets";
 import { scrimGradient, SCRIM_DEFAULT_COLOR, SCRIM_DEFAULT_STRENGTH } from "../scrim";
 import { openAssetModal } from "./asset-modal";
 import { openBrandKitModal } from "./brand-kit-modal";
@@ -48,7 +50,8 @@ export function mountToolbar(host: HTMLElement, store: Store): void {
     const fontSize = lastTextFontSize ?? inferFontSizeFromLayout(store.state) ?? 8;
     const page = currentPage(store.state);
     const color = pickContrast(page?.bg).headline;
-    store.commit(addItem(store.state, { ...defaultText(), fontSize, color }));
+    const fontFamily = inferFontFamilyFromLayout(store.state);
+    store.commit(addItem(store.state, { ...defaultText(), fontSize, color, fontFamily }));
   };
 
   bar.append(
@@ -83,6 +86,26 @@ function inferFontSizeFromLayout(state: DesignerState): number | null {
     if (fallback === null) fallback = it.fontSize;
   }
   return fallback;
+}
+
+// The face a new text box opens in. A box the author adds is copy, so
+// it joins the creative's voice instead of arriving in the browser's
+// default sans (see presets.ts BODY FOLLOWS HEADLINE). Preference:
+//   1. The headline ON THIS CANVAS — what the author is looking at.
+//   2. The wide master's headline / the kit's heading font, which is
+//      what every generated layout resolved from anyway.
+// Unlike fontSize this is NOT sticky across selections: fontSize is a
+// per-box decision the author re-makes constantly, while the face is a
+// creative-level constant they'd have to fight on every add.
+function inferFontFamilyFromLayout(state: DesignerState): string {
+  const here = currentLayout(state).find(
+    (it) => it.type === "text" && (it as { field?: string }).field === "headline",
+  ) as { fontFamily?: string } | undefined;
+  if (here?.fontFamily) return here.fontFamily;
+  const page = currentPage(state);
+  return page
+    ? headlineFontOf(page, loadBrandKit(window.__DESIGNER__?.campaignId))
+    : "sans-serif";
 }
 
 interface IconBtnOpts {
@@ -168,6 +191,9 @@ function defaultText(): TextItem {
     // — overrides this in mountToolbar's addText.
     fontSize: 8,
     color: "#ffffff",
+    // Last-resort face for the same reason as fontSize above — the
+    // usual path is addText's inferFontFamilyFromLayout, which opens
+    // the box in the creative's headline face.
     fontFamily: "sans-serif",
   };
 }

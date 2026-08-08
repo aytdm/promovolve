@@ -44,12 +44,19 @@ function findKitColor(kit: BrandKit | null, name: string): string | null {
   * families (sans-serif / serif / Georgia / monospace) at extraction
   * time, so whatever lands here renders in the live ad without any
   * web-font loading — the banner ships no @font-face. */
+// Every text role a template carries is COPY, so all of it takes the
+// kit's heading face — body and subheadline included (presets.ts BODY
+// FOLLOWS HEADLINE; cta-text and badge already worked this way).
+// Templates drive the expanded reader, which is exactly the surface
+// that rule is about. The map is kept keyed rather than collapsed to a
+// constant because membership still decides WHICH roles get a font
+// override at all — an unlisted role passes through untouched.
 const ROLE_TO_KIT_FONT_INDEX: Record<string, number> = {
   headline:    0,
   "cta-text":  0,
   badge:       0,
-  subheadline: 1,
-  body:        1,
+  subheadline: 0,
+  body:        0,
 };
 
 function findKitFont(kit: BrandKit | null, index: number): string | null {

@@ -17,7 +17,9 @@ const fullPage = (): Page => ({
     "970x250": [item()],
     "728x90": [item()],
     "320x100": [item()],
+    "320x50": [item()],
     "300x600": [item()],
+    "160x600": [item()],
   },
 });
 
@@ -56,9 +58,9 @@ describe("collectEmptySizes (publish gate)", () => {
   it("reports per-page so a later blank page is caught with its 1-based index", () => {
     const empties = collectEmptySizes(store([fullPage(), { layout: [], banners: {} }]));
     // Page 1 is clean; page 2 is blank across every editable size
-    // (the portrait reader + 5 buckets — the tabless wide layout
+    // (the portrait reader + 7 buckets — the tabless wide layout
     // doesn't gate).
     expect(empties.every((e) => e.page === 2)).toBe(true);
-    expect(empties.length).toBe(6);
+    expect(empties.length).toBe(8);
   });
 });

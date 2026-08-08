@@ -25,15 +25,41 @@
 // 336×280 layout next to a 300×250 one was two Gemini generations and
 // two author tabs for the same shape (both 1.20:1), while a 320×100
 // slot got the squeezed 16:9 master because the old exact-match lookup
-// ignored the almost-right strip layout. Four shapes cover the whole
-// IAB zoo and every odd custom slot in between.
+// ignored the almost-right strip layout.
+//
+// WHAT THE BUCKET SET MUST COVER: every size the WordPress plugin
+// offers by name (blocks/slot/editor.js SIZES — the publisher-facing
+// menu, so these are the shapes real inventory actually declares) has
+// to resolve to a bucket at ZERO aspect distance. Measured on
+// pickCollapsedLayout's log-aspect metric (banner-component/utils.ts):
+//
+//   300×250 Medium rectangle 1.200 → 300x250   exact
+//   336×280 Large rectangle  1.200 → 300x250   exact — SAME 6:5 shape,
+//                                    which is why it gets no tab of its
+//                                    own: a second identical-aspect
+//                                    bucket is one more thing to author
+//                                    for zero delivery difference, and
+//                                    ties in the picker are arbitrary.
+//   728×90  Leaderboard      8.089 → 728x90    exact
+//   970×250 Billboard        3.880 → 970x250   exact
+//   320×50  Mobile banner    6.400 → 320x50    exact (was 0.234 off,
+//                                    served by the 8:1 strip)
+//   300×600 Half page        0.500 → 300x600   exact
+//   160×600 Wide skyscraper  0.267 → 160x600   exact (was 0.629 off —
+//                                    the worst hole by far: a half-page
+//                                    layout stretched into a 1:3.75 box)
+//
+// So the bucket count follows publisher-declarable inventory, not the
+// IAB catalogue; odd custom slots in between still land on whichever
+// bucket is nearest.
 //
 // sizeKeys keep their canonical pixel names ("300x250" etc.) so
 // existing creatives' authored layouts stay first-class with no
-// migration; layouts stored under retired keys (336x280, 970x90,
-// 160x600, 320x50, 320x100) remain in the creative JSON and the
-// nearest-aspect picker still serves them — they're just no longer
-// editable tabs here.
+// migration; layouts stored under retired keys (336x280, 970x90)
+// remain in the creative JSON and the nearest-aspect picker still
+// serves them — they're just no longer editable tabs here. Creatives
+// published before a bucket existed need no migration either: they
+// keep resolving to their nearest authored shape.
 
 export interface Mode {
   key: string;
@@ -79,7 +105,14 @@ export const MODES: readonly Mode[] = [
   // nearest aspect, and creatives published before this bucket keep
   // resolving to their nearest existing one.
   { key: "320x100",  label: "Mobile (16:5)",   aspect: "320/100", w: 320,  h: 100, sizeKey: "320x100" },
+  // The plugin's "Mobile banner". 6.4:1 previously fell to the 8:1
+  // strip — near enough not to look broken, far enough that the
+  // headline column and CTA both landed narrower than authored.
+  { key: "320x50",   label: "Mobile banner (32:5)", aspect: "320/50", w: 320, h: 50, sizeKey: "320x50" },
   { key: "300x600",  label: "Tall (1:2)",      aspect: "300/600", w: 300,  h: 600, sizeKey: "300x600" },
+  // The plugin's "Wide skyscraper". 1:3.75 vs the half-page's 1:2 is a
+  // 1.9× aspect error — the widest gap any declarable size had.
+  { key: "160x600",  label: "Skyscraper (1:3.75)", aspect: "160/600", w: 160, h: 600, sizeKey: "160x600" },
 ];
 
 export function findMode(key: string): Mode {

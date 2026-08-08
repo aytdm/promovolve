@@ -521,23 +521,27 @@ export function harmonizeTypography(state: DesignerState): DesignerState {
   return next;
 }
 
-// Re-apply the brand kit's fonts to every text item by role — headline
-// fields take the heading font (kit.fonts[0]), every other text item takes
-// the body font (kit.fonts[1]) — across every page and size bucket. Wired
+// Re-apply the brand kit's heading font (kit.fonts[0]) to every text item,
+// across every page and size bucket — the creative is set in one face. Wired
 // to fire when the brand kit changes (brand-kit-modal save) so editing the
 // kit propagates to EXISTING text, not just freshly-generated layouts.
 // Returns the same state object when nothing changes.
 export function applyBrandKitFontsToText(state: DesignerState, kit: BrandKit | null): DesignerState {
   const head = kitFont(kit, 0, "Georgia");
-  const body = kitFont(kit, 1, "sans-serif");
+  // ONE face, everywhere. Body copy follows the headline (presets.ts BODY
+  // FOLLOWS HEADLINE), and so do author-added boxes, which addText already
+  // opens in the headline's face — re-splitting by role here would undo
+  // that on the first brand-kit save. There is nothing left for the kit's
+  // second font to serve: the only text a creative can hold is `headline`
+  // and `body` (auto-layout.ts applyLayout strips every other text item),
+  // and legacy sub/tag/CTA items that predate that filter are copy too.
   const remap = (items: LayoutItem[]): LayoutItem[] => {
     let any = false;
     const next = items.map((it) => {
       if (it.type !== "text") return it;
-      const want = it.field === "headline" ? head : body;
-      if (it.fontFamily === want) return it;
+      if (it.fontFamily === head) return it;
       any = true;
-      return { ...it, fontFamily: want };
+      return { ...it, fontFamily: head };
     });
     return any ? next : items;
   };

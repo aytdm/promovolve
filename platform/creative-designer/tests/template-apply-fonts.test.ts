@@ -5,8 +5,9 @@ import type { LayoutItem } from "../src/types";
 
 // Guards that brand-kit fonts actually reach text items — without this
 // wiring the kit's fonts[] sat unused in localStorage and the live ad
-// always rendered the system default. fonts[0] is the heading face,
-// fonts[1] the body face; both are pre-snapped to renderable families.
+// always rendered the system default. fonts[0] is the heading face and
+// every template text role takes it: templates compose the expanded
+// reader, where copy follows the headline.
 const KIT: BrandKit = {
   name: "From landing page",
   colors: [
@@ -28,12 +29,14 @@ describe("applyKitToItem font wiring", () => {
     expect(out.fontFamily).toBe("Georgia");
   });
 
-  it("puts the body font on body/subheadline items", () => {
-    expect((applyKitToItem(textItem("body"), KIT) as { fontFamily?: string }).fontFamily).toBe("sans-serif");
-    expect((applyKitToItem(textItem("subheadline"), KIT) as { fontFamily?: string }).fontFamily).toBe("sans-serif");
+  it("puts the heading font on body/subheadline items too", () => {
+    // Copy follows the headline — the kit's second font is not used here.
+    expect((applyKitToItem(textItem("body"), KIT) as { fontFamily?: string }).fontFamily).toBe("Georgia");
+    expect((applyKitToItem(textItem("subheadline"), KIT) as { fontFamily?: string }).fontFamily).toBe("Georgia");
+    expect((applyKitToItem(textItem("body"), KIT) as { fontFamily?: string }).fontFamily).not.toBe("sans-serif");
   });
 
-  it("falls back to the heading font when the kit has only one font", () => {
+  it("still resolves when the kit has only one font", () => {
     const oneFont: BrandKit = { ...KIT, fonts: ["Georgia"] };
     expect((applyKitToItem(textItem("body"), oneFont) as { fontFamily?: string }).fontFamily).toBe("Georgia");
   });

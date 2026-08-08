@@ -140,13 +140,17 @@ export function defaultLayoutForPage(page: Page, kit: BrandKit | null = null): L
   // LP brand-kit colours (background/text/accent), contrast-guarded; falls
   // back to pickContrast(page.bg) + page.accent when the kit has none.
   const col = resolveLayoutColors(page, kit);
-  // Brand-kit heading (0) / body (1) font so a determined LP font reaches the
-  // collapsed view too. The banner's collectExpandedFonts scans page.layout, so
-  // the self-hosted woff2 loads document-wide; the system family after the comma
+  // Brand-kit heading font (0) so a determined LP font reaches the collapsed
+  // view too. The banner's collectExpandedFonts scans page.layout, so the
+  // self-hosted woff2 loads document-wide; the system family after the comma
   // in the kit's stack is the always-available fallback. Falls back to the old
-  // system families when the kit carries no font.
+  // system family when the kit carries no font.
+  //
+  // Body takes the SAME face — this is an expanded surface, and reader copy
+  // follows the headline there (see presets.ts BODY FOLLOWS HEADLINE). The
+  // kit's body font is still used for collapsed chrome by the IAB presets.
   const headFont = kitFont(kit, 0, "Georgia");
-  const bodyFont = kitFont(kit, 1, "sans-serif");
+  const bodyFont = headFont;
   const items: LayoutItem[] = [];
 
   // Image first → it sits at the back of the z-stack, behind all the text

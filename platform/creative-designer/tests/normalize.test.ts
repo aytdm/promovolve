@@ -57,7 +57,8 @@ describe("defaultLayoutForPage", () => {
     const headline = items.find((it) => it.type === "text" && (it as { field?: string }).field === "headline");
     const body = items.find((it) => it.type === "text" && (it as { field?: string }).field === "body");
     expect((headline as { fontFamily?: string }).fontFamily).toBe("Georgia");
-    expect((body as { fontFamily?: string }).fontFamily).toBe("sans-serif");
+    // Body follows the headline on this surface — no second face.
+    expect((body as { fontFamily?: string }).fontFamily).toBe("Georgia");
   });
   it("uses the LP brand-kit colours (background-derived text)", () => {
     // Dark LP bg + light LP text (legible pair) → text items take the LP
@@ -97,8 +98,10 @@ describe("defaultLayoutForPage", () => {
 
   it("uses the brand-kit LP font for the collapsed layout (no Georgia cliff)", () => {
     // Regression: the served collapsed layout must carry the determined LP
-    // font (heading=fonts[0], body=fonts[1]) so it doesn't show the hardcoded
-    // Georgia. Kit fonts are pre-snapped "<Family>, <bucket>" stacks.
+    // font (heading=fonts[0]) so it doesn't show the hardcoded Georgia. Kit
+    // fonts are pre-snapped "<Family>, <bucket>" stacks. Body takes the same
+    // heading face — this surface is the expanded master, where reader copy
+    // follows the headline; fonts[1] serves collapsed chrome instead.
     const kit = {
       name: "From landing page",
       colors: [],
@@ -108,7 +111,7 @@ describe("defaultLayoutForPage", () => {
     const ff = (t: string) =>
       (items.find((it) => it.type === "text" && (it as { field?: string }).field === t) as { fontFamily?: string }).fontFamily;
     expect(ff("headline")).toBe("Montserrat Variable ExtraBold, sans-serif"); // heading → fonts[0]
-    expect(ff("body")).toBe("Montserrat Variable, sans-serif");          // body → fonts[1]
+    expect(ff("body")).toBe("Montserrat Variable ExtraBold, sans-serif");     // body follows it
     // No item should be left on the hardcoded serif default.
     expect(items.every((it) => (it as { fontFamily?: string }).fontFamily !== "Georgia")).toBe(true);
   });

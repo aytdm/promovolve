@@ -368,8 +368,8 @@ function boot(ctx: DesignerContext): void {
   // cold/shadowed save. Seed from the kit that was current at load.
   let lastKitLogoUrl = loadBrandKit(window.__DESIGNER__?.campaignId)?.logoUrl;
   subscribeBrandKit((kit) => {
-    // Re-apply the kit's fonts to existing text (headline → fonts[0], else
-    // → fonts[1]) so editing the brand kit propagates to the canvas, not
+    // Re-apply the kit's heading font to existing text (fonts[0], one face
+    // throughout) so editing the brand kit propagates to the canvas, not
     // just future layouts.
     let next = applyBrandKitFontsToText(store.state, kit);
     // Brand logo, folded into the same update.
