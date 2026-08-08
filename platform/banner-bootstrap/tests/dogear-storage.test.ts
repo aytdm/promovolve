@@ -30,6 +30,7 @@ describe("dogear-storage", () => {
       creativeId: "ad_7f3a9b",
       page:       2,
       foldedAt,
+      lastSeenAt: foldedAt,
       expiresAt:  defaultExpiry(foldedAt),
     });
     const pin = await getPin("leader-top");
@@ -48,8 +49,8 @@ describe("dogear-storage", () => {
     const { setPin, getPin } = await loadStorage();
     const t0 = Date.now() - 5000;
     const t1 = Date.now() - 1000;
-    await setPin({ slotId: "s1", creativeId: "c1", page: 0, foldedAt: t0, expiresAt: defaultExpiry(t0) });
-    await setPin({ slotId: "s1", creativeId: "c1", page: 2, foldedAt: t1, expiresAt: defaultExpiry(t1) });
+    await setPin({ slotId: "s1", creativeId: "c1", page: 0, foldedAt: t0, lastSeenAt: t0, expiresAt: defaultExpiry(t0) });
+    await setPin({ slotId: "s1", creativeId: "c1", page: 2, foldedAt: t1, lastSeenAt: t1, expiresAt: defaultExpiry(t1) });
     const pin = await getPin("s1");
     expect(pin?.page).toBe(2);
     expect(pin?.foldedAt).toBe(t1);
@@ -58,7 +59,7 @@ describe("dogear-storage", () => {
   it("getPin returns null and deletes a record older than 7 days (lazy expiry)", async () => {
     const longAgo = Date.now() - SEVEN_DAYS - 1000;
     const storage = await loadStorage();
-    await storage.setPin({ slotId: "s1", creativeId: "c1", page: 0, foldedAt: longAgo, expiresAt: defaultExpiry(longAgo) });
+    await storage.setPin({ slotId: "s1", creativeId: "c1", page: 0, foldedAt: longAgo, lastSeenAt: longAgo, expiresAt: defaultExpiry(longAgo) });
 
     expect(await storage.getPin("s1")).toBeNull();
     // Read again — pin should already be gone (deleted lazily on the first read).
@@ -83,10 +84,30 @@ describe("dogear-storage", () => {
     expect(pin?.foldedAt).toBe(recent);
   });
 
+  it("a legacy record with no lastSeenAt falls back to foldedAt", async () => {
+    // Records written before the lastSeenAt field exists in the wild, and
+    // isFresh handles them with `pin.lastSeenAt ?? pin.foldedAt`. Every
+    // other fixture here now sets the field (the type requires it), so
+    // without this test that fallback branch would be unreachable from
+    // the suite. The cast is deliberate: it constructs exactly the shape
+    // an older bootstrap left in the store.
+    const storage = await loadStorage();
+    const recent = Date.now() - 1000;
+    const legacy = { slotId: "s1", creativeId: "c1", page: 0, foldedAt: recent, expiresAt: defaultExpiry(recent) };
+    await storage.setPin(legacy as unknown as import("../src/dogear-storage").Pin);
+    expect((await storage.getPin("s1"))?.creativeId).toBe("c1");
+
+    // ...and the same fallback still sweeps one that is genuinely stale.
+    const old = Date.now() - SEVEN_DAYS - 1000;
+    const legacyOld = { slotId: "s2", creativeId: "c2", page: 0, foldedAt: old, expiresAt: defaultExpiry(old) };
+    await storage.setPin(legacyOld as unknown as import("../src/dogear-storage").Pin);
+    expect(await storage.getPin("s2")).toBeNull();
+  });
+
   it("clearPin removes the record", async () => {
     const storage = await loadStorage();
     const foldedAt = Date.now();
-    await storage.setPin({ slotId: "s1", creativeId: "c1", page: 0, foldedAt, expiresAt: defaultExpiry(foldedAt) });
+    await storage.setPin({ slotId: "s1", creativeId: "c1", page: 0, foldedAt, lastSeenAt: foldedAt, expiresAt: defaultExpiry(foldedAt) });
     expect(await storage.getPin("s1")).not.toBeNull();
     await storage.clearPin("s1");
     expect(await storage.getPin("s1")).toBeNull();
@@ -103,9 +124,9 @@ describe("dogear-storage", () => {
     const old1Folded = now - SEVEN_DAYS - 1;
     const old2Folded = now - SEVEN_DAYS - 60_000;
     const freshFolded = now - 1000;
-    await storage.setPin({ slotId: "old1",  creativeId: "c1", page: 0, foldedAt: old1Folded,  expiresAt: defaultExpiry(old1Folded) });
-    await storage.setPin({ slotId: "old2",  creativeId: "c2", page: 1, foldedAt: old2Folded,  expiresAt: defaultExpiry(old2Folded) });
-    await storage.setPin({ slotId: "fresh", creativeId: "c3", page: 2, foldedAt: freshFolded, expiresAt: defaultExpiry(freshFolded) });
+    await storage.setPin({ slotId: "old1",  creativeId: "c1", page: 0, foldedAt: old1Folded,  lastSeenAt: old1Folded,  expiresAt: defaultExpiry(old1Folded) });
+    await storage.setPin({ slotId: "old2",  creativeId: "c2", page: 1, foldedAt: old2Folded,  lastSeenAt: old2Folded,  expiresAt: defaultExpiry(old2Folded) });
+    await storage.setPin({ slotId: "fresh", creativeId: "c3", page: 2, foldedAt: freshFolded, lastSeenAt: freshFolded, expiresAt: defaultExpiry(freshFolded) });
 
     await storage.sweepExpired();
 
@@ -128,7 +149,7 @@ describe("dogear-storage", () => {
 
     await expect(storage.getPin("s1")).resolves.toBeNull();
     const foldedAt = Date.now();
-    await expect(storage.setPin({ slotId: "s1", creativeId: "c1", page: 0, foldedAt, expiresAt: defaultExpiry(foldedAt) })).resolves.toBeUndefined();
+    await expect(storage.setPin({ slotId: "s1", creativeId: "c1", page: 0, foldedAt, lastSeenAt: foldedAt, expiresAt: defaultExpiry(foldedAt) })).resolves.toBeUndefined();
     await expect(storage.clearPin("s1")).resolves.toBeUndefined();
     await expect(storage.sweepExpired()).resolves.toBeUndefined();
 
@@ -141,8 +162,8 @@ describe("dogear-storage", () => {
     // keyed by slotId), and non-stale pins must survive untouched.
     const storage = await loadStorage();
     const t = Date.now();
-    await storage.setPin({ slotId: "s1", creativeId: "stale-1", page: 0, foldedAt: t, expiresAt: defaultExpiry(t) });
-    await storage.setPin({ slotId: "s2", creativeId: "alive-1", page: 0, foldedAt: t, expiresAt: defaultExpiry(t) });
+    await storage.setPin({ slotId: "s1", creativeId: "stale-1", page: 0, foldedAt: t, lastSeenAt: t, expiresAt: defaultExpiry(t) });
+    await storage.setPin({ slotId: "s2", creativeId: "alive-1", page: 0, foldedAt: t, lastSeenAt: t, expiresAt: defaultExpiry(t) });
     await storage.markCounted("stale-1", defaultExpiry(t));
     await storage.markCounted("alive-1", defaultExpiry(t));
 
@@ -158,7 +179,7 @@ describe("dogear-storage", () => {
   it("clearPinsByCreativeIds with an empty list is a no-op", async () => {
     const storage = await loadStorage();
     const t = Date.now();
-    await storage.setPin({ slotId: "s1", creativeId: "c1", page: 0, foldedAt: t, expiresAt: defaultExpiry(t) });
+    await storage.setPin({ slotId: "s1", creativeId: "c1", page: 0, foldedAt: t, lastSeenAt: t, expiresAt: defaultExpiry(t) });
     await storage.clearPinsByCreativeIds([]);
     expect((await storage.getPin("s1"))?.creativeId).toBe("c1");
   });
@@ -286,10 +307,10 @@ describe("dogear-storage", () => {
     const storage = await loadStorage();
     const t0 = Date.now() - 5000;
     const t1 = Date.now() - 1000;
-    await storage.setPin({ slotId: "s1", creativeId: "c1", page: 0, foldedAt: t0, expiresAt: defaultExpiry(t0) });
+    await storage.setPin({ slotId: "s1", creativeId: "c1", page: 0, foldedAt: t0, lastSeenAt: t0, expiresAt: defaultExpiry(t0) });
     await storage.clearPin("s1");
     expect(await storage.getPin("s1")).toBeNull();
-    await storage.setPin({ slotId: "s1", creativeId: "c1", page: 1, foldedAt: t1, expiresAt: defaultExpiry(t1) });
+    await storage.setPin({ slotId: "s1", creativeId: "c1", page: 1, foldedAt: t1, lastSeenAt: t1, expiresAt: defaultExpiry(t1) });
     const pin = await storage.getPin("s1");
     expect(pin?.page).toBe(1);
     expect(pin?.foldedAt).toBe(t1);
