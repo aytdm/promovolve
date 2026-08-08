@@ -4,7 +4,7 @@ Tags: ads, advertising, publisher
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.2.1
+Stable tag: 0.2.2
 License: Apache-2.0
 License URI: https://www.apache.org/licenses/LICENSE-2.0
 
@@ -87,6 +87,22 @@ reader "dog-ear" bookmarks in the browser's IndexedDB (7-day expiry). It sets
 no cookies. Visitors sending the Global Privacy Control signal receive no ads.
 
 == Changelog ==
+
+= 0.2.2 =
+* **The tag now tells the ad server what WordPress already knows this page is
+  about.** Classification works by sending the page's rendered text to a
+  language model, which is fine for an article but poor for a category or tag
+  archive, where the text is a blend of excerpts from unrelated posts.
+  WordPress does not have to guess: a post's categories and tags are assigned
+  facts, and an archive knows exactly which term it lists. The tag now carries
+  that as `data-section`, and it is the one classification advantage this
+  plugin has over pasting the script in by hand.
+* It is a hint, never an answer. The server treats it as unverified and
+  explicitly interested — a publisher earns more from some categories than
+  others — so the page's own content stays the authority and a wrong or
+  missing value costs nothing. Pages where WordPress has no honest single
+  topic (front page, search, 404) send nothing at all and classify exactly as
+  before.
 
 = 0.2.1 =
 * **The verification token field is gone once the site is verified.** The plugin

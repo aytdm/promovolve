@@ -135,6 +135,12 @@ interface PromovolveConfig {
   batchTimeoutMs?: number;    // default 1000
   batchRetryDelayMs?: number; // default 300; 0 disables the retry
   collapseEmptyDivs?: boolean;   // default true
+  // Topic the PUBLISHER declares for THIS page — the WordPress plugin fills
+  // it from the post's own categories/tags, which the CMS knows as fact
+  // rather than inference. Rides along with the classify-page POST as a
+  // weak hint; the server sanitises it and the page content stays the
+  // authority, so a wrong or absent value costs nothing.
+  section?: string;
 }
 
 interface Slot {
@@ -676,6 +682,9 @@ function postClassifyPage(slotsToServe: Slot[]): void {
     pub: config.pub,
     url: window.location.href,
     text,
+    // Omitted entirely when unset, so a hand-embedded tag sends exactly what
+    // it sent before. The server treats the field as optional.
+    ...(config.section ? { section: config.section } : {}),
     imp: slotsToServe.map((s) => {
       const sig = measureSlotSignals(s.id);
       return {
@@ -893,6 +902,13 @@ const api: PromovolveApi = {
     // (document.currentScript is null inside this deferred callback).
     const pubFromScript = installScript?.dataset.pub;
     if (pubFromScript && !config.pub) config.pub = pubFromScript;
+
+    // Publisher-declared topic for this page. Read from the same captured
+    // script tag as data-pub — a CMS knows the post's own categories, and
+    // that is better information than inferring them from rendered text.
+    // setConfig wins if the publisher set it explicitly.
+    const sectionFromScript = installScript?.dataset.section;
+    if (sectionFromScript && !config.section) config.section = sectionFromScript;
     if (!config.pub) return;
     collectDomSlots();
     if (slots.size > 0) void displayImpl();

@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Promovolve Publisher
  * Description:       Connects this site to a Promovolve ad server: prints the ad tag, serves the site-verification file, and places ad slots via editor block or shortcode.
- * Version:           0.2.1
+ * Version:           0.2.2
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Promovolve
@@ -16,7 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 const PROMOVOLVE_OPTION  = 'promovolve_settings';
-const PROMOVOLVE_VERSION = '0.2.1';
+const PROMOVOLVE_VERSION = '0.2.2';
 
 /**
  * Settings with defaults applied.
@@ -70,13 +70,83 @@ add_filter( 'script_loader_tag', function ( $tag, $handle ) {
 	$s = promovolve_settings();
 	// The loader reads document.currentScript, so the attributes must live on
 	// the real <script src> tag itself.
-	$attrs = sprintf(
-		' data-pub="%s" data-api="%s" src=',
+	$section = promovolve_declared_topic();
+	$attrs   = sprintf(
+		' data-pub="%s" data-api="%s"%s src=',
 		esc_attr( $s['site_id'] ),
-		esc_attr( $s['api_base'] )
+		esc_attr( $s['api_base'] ),
+		'' === $section ? '' : sprintf( ' data-section="%s"', esc_attr( $section ) )
 	);
 	return str_replace( ' src=', $attrs, $tag );
 }, 10, 2 );
+
+/**
+ * The topic THIS page is about, according to WordPress itself.
+ *
+ * The ad server classifies pages by sending rendered text to an LLM. That
+ * works, but WordPress already knows the answer for its own content: a post's
+ * categories and tags are assigned facts, not inferences, and an archive knows
+ * exactly which term it lists. Handing that over is the one classification
+ * advantage this plugin has over a hand-pasted tag.
+ *
+ * It is a HINT, never an answer. The server treats it as an unverified,
+ * interested claim — a publisher earns more from some categories than others —
+ * and the page's own content stays the authority. So a blank or wrong value
+ * costs nothing, which is why every branch here can safely return ''.
+ *
+ * Archives are the case that gains most: their rendered text is a blend of
+ * excerpts from unrelated posts, so the term name is far better evidence than
+ * anything the DOM offers.
+ *
+ * @return string Comma-separated topic list, or '' when WordPress has nothing
+ *                confident to say (front page, 404, search results).
+ */
+function promovolve_declared_topic() {
+	// Singular: the post's own taxonomy. Categories first — they are the
+	// coarse topic — then tags, which are usually the specific one.
+	if ( is_singular() ) {
+		$names = array();
+		foreach ( array( 'category', 'post_tag' ) as $taxonomy ) {
+			$terms = get_the_terms( get_queried_object_id(), $taxonomy );
+			if ( is_array( $terms ) ) {
+				foreach ( $terms as $term ) {
+					$names[] = $term->name;
+				}
+			}
+		}
+		return promovolve_join_topic( $names );
+	}
+
+	// Category / tag / custom-taxonomy archive: the term IS the topic.
+	if ( is_category() || is_tag() || is_tax() ) {
+		$term = get_queried_object();
+		return isset( $term->name ) ? promovolve_join_topic( array( $term->name ) ) : '';
+	}
+
+	// Everything else — front page, search, 404, date archives — has no
+	// single honest topic. Say nothing rather than guess; the server then
+	// classifies from content exactly as it does for a hand-embedded tag.
+	return '';
+}
+
+/**
+ * Join topic names for the data-section attribute.
+ *
+ * Bounded here as well as server-side: the server caps and flattens the value
+ * because it must never trust a client, but a post with forty tags would
+ * otherwise ship a long attribute on every page for a hint the server will
+ * truncate anyway. Five names is more than enough to disambiguate.
+ *
+ * @param string[] $names Term names.
+ * @return string
+ */
+function promovolve_join_topic( $names ) {
+	$names = array_values( array_unique( array_filter( array_map( 'trim', $names ) ) ) );
+	if ( empty( $names ) ) {
+		return '';
+	}
+	return implode( ', ', array_slice( $names, 0, 5 ) );
+}
 
 /* -------------------------------------------------------------------------
  * Site verification: /.well-known/promovolve.txt

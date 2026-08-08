@@ -479,7 +479,12 @@ object SiteEntity {
           // Shared classification trigger for the on-demand serve path (ClassifyUrl). Fires the
           // Gemini taxonomy call off the actor thread via pipeToSelf; the result
           // is handled on the actor thread in ContentAnalyzed / FailedToAnalyzeContent.
-          def triggerClassification(url: String, text: String, discoveredSlots: List[AdSlotConfig]): Unit =
+          def triggerClassification(
+              url: String,
+              text: String,
+              discoveredSlots: List[AdSlotConfig],
+              publisherHint: Option[String] = None
+          ): Unit =
             // Gated on demand EXISTING (a cost guard — don't classify when there
             // are zero advertisers), but classification itself is demand-INDEPENDENT
             // (full taxonomy); the demand set is not passed in.
@@ -487,7 +492,12 @@ object SiteEntity {
               case (Some(iabTaxonomy), Some(cats)) =>
                 // cats is the FALLBACK only (used if the LLM fails); classification
                 // itself is full-taxonomy / demand-independent.
-                ctx.pipeToSelf(iabTaxonomy.analyzeTaxonomy(url, text, fallbackCategories = cats)) {
+                ctx.pipeToSelf(iabTaxonomy.analyzeTaxonomy(
+                  url,
+                  text,
+                  fallbackCategories = cats,
+                  publisherHint = publisherHint
+                )) {
                   case Success(selections) => ContentAnalyzed(url, text, selections, discoveredSlots)
                   case Failure(ex)         => FailedToAnalyzeContent(url, ex)
                 }
@@ -1555,7 +1565,7 @@ object SiteEntity {
                   .thenRun((_: State) => replyTo ! SiteDataDeleted(siteId))
                   .thenStop()
 
-              case ClassifyUrl(url, text, _section, slots, replyTo) =>
+              case ClassifyUrl(url, text, section, slots, replyTo) =>
                 // On-demand, serve-triggered classification. Text is supplied by
                 // the ad tag (live page DOM) instead of a crawl. Single-flight on
                 // the normalized url so a traffic burst on a new page fires ONE
@@ -1586,7 +1596,11 @@ object SiteEntity {
                           prior = Some(SlotPrior(qualityScore = q, aboveFold = s.aboveFold, region = s.region))
                         )
                       }.toList
-                    triggerClassification(url, text, discoveredSlots)
+                    // `section` is the publisher's own declared topic for this
+                    // page (the WP plugin sends the post's categories/tags).
+                    // Accepted since the endpoint existed but discarded until
+                    // now; it reaches the prompt as unverified evidence only.
+                    triggerClassification(url, text, discoveredSlots, publisherHint = section)
                     replyTo ! ClassifyAck(accepted = true, reason = ClassifyDecision.Accept.reason)
                     Effect.none
                   case other =>
