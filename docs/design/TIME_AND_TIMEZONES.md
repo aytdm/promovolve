@@ -166,6 +166,58 @@ stream, so each side is internally exact.
    cached, fall back to UTC, and log — the projection cannot stall on
    them, and billing does not depend on them.
 
+## Metrics that are not bucket-local
+
+A rollup bucket answers one question: *what happened during this bucket?*
+That works for counts of a single event — impressions, clicks, spend.
+It breaks for any metric built from **two events separated in time**,
+because the pair can straddle the boundary and each half lands in a
+different row.
+
+**Dog-ear retention is the live example.** `DashboardProjectionHandler`
+counts `folds` and `unfolds` into the same rollups so retention can be
+read as `(folds - unfolds) / folds`. But a pin lives until the
+campaign's `endAt` — or forever when the server gave none — and the
+unfold is a separate user act whenever the reader changes their mind.
+The two events are routinely days apart.
+
+The first unfolds ever recorded (2026-08-07; the client didn't send the
+beacon before then) show it immediately:
+
+| campaign | fold | unfold | gap |
+|---|---|---|---|
+| `01KYXDQ7…` | 08-05 | 08-07 | 2 days |
+| `01KZ1AYJ…` | 08-03, 08-06 | 08-07 | 1 day |
+
+Which lands in `campaign_daily_stats` as:
+
+```
+08-05:  folds=1  unfolds=0     → "100% retained"
+08-07:  folds=0  unfolds=1     → (0 - 1) / 0
+```
+
+Neither row is wrong — each faithfully records what happened that day —
+but the *ratio* is meaningless per bucket: the numerator goes negative
+and the denominator hits zero. The same applies to
+`campaign_hourly_stats`, more often, since the window is smaller.
+
+**Where the metric IS valid: the unbucketed rollups.** `campaign_stats`,
+`creative_stats` and `advertiser_summary` are lifetime totals, so both
+halves of the pair always land in the same row. The same two campaigns
+read sensibly there — `folds=1, unfolds=1` → 0% retained, and
+`folds=2, unfolds=1` → 50%. The client's `claimUnfoldReport` grants at
+most one unfold per *reported* fold, which is what keeps `unfolds ≤
+folds` and the lifetime ratio inside [0, 1].
+
+**Rule: compute retention from the lifetime tables, never from a day or
+hour bucket.** A bucketed retention chart would need the unfold
+attributed back to its fold's bucket, which the current event can't do —
+the client knows the fold time (it's `foldedAt` on the pin) but
+`/v1/dogear-event` doesn't carry it, so the projection has only the
+unfold's own timestamp. Adding it is a payload change, not a query fix.
+
+Watch for the same shape in any future "X, then later un-X" pair.
+
 ## Operational notes
 
 - **Fresh installs** get the dual-day schema from `docker/init-db.sql`.
