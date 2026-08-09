@@ -160,25 +160,6 @@ function fontSyncIndices(prev: DesignerState, next: DesignerState): number[] {
   * same stage (same container-query context, so cqh font sizing and
   * %-width wrap points resolve identically), then stamp the result.
   * Invoked from the props panel's Fit button. */
-/**
- * The box `cqmax` font sizes resolve against, in CSS px.
- *
- * Measured off the live `.design-box` rather than derived from the format
- * string: that element IS the container-query context, so this is the exact
- * basis the browser uses — and it stays correct for the reader pages, whose
- * geometry doesn't come from a "WxH" banner name at all. Returns null before
- * the canvas mounts; callers should fall back to leaving the control alone
- * rather than guessing a size.
- */
-export function canvasBoxPx(): { w: number; h: number } | null {
-  const banner = document.querySelector<HTMLElement>("#canvas-host expandable-magazine-banner");
-  const stage = banner?.shadowRoot?.querySelector<HTMLElement>(".design-box");
-  if (!stage) return null;
-  const w = stage.clientWidth;
-  const h = stage.clientHeight;
-  return w > 0 && h > 0 ? { w, h } : null;
-}
-
 export function packTextItemHeight(store: Store, idx: number, fitWidth = false): void {
   const banner = document.querySelector<HTMLElement>("#canvas-host expandable-magazine-banner");
   const shadow = banner?.shadowRoot;
