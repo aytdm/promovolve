@@ -14,7 +14,8 @@
 //     (one undo step per completed edit)
 
 import { refitItemCropToBox } from "../auto-crop";
-import { packReaderFieldBoxes, packTextItemHeight } from "../render/canvas";
+import { canvasBoxPx, packReaderFieldBoxes, packTextItemHeight } from "../render/canvas";
+import { charsAlongAxis, fontSizeControlRange, renderedPx, rescaleForWritingMode } from "../font-size-scale";
 import { isMultiPage } from "../modes";
 import { currentItem, currentLayout, currentPage, fieldColorSyncKey, hasLocalTextOverride, isFieldColorSynced, propagateTypography, setItemContent, setReaderFieldFontSize, setSyncFieldColor, TYPO_SYNC_KEYS, updateItem } from "../state";
 import type { Store } from "../store";
@@ -293,6 +294,27 @@ function build(panel: HTMLElement, idx: number, item: LayoutItem, store: Store):
       }
       mutateFontSize(store, idx, v, fontSizeBaseline, c);
       if (c) fontSizeBaseline = null;
+    },
+    undefined, undefined, undefined,
+    // The number is in cqmax — 1% of the LARGER canvas side — which tells
+    // you nothing about the size you get, and means something different
+    // per writing mode because the reading axis changes. Show both facts.
+    (it) => {
+      const box = canvasBoxPx();
+      if (!box) return "";
+      const vertical = (it as { writingMode?: string }).writingMode === "vertical-rl";
+      const size = (it as { fontSize?: number }).fontSize ?? 5;
+      const px = Math.round(renderedPx(size, box));
+      const chars = charsAlongAxis(size, box, vertical);
+      return `≈ ${px}px · about ${chars} ${chars === 1 ? "character" : "characters"} ${vertical ? "down" : "across"}`;
+    },
+    // Bounds follow the writing mode: on a leaderboard, vertical text tops
+    // out an order of magnitude lower than horizontal, and one step is a
+    // rendered pixel either way.
+    (it) => {
+      const box = canvasBoxPx();
+      if (!box) return null;
+      return fontSizeControlRange(box, (it as { writingMode?: string }).writingMode === "vertical-rl");
     });
     setters.lineHeight = numberField(typo, "line height", item.lineHeight ?? 1.2,
       (v, c) => mutate(store, idx, (it) => ({ ...it, lineHeight: v }), c), 0.5, 3);
@@ -321,7 +343,26 @@ function build(panel: HTMLElement, idx: number, item: LayoutItem, store: Store):
     );
     setters.writingMode = selectField(layoutGroup, "writing", item.writingMode ?? "horizontal-tb",
       ["horizontal-tb", "vertical-rl"],
-      (v, c) => mutate(store, idx, (it) => ({ ...it, writingMode: v as "horizontal-tb" | "vertical-rl" }), c),
+      // Flipping the mode swaps which canvas axis the text reads along, so
+      // the same cqmax number renders a wildly different amount of text —
+      // horizontal→vertical on a 728x90 goes from ~19 glyphs on a line to 2.
+      // Rescale so the fit is preserved and the author keeps editing the
+      // same design instead of first hunting for a usable number. No-op on
+      // a square canvas, and skipped entirely if the canvas isn't measurable.
+      (v, c) => mutate(store, idx, (it) => {
+        const toVertical = v === "vertical-rl";
+        const fromVertical = (it as { writingMode?: string }).writingMode === "vertical-rl";
+        const box = canvasBoxPx();
+        const size = (it as { fontSize?: number }).fontSize;
+        const rescaled = box && typeof size === "number"
+          ? rescaleForWritingMode(size, box, fromVertical, toVertical)
+          : size;
+        return {
+          ...it,
+          writingMode: v as "horizontal-tb" | "vertical-rl",
+          ...(rescaled !== undefined ? { fontSize: rescaled } : {}),
+        };
+      }, c),
     );
     setters.direction = selectField(layoutGroup, "direction", item.direction ?? "ltr",
       ["ltr", "rtl"],
@@ -696,6 +737,13 @@ function numberField(
   onChange: (v: number, commit: boolean) => void,
   min?: number, max?: number,
   read?: (item: LayoutItem) => unknown,
+  // Optional live annotation under the input — a derived value the number
+  // itself doesn't reveal (see the font size field, whose cqmax units say
+  // nothing about the size you actually get). Returning "" hides it.
+  annotate?: (item: LayoutItem) => string,
+  // Bounds/step recomputed per item rather than fixed at build time, for
+  // controls whose sensible range depends on the item (again: font size).
+  dynamicRange?: (item: LayoutItem) => { min: number; max: number; step: number } | null,
 ): (item: LayoutItem) => void {
   const input = document.createElement("input");
   input.type = "number";
@@ -707,7 +755,29 @@ function numberField(
   input.addEventListener("input", () => onChange(Number(input.value), false));
   input.addEventListener("change", () => onChange(Number(input.value), true));
   row(parent, label, input);
+
+  let hint: HTMLElement | null = null;
+  if (annotate) {
+    hint = document.createElement("div");
+    // Indented to line up under the input, not the label.
+    hint.style.cssText = `margin:-2px 0 6px 88px;color:${tokens.ink300};font-size:10px;`;
+    appendToGroup(parent, hint);
+  }
+
   return (item) => {
+    if (hint && annotate) {
+      const text = annotate(item);
+      hint.textContent = text;
+      hint.style.display = text === "" ? "none" : "";
+    }
+    if (dynamicRange) {
+      const r = dynamicRange(item);
+      if (r) {
+        input.min = String(r.min);
+        input.max = String(r.max);
+        input.step = String(r.step);
+      }
+    }
     if (document.activeElement === input) return; // don't clobber user edits
     const v = read ? read(item) : readFieldValue(item, label);
     if (v !== undefined && input.value !== String(v)) input.value = String(v);
