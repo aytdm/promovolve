@@ -132,7 +132,30 @@ export interface TextItem extends LayoutItemBase {
   type: "text";
   text?: string;
   field?: string;
+  /**
+   * The size the AUTHOR chose. Only ever set by an explicit edit.
+   *
+   * Auto-fit must never write here. It used to: the fitted size was
+   * stamped back over this value, and since page 1 is the master for
+   * fontSize across reader pages, one page's shrink became every page's
+   * authored size — and auto-fit only shrinks, so nothing could raise it
+   * again. Editing page 1's body dragged pages 2 and 3 down with it,
+   * permanently. See `fittedFontSize` for where the derived value lives
+   * now, and tests/ratchet/run.mjs in the designer for the contract.
+   */
   fontSize?: number;
+  /**
+   * The size the text is CURRENTLY DRAWN at, after auto-fit shrank it to
+   * fit its box. Derived, per item, per view — never authored, never
+   * synced across pages, never saved (stripped on save alongside the
+   * other derived fields).
+   *
+   * It exists because auto-fit runs a frame after paint: without somewhere
+   * to keep the fitted size, every re-render paints the authored size
+   * first and the text visibly jumps. Keeping it separate is what lets
+   * the authored value survive while the render stays correct.
+   */
+  fittedFontSize?: number;
   fontFamily?: string;
   color?: string;
   fontWeight?: string | number;

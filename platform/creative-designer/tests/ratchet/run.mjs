@@ -37,16 +37,18 @@ const LONG =
   "This is a deliberately much longer body paragraph that cannot fit inside " +
   "the same box at the authored size, so autoFitText must shrink it a long way.";
 
-// Page 1 carries long copy in a roomy box so it FITS at rest — the BEFORE
-// reading is clean, and squeezing the box later produces one large FRESH
-// shrink. Short copy cannot overflow, so it never triggers anything.
+// EVERY page carries long copy in a box too SMALL for it, so the render is
+// CLAMPED from load — the real-world shape, and the only state in which the
+// enlarge-on-select bug exists. A roomy fixture makes rendered == authored,
+// and then "unchanged on selection" is true no matter what the code does:
+// that vacuous green is exactly how a broken fix shipped once already.
 const fixture = {
   campaignId: "ratchet-test", landingUrl: "https://example.com",
   creativeName: "ratchet", bannerSize: "expanded", bannerScriptUrl: "",
   creativeId: "", lpTextSnapshot: "", brandKitJson: "", templateId: "",
   pages: [1, 2, 3].map((n) => ({
-    headline: `Page ${n}`, body: n === 1 ? LONG : "Short.", tag: "T",
-    banners: { "mobile-expanded": [txt("headline", 8, 6, 20), txt("body", 30, 4, 60)] },
+    headline: `Page ${n}`, body: LONG, tag: "T",
+    banners: { "mobile-expanded": [txt("headline", 8, 6, 20), txt("body", 35, 4, 12)] },
   })),
 };
 
@@ -127,6 +129,14 @@ try {
   const seeded = await panelValue("font size");
   check("fixture is in effect (body authored 4)", seeded === "4", `got ${seeded}`);
 
+  // The whole suite is only meaningful while the render is CLAMPED below the
+  // authored size. Assert it up front rather than discovering later that
+  // every green was free.
+  const seededRender = parseFloat(String(await renderedSize()));
+  check("fixture renders CLAMPED (rendered < authored)",
+    Number.isFinite(seededRender) && seededRender < Number(seeded) - 0.05,
+    `rendered ${seededRender} vs authored ${seeded}`);
+
   // ── B: selecting must not change the rendered size ──────────────────────
   const beforeClick = await renderedSize();
   await page.evaluate(() => {
@@ -137,8 +147,16 @@ try {
   await clickItem(0);          // select the headline
   await clickItem(BODY);       // come back to the body
   const afterClick = await renderedSize();
-  check("B  no jump on selection", beforeClick === afterClick,
-    `${beforeClick} -> ${afterClick}`);
+  // Self-validating for the same reason as D: if the render is not clamped,
+  // "unchanged" proves nothing.
+  const bAuthored = Number(await panelValue("font size"));
+  const bRendered = parseFloat(String(beforeClick));
+  if (!(bRendered < bAuthored - 0.05)) {
+    console.log(`  SKIP  B  not exercised — render ${beforeClick} is not clamped below authored ${bAuthored}`);
+  } else {
+    check("B  no jump on selection", beforeClick === afterClick,
+      `${beforeClick} -> ${afterClick}`);
+  }
 
   // ── C: a deliberate size change reaches every reader page ───────────────
   await setPanel("font size", 3);

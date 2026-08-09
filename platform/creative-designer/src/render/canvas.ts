@@ -5,7 +5,7 @@
 // (drag/resize/rotate/marquee/motion) lives in render/overlay.ts.
 
 import type { DesignerState, LayoutItem, Page } from "../types";
-import { currentLayout, fitReaderFieldBoxes, currentPage, setReaderFieldFontSize, updateItem } from "../state";
+import { currentLayout, fitReaderFieldBoxes, currentPage, updateItem } from "../state";
 import { isSized, isMultiPage, type Mode } from "../modes";
 import type { Store } from "../store";
 import { tokens } from "../ui/tokens";
@@ -386,14 +386,19 @@ export function syncAutoFitFontSizes(
     // all pages (setReaderFieldFontSize) makes the subscriber a no-op,
     // and matches delivery, where harmonizeAutofit pins the field group
     // to the smallest fitted size across pages anyway.
-    const field = (item as { field?: string }).field;
-    if (field && isMultiPage(store.state.mode)) {
-      next = setReaderFieldFontSize(next, field, rounded);
-    } else {
-      next = updateItem(next, idx, (it): LayoutItem =>
-        it.type === "text" ? { ...it, fontSize: rounded } : it,
-      );
-    }
+    // The fitted size is DERIVED, so it goes in its own field on THIS item
+    // only. It used to be written over `fontSize` — and for field-bound
+    // reader text, onto every page via setReaderFieldFontSize — which made
+    // one page's shrink everybody's authored size. Auto-fit only shrinks,
+    // so that was a one-way ratchet: edit page 1's body and pages 2 and 3
+    // went tiny for good.
+    //
+    // prepareRenderPage substitutes this for fontSize when handing pages to
+    // the banner, so the render is right from the first paint without the
+    // authored value ever being touched.
+    next = updateItem(next, idx, (it): LayoutItem =>
+      it.type === "text" ? { ...it, fittedFontSize: rounded } : it,
+    );
     changed = true;
   }
   if (changed) store.replace(next);
@@ -481,8 +486,18 @@ function prepareRenderPage(page: Page, state: DesignerState): Page {
   // testing and marquee both skip them, so a hidden item is
   // effectively gone until the Layers panel un-hides it.
   const layout = source.map((it) => {
-    const anyIt = it as LayoutItem & { hidden?: boolean };
-    return anyIt.hidden ? { ...it, opacity: 0 } : it;
+    const anyIt = it as LayoutItem & { hidden?: boolean; fittedFontSize?: number };
+    // Draw text at its FITTED size when auto-fit has derived one, leaving
+    // the authored fontSize untouched in the store. This is the whole
+    // two-number split in one line: the author's choice is what's kept and
+    // synced, the fitted value is what's drawn. Doing the substitution here
+    // means the banner component needs no knowledge of the distinction, and
+    // the first paint is already correct — no frame where the authored size
+    // shows through and the text visibly jumps.
+    const sized = anyIt.type === "text" && typeof anyIt.fittedFontSize === "number"
+      ? { ...it, fontSize: anyIt.fittedFontSize }
+      : it;
+    return anyIt.hidden ? { ...sized, opacity: 0 } : sized;
   });
   // Clear `banners` on the render-copy so the banner component's
   // render() falls through to our prepared `layout` instead of

@@ -889,8 +889,13 @@ function mutate(store: Store, idx: number, fn: (it: LayoutItem) => LayoutItem, c
 function mutateFontSize(
   store: Store, idx: number, newSize: number, baseline: number, commit: boolean,
 ): void {
+  // Setting a size clears the DERIVED one, so the author's new value is
+  // what gets drawn immediately. Auto-fit re-derives a fitted size on the
+  // next render if the text still doesn't fit — but from the new authored
+  // value, not the old shrunken one, which is what stops a size edit from
+  // being silently eaten.
   let next = updateItem(store.state, idx, (it) =>
-    it.type === "text" ? { ...it, fontSize: newSize } : it);
+    it.type === "text" ? { ...it, fontSize: newSize, fittedFontSize: undefined } : it);
   const edited = currentLayout(next)[idx];
   const field = edited && edited.type === "text" ? (edited as { field?: string }).field : undefined;
   // Reader pages sync ABSOLUTELY from any page — including during live
