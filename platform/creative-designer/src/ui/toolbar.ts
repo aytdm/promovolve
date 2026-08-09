@@ -51,7 +51,11 @@ export function mountToolbar(host: HTMLElement, store: Store): void {
     const page = currentPage(store.state);
     const color = pickContrast(page?.bg).headline;
     const fontFamily = inferFontFamilyFromLayout(store.state);
-    store.commit(addItem(store.state, { ...defaultText(), fontSize, color, fontFamily }));
+    const writingMode = inferWritingModeFromLayout(store.state);
+    store.commit(addItem(store.state, {
+      ...defaultText(), fontSize, color, fontFamily,
+      ...(writingMode ? { writingMode } : {}),
+    }));
   };
 
   bar.append(
@@ -106,6 +110,30 @@ function inferFontFamilyFromLayout(state: DesignerState): string {
   return page
     ? headlineFontOf(page, loadBrandKit(window.__DESIGNER__?.campaignId))
     : "sans-serif";
+}
+
+/**
+ * The reading direction a NEW text box should open in: whatever the text
+ * around it already uses.
+ *
+ * A box that arrives horizontal in a vertical-rl layout is wrong on sight,
+ * and fixing it means toggling the writing mode — which drops the text into
+ * a box shaped for the other axis (packTextItemHeight hugs HEIGHT for
+ * horizontal, WIDTH for vertical), forcing a large autofit shrink. So the
+ * default isn't just untidy, it steers authors straight into the most
+ * destructive gesture in the editor.
+ *
+ * Prefers the headline (the field that sets a page's voice, and the same
+ * anchor inferFontFamilyFromLayout uses), then any text on the page, then
+ * horizontal. Returns undefined for horizontal so the item stays free of a
+ * redundant property — absent already means horizontal-tb everywhere.
+ */
+export function inferWritingModeFromLayout(state: DesignerState): "vertical-rl" | undefined {
+  const texts = currentLayout(state).filter((it) => it.type === "text") as Array<{
+    field?: string; writingMode?: string;
+  }>;
+  const anchor = texts.find((it) => it.field === "headline") ?? texts[0];
+  return anchor?.writingMode === "vertical-rl" ? "vertical-rl" : undefined;
 }
 
 interface IconBtnOpts {
