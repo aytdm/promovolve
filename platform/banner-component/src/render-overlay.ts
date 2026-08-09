@@ -43,7 +43,18 @@ export function buildOverlay(opts: {
     // One reader everywhere: the floating sheet with page turns. The
     // mobile scroll-stack (overflow:auto + sticky sheets) is gone —
     // swipe drives next/prev instead.
-    overflowY: "hidden",
+    //
+    // BOTH axes, and the X one is not redundant: setting only overflow-y
+    // silently promotes overflow-x from `visible` to `auto` (CSS spec —
+    // the two axes cannot disagree about being visible), so the overlay
+    // was a horizontal scroller. It only showed in RTL: a turning sheet
+    // flies to fx = -w * flightX * rel * (rtl ? -1 : 1), so LTR leaves
+    // past the inline-START edge, which is not scrollable, while RTL
+    // flips the sign and leaves past the END edge, which is — a
+    // scrollbar appeared along the bottom of the preview on every page
+    // turn. The reader is a modal takeover (see touchAction below);
+    // nothing in it should scroll in either direction.
+    overflow: "hidden",
     // The reader is a modal takeover: no gesture on it may scroll the
     // publisher page behind it. The old scroll-stack was itself the
     // scroller so it consumed touch gestures; this overlay is not, and
