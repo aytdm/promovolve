@@ -13,6 +13,7 @@
 //   B  NO JUMP   selecting a text item must not change its rendered size
 //   C  SYNC      a DELIBERATE size change must still reach every reader page
 //   D  EDITOR    opening the text editor must not change the rendered size
+//   E  PACKING   the box must hug the text that is actually DRAWN
 //
 // Drives the real UI: selection through the light-DOM [data-cd-idx] hitboxes
 // (not the shadow nodes), page nav through the ‹ › buttons, values read from
@@ -114,6 +115,24 @@ try {
     const sr = document.querySelector("#canvas-host expandable-magazine-banner")?.shadowRoot;
     return sr?.querySelector('[data-layout-idx="1"]')?.style.fontSize ?? null;
   });
+  // How much of its box the DRAWN text fills, 0..1. Measured with a Range
+  // over the element's contents, the same way packTextItemHeight measures —
+  // scrollHeight is floored at clientHeight so it cannot see a gap.
+  const packRatio = () => page.evaluate(() => {
+    const sr = document.querySelector("#canvas-host expandable-magazine-banner")?.shadowRoot;
+    const el = sr?.querySelector('[data-layout-idx="1"]');
+    if (!el) return null;
+    const box = el.getBoundingClientRect().height;
+    if (!(box > 0)) return null;
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const rects = [...range.getClientRects()];
+    if (rects.length === 0) return null;
+    const top = Math.min(...rects.map((r) => r.top));
+    const bottom = Math.max(...rects.map((r) => r.bottom));
+    return (bottom - top) / box;
+  });
+
   const nav = async (d) => {
     await page.evaluate((x) => [...document.querySelectorAll("button")]
       .find((b) => b.textContent?.trim() === x)?.click(), d);
@@ -136,6 +155,16 @@ try {
   check("fixture renders CLAMPED (rendered < authored)",
     Number.isFinite(seededRender) && seededRender < Number(seeded) - 0.05,
     `rendered ${seededRender} vs authored ${seeded}`);
+
+  // ── E: the box must hug what is DRAWN, not what was authored ────────────
+  // packTextItemHeight measures against item.fontSize ("at full size, not
+  // shrunken"), which was right while one number meant both things. Split
+  // the authored size from the drawn one and the box gets sized for text
+  // that is no longer there — correct font size, oversized box, words not
+  // packed. Reported live; A-D all passed while this was broken.
+  const pack = await packRatio();
+  check("E  box hugs the drawn text", pack !== null && pack > 0.6,
+    `text fills ${pack === null ? "?" : Math.round(pack * 100) + "%"} of its box`);
 
   // ── B: selecting must not change the rendered size ──────────────────────
   const beforeClick = await renderedSize();
