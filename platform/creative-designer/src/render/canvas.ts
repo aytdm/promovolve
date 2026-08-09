@@ -367,6 +367,23 @@ function measureTextHeights(
 // not commit() (a derived value, not its own undo step), 0.1 tolerance
 // to avoid re-render thrash. Only data-autofit items are touched —
 // textFit:"clip" and height-less items render at the authored size.
+// The item whose font size the author is actively editing, or null.
+//
+// The sync below only ever shrinks, and it writes back to the store — so
+// while you drag a size UP past what currently fits, autoFitText clamps the
+// render and this hands the clamped value back as the authored one. The
+// number you typed reverts under you, and nothing says the box was the
+// constraint. The box IS grown to fit, but only at commit
+// (mutateFontSize → packTextItemHeight), so without this guard the value
+// cannot survive the keystrokes in between.
+//
+// Set for the duration of one edit interaction; cleared on commit.
+let fontSizeEditIdx: number | null = null;
+
+export function setFontSizeEditing(idx: number | null): void {
+  fontSizeEditIdx = idx;
+}
+
 export function syncAutoFitFontSizes(
   banner: HTMLElement, store: Store, filter: number[] | null, retry = true,
 ): void {
@@ -386,6 +403,10 @@ export function syncAutoFitFontSizes(
   for (const idx of indices) {
     const item = items[idx];
     if (!item || item.type !== "text") continue;
+    // Mid-edit: leave the authored value alone. Growing past the current
+    // box is a legitimate edit — the box follows at commit — and writing
+    // the clamped render back here is what made increases impossible.
+    if (idx === fontSizeEditIdx) continue;
     const el = shadow.querySelector<HTMLElement>(`[data-layout-idx="${idx}"]`);
     if (!el || el.dataset.autofit !== "1") continue; // only autofitted items
     const fitted = parseFloat(el.style.fontSize); // "<n>cqmax" → n

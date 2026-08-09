@@ -14,7 +14,7 @@
 //     (one undo step per completed edit)
 
 import { refitItemCropToBox } from "../auto-crop";
-import { canvasBoxPx, packReaderFieldBoxes, packTextItemHeight } from "../render/canvas";
+import { canvasBoxPx, packReaderFieldBoxes, packTextItemHeight, setFontSizeEditing } from "../render/canvas";
 import { charsAlongAxis, fontSizeControlRange, renderedPx, rescaleForWritingMode } from "../font-size-scale";
 import { isMultiPage } from "../modes";
 import { currentItem, currentLayout, currentPage, fieldColorSyncKey, hasLocalTextOverride, isFieldColorSynced, propagateTypography, setItemContent, setReaderFieldFontSize, setSyncFieldColor, TYPO_SYNC_KEYS, updateItem } from "../state";
@@ -138,6 +138,12 @@ export function mountPropsPanel(container: HTMLElement, store: Store): PropsPane
 }
 
 function build(panel: HTMLElement, idx: number, item: LayoutItem, store: Store): RenderedState {
+  // A rebuild means the selection (or panel structure) changed, so any
+  // font-size edit in flight is over. `change` doesn't always fire to end
+  // it — typing a value and restoring the original before clicking away
+  // fires nothing — and a stale marker would suppress that item's autofit
+  // write-back for the rest of the session.
+  setFontSizeEditing(null);
   panel.innerHTML = "";
   const setters: Record<string, (item: LayoutItem) => void> = {};
 
@@ -292,8 +298,17 @@ function build(panel: HTMLElement, idx: number, item: LayoutItem, store: Store):
         const cur = currentLayout(store.state)[idx];
         fontSizeBaseline = cur && cur.type === "text" ? (cur.fontSize ?? 5) : v;
       }
+      // Hold off the autofit write-back for the length of this edit, so a
+      // size larger than the current box survives to commit instead of
+      // being handed back clamped on the next render. packTextItemHeight
+      // (below, on commit) then grows the box to the size actually asked
+      // for — the number you type is the number you keep.
+      setFontSizeEditing(idx);
       mutateFontSize(store, idx, v, fontSizeBaseline, c);
-      if (c) fontSizeBaseline = null;
+      if (c) {
+        fontSizeBaseline = null;
+        setFontSizeEditing(null);
+      }
     },
     undefined, undefined, undefined,
     // The number is in cqmax — 1% of the LARGER canvas side — which tells
