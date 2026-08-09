@@ -5,7 +5,7 @@
 // (drag/resize/rotate/marquee/motion) lives in render/overlay.ts.
 
 import type { DesignerState, LayoutItem, Page } from "../types";
-import { currentLayout, fitReaderFieldBoxes, currentPage, setReaderFieldFontSize, updateItem } from "../state";
+import { currentLayout, fitReaderFieldBoxes, currentPage, updateItem } from "../state";
 import { isSized, isMultiPage, type Mode } from "../modes";
 import type { Store } from "../store";
 import { tokens } from "../ui/tokens";
@@ -170,6 +170,25 @@ function fontSyncIndices(prev: DesignerState, next: DesignerState): number[] {
  * the canvas mounts; callers should fall back to leaving the control alone
  * rather than guessing a size.
  */
+/**
+ * The size an item is ACTUALLY rendering at, in cqmax — i.e. after
+ * autoFitText clamped it and harmonizeAutofit pinned the field group to
+ * its tightest member. Null when the item isn't autofitted or hasn't been
+ * stamped yet.
+ *
+ * The store deliberately no longer chases this value (see the field-bound
+ * branch in syncAutoFitFontSizes), so the authored number and the render
+ * can legitimately disagree. This is how the props panel tells the author
+ * that, instead of leaving them to wonder why a size "doesn't take".
+ */
+export function renderedFontSizeCqmax(idx: number): number | null {
+  const banner = document.querySelector<HTMLElement>("#canvas-host expandable-magazine-banner");
+  const el = banner?.shadowRoot?.querySelector<HTMLElement>(`[data-layout-idx="${idx}"]`);
+  if (!el || el.dataset.autofit !== "1") return null;
+  const fitted = parseFloat(el.style.fontSize);
+  return Number.isFinite(fitted) && fitted > 0 ? fitted : null;
+}
+
 export function canvasBoxPx(): { w: number; h: number } | null {
   const banner = document.querySelector<HTMLElement>("#canvas-host expandable-magazine-banner");
   const stage = banner?.shadowRoot?.querySelector<HTMLElement>(".design-box");
@@ -417,23 +436,33 @@ export function syncAutoFitFontSizes(
     const rounded = Math.round(fitted * 10) / 10;
     const current = item.fontSize ?? 5;
     if (Math.abs(current - rounded) < 0.1) continue; // no-op within tolerance
-    // Field-bound reader text: write the fitted size to the SAME field on
-    // EVERY page, not just this one. The page-1-master subscriber
-    // (syncTypographyFromPage1) instantly reverts a lone page-2/3 write
-    // back to the master's value — which is exactly the "text enlarges
-    // when clicked on page 2/3" bug: the DOM shows the fitted size while
-    // the store keeps snapping back to page 1's bigger one. Converging
-    // all pages (setReaderFieldFontSize) makes the subscriber a no-op,
-    // and matches delivery, where harmonizeAutofit pins the field group
-    // to the smallest fitted size across pages anyway.
+    // Field-bound reader text: DON'T persist the fitted size at all.
+    //
+    // This used to write it to the field on EVERY page, to stop the
+    // page-1-master subscriber (syncTypographyFromPage1) reverting a lone
+    // page-2/3 write — the "text enlarges when clicked on page 2/3" bug.
+    // But by the time we read el.style.fontSize, harmonizeAutofit has
+    // already pinned the whole field group to the TIGHTEST page's fitted
+    // size. Persisting that turned a render-time floor into authored data
+    // on every page, and since autofit only ever SHRINKS, nothing could
+    // bring it back: each edit ratcheted the field down to whatever the
+    // worst-fitting page needed at that instant, permanently. Lengthen
+    // page 1's body and pages 2 and 3 collapse with it — reported live,
+    // and vertical-rl makes it dramatic, because columns overflow the box
+    // width fast and the binary search lands far lower than horizontal
+    // text would.
+    //
+    // The tug-of-war the old code was solving only existed BECAUSE the
+    // store chased the DOM. Autofit and harmonize are display concerns;
+    // the store keeps the authored size, page 1 stays the master, and
+    // there is no lone write for the subscriber to revert. The props
+    // panel now shows what was authored, and its hint says when the
+    // render is being clamped (see the font size field).
     const field = (item as { field?: string }).field;
-    if (field && isMultiPage(store.state.mode)) {
-      next = setReaderFieldFontSize(next, field, rounded);
-    } else {
-      next = updateItem(next, idx, (it): LayoutItem =>
-        it.type === "text" ? { ...it, fontSize: rounded } : it,
-      );
-    }
+    if (field && isMultiPage(store.state.mode)) continue;
+    next = updateItem(next, idx, (it): LayoutItem =>
+      it.type === "text" ? { ...it, fontSize: rounded } : it,
+    );
     changed = true;
   }
   if (changed) store.replace(next);

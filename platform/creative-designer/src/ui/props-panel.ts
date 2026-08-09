@@ -14,7 +14,7 @@
 //     (one undo step per completed edit)
 
 import { refitItemCropToBox } from "../auto-crop";
-import { canvasBoxPx, packReaderFieldBoxes, packTextItemHeight, setFontSizeEditing } from "../render/canvas";
+import { canvasBoxPx, packReaderFieldBoxes, packTextItemHeight, renderedFontSizeCqmax, setFontSizeEditing } from "../render/canvas";
 import { charsAlongAxis, fontSizeControlRange, renderedPx, rescaleForWritingMode } from "../font-size-scale";
 import { isMultiPage } from "../modes";
 import { currentItem, currentLayout, currentPage, fieldColorSyncKey, hasLocalTextOverride, isFieldColorSynced, propagateTypography, setItemContent, setReaderFieldFontSize, setSyncFieldColor, TYPO_SYNC_KEYS, updateItem } from "../state";
@@ -321,7 +321,17 @@ function build(panel: HTMLElement, idx: number, item: LayoutItem, store: Store):
       const size = (it as { fontSize?: number }).fontSize ?? 5;
       const px = Math.round(renderedPx(size, box));
       const chars = charsAlongAxis(size, box, vertical);
-      return `≈ ${px}px · about ${chars} ${chars === 1 ? "character" : "characters"} ${vertical ? "down" : "across"}`;
+      const base = `≈ ${px}px · about ${chars} ${chars === 1 ? "character" : "characters"} ${vertical ? "down" : "across"}`;
+      // The store keeps the AUTHORED size; autofit clamps the render and,
+      // across reader pages, harmonize pins the group to its tightest
+      // member. Those are display decisions and are no longer written
+      // back, so the two can disagree — say so rather than let the field
+      // look like it didn't take.
+      const fitted = renderedFontSizeCqmax(idx);
+      if (fitted != null && fitted < size - 0.1) {
+        return `${base} — showing ${Math.round(renderedPx(fitted, box))}px to fit its box`;
+      }
+      return base;
     },
     // Bounds follow the writing mode: on a leaderboard, vertical text tops
     // out an order of magnitude lower than horizontal, and one step is a
