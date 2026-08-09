@@ -49,7 +49,7 @@ import { itemBoundsPct, type BoundsPct } from "../geometry";
 import { copy, duplicate, hasClipboard, paste } from "../interaction/clipboard";
 import { openContextMenu, type MenuEntry } from "../ui/context-menu";
 import { tokens } from "../ui/tokens";
-import { packTextItemHeight, renderedFontSizeCqmax, syncAutoFitFontSizes } from "./canvas";
+import { packTextItemHeight, syncAutoFitFontSizes } from "./canvas";
 
 const SELECTION_COLOR = tokens.amber;
 
@@ -578,16 +578,7 @@ function startInlineTextEdit(
   // text is longer than one canvas-width line does it wrap and grow taller —
   // all at full font size. The blur re-fit (packTextItemHeight) then stamps
   // the same width/height. Restored on cancel.
-  // Open the editor at the size the screen is ALREADY showing, not the
-  // authored one. autoFitText may have clamped this element, and across
-  // reader pages harmonizeAutofit pins the field group to its tightest
-  // member — neither is written back to the store any more (that
-  // write-back was a one-way ratchet: see syncAutoFitFontSizes). So the
-  // authored value can legitimately be larger than what is rendered, and
-  // stamping it here is what makes the text visibly jump the moment you
-  // click into it. Read the rendered size instead; the store keeps the
-  // authored one untouched.
-  el.style.fontSize = `${renderedFontSizeCqmax(idx) ?? item.fontSize ?? 5}cqmax`;
+  el.style.fontSize = `${item.fontSize ?? 5}cqmax`;
   el.style.width = "max-content";
   el.style.maxWidth = `${100 - (item.left ?? 0)}%`;
   // Hide the overlay completely — its hitboxes' pointer-events: auto
