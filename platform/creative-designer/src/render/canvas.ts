@@ -5,7 +5,7 @@
 // (drag/resize/rotate/marquee/motion) lives in render/overlay.ts.
 
 import type { DesignerState, LayoutItem, Page } from "../types";
-import { currentLayout, fitReaderFieldBoxes, currentPage, setReaderFieldFontSize, updateItem } from "../state";
+import { currentLayout, fitReaderFieldBoxes, currentPage, updateItem } from "../state";
 import { isSized, isMultiPage, type Mode } from "../modes";
 import type { Store } from "../store";
 import { tokens } from "../ui/tokens";
@@ -386,9 +386,22 @@ export function syncAutoFitFontSizes(
     // all pages (setReaderFieldFontSize) makes the subscriber a no-op,
     // and matches delivery, where harmonizeAutofit pins the field group
     // to the smallest fitted size across pages anyway.
+    // Field-bound reader text: never persist the fitted size.
+    //
+    // autoFitText only SHRINKS, and page 1 is the master for fontSize
+    // (PAGE1_SYNCED_KEYS), so any fitted value entering the store gets
+    // propagated to every reader page and can never rise again — a one-way
+    // ratchet. Squeeze page 1's body box and pages 2 and 3 follow it down,
+    // permanently. Covered by tests/ratchet/run.mjs assertion A.
+    //
+    // Autofit stays a DISPLAY clamp: the store keeps what the author chose,
+    // the box hugs that text, and a deliberate size change still reaches
+    // every page through mutateFontSize -> setReaderFieldFontSize
+    // (assertion C). Nothing here needs to write for the render to be
+    // right, which is what the old code was really compensating for.
     const field = (item as { field?: string }).field;
     if (field && isMultiPage(store.state.mode)) {
-      next = setReaderFieldFontSize(next, field, rounded);
+      continue;
     } else {
       next = updateItem(next, idx, (it): LayoutItem =>
         it.type === "text" ? { ...it, fontSize: rounded } : it,
