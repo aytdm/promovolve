@@ -44,34 +44,6 @@ export function setZoom(state: DesignerState, zoom: number): DesignerState {
 
 // ─── Selectors ──────────────────────────────────────────────────────
 
-/**
- * Drop DERIVED fields before persisting.
- *
- * `fittedFontSize` is the size auto-fit currently draws a text item at. It
- * belongs to a particular box, in a particular view, at a particular moment
- * — saving it would hand the next session a stale number and render text
- * small in a box that has since grown. The authored `fontSize` is the
- * document; the fitted value is re-derived on every render.
- *
- * Covers `layout` and every `banners[*]` bucket, since reader and sized
- * surfaces both carry text items.
- */
-export function stripDerivedFields(pages: Page[]): Page[] {
-  const clean = (arr?: LayoutItem[]): LayoutItem[] | undefined => {
-    if (!arr) return arr;
-    return arr.map((it) => {
-      if (it.type !== "text") return it;
-      const { fittedFontSize: _drop, ...rest } = it as LayoutItem & { fittedFontSize?: number };
-      return rest as LayoutItem;
-    });
-  };
-  return pages.map((page) => {
-    const banners: Record<string, LayoutItem[]> = {};
-    for (const [k, arr] of Object.entries(page.banners ?? {})) banners[k] = clean(arr) ?? [];
-    return { ...page, layout: clean(page.layout), banners };
-  });
-}
-
 export function currentPage(state: DesignerState): Page | null {
   return state.pages[state.pageIdx] ?? null;
 }
@@ -235,11 +207,7 @@ export function setReaderFieldFontSize(
         if (it.type !== "text" || (it as { field?: string }).field !== field) return it;
         if ((it as unknown as { fontSize?: number }).fontSize === size) return it;
         pageChanged = true;
-        // Clear each page's DERIVED size too: this is an authored change,
-        // so every page should draw the new value and re-derive its own fit
-        // from it. Leaving a stale fitted size here would let the other
-        // pages keep drawing the old shrunken number.
-        return { ...it, fontSize: size, fittedFontSize: undefined } as LayoutItem;
+        return { ...it, fontSize: size } as LayoutItem;
       });
       if (!pageChanged) return page;
       surfChanged = true;

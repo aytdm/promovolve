@@ -578,14 +578,7 @@ function startInlineTextEdit(
   // text is longer than one canvas-width line does it wrap and grow taller —
   // all at full font size. The blur re-fit (packTextItemHeight) then stamps
   // the same width/height. Restored on cancel.
-  // Open the editor at the size the text is DRAWN at, not the authored one.
-  // With the two-number split those can legitimately differ — the box is
-  // clamping the copy — and stamping the authored value is what made the
-  // text visibly jump the moment you clicked into it. Falls back to the
-  // authored size when auto-fit hasn't derived one. Covered by
-  // tests/ratchet/run.mjs assertion D.
-  const editingSize = (item as { fittedFontSize?: number }).fittedFontSize ?? item.fontSize ?? 5;
-  el.style.fontSize = `${editingSize}cqmax`;
+  el.style.fontSize = `${item.fontSize ?? 5}cqmax`;
   el.style.width = "max-content";
   el.style.maxWidth = `${100 - (item.left ?? 0)}%`;
   // Hide the overlay completely — its hitboxes' pointer-events: auto

@@ -11,7 +11,6 @@
 
 import { parseAspect } from "../math";
 import { MODES } from "../modes";
-import { stripDerivedFields } from "../state";
 import { fanoutStatus } from "../state/fanout";
 import type { Store } from "../store";
 import type { DesignerContext } from "../types";
@@ -211,7 +210,7 @@ function submitSave(store: Store, ctx: DesignerContext, draft: boolean): void {
   add("campaignId", ctx.campaignId);
   add("name", ctx.creativeName || "Creative");
   add("landingUrl", ctx.landingUrl);
-  add("pagesJson", JSON.stringify(stripDerivedFields(store.state.pages)));
+  add("pagesJson", JSON.stringify(store.state.pages));
   add("bannerConfigJson", JSON.stringify(store.state.bannerConfig));
   add("width", String(w));
   add("height", String(h));
