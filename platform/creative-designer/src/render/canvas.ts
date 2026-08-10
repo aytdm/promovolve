@@ -3,9 +3,20 @@
 // banner component renders the creative — we're just hosting it and
 // keeping its attributes in sync with state changes. Interaction
 // (drag/resize/rotate/marquee/motion) lives in render/overlay.ts.
+//
+// AUTHORED SIZE IS NEVER OVERWRITTEN. autoFitText (banner-component
+// motion.ts) shrinks copy that overflows its box and stamps the result on
+// el.style.fontSize — a RENDER-time clamp, so a too-long headline can never
+// blow out a fixed IAB slot at delivery. Nothing reads that result back into
+// item.fontSize. An earlier version did (syncAutoFitFontSizes), so the store
+// chased the DOM: the fitted size became the authored size, autofit only ever
+// shrinks, and the number ratcheted down every edit — across all three reader
+// pages, since field-bound sizes sync. It also ate deliberate edits (type 9,
+// get 6 back). The props panel now shows what the author chose and reports
+// the drawn size separately when the two differ.
 
 import type { DesignerState, LayoutItem, Page } from "../types";
-import { currentLayout, fitReaderFieldBoxes, currentPage, setReaderFieldFontSize, updateItem } from "../state";
+import { currentLayout, fitReaderFieldBoxes, currentPage, updateItem } from "../state";
 import { isSized, isMultiPage, type Mode } from "../modes";
 import type { Store } from "../store";
 import { tokens } from "../ui/tokens";
@@ -49,48 +60,27 @@ export function mountCanvas(container: HTMLElement, state: DesignerState, store?
     banner,
     update(next) {
       // A mode/page switch swaps in a different layout, so the index-based
-      // diff below is meaningless (textRemeasure/fontSync bail on it). But the
-      // newly shown format still needs its autofit-fitted sizes captured into
-      // the store — exactly like first paint — otherwise a collapsed bucket
-      // keeps its (too-big) authored preset fontSize in the store while the DOM
-      // only LOOKS shrunk, and the next selection re-render snaps the text back
-      // to that authored size ("text jumps huge on click").
+      // diff below is meaningless (textRemeasure bails on it) — the newly
+      // shown format just gets the boot-path measure for its unstamped boxes.
       const viewSwitched = prevState.mode.key !== next.mode.key || prevState.pageIdx !== next.pageIdx;
       const needsRemeasure = textRemeasureIndices(prevState, next);
-      const needsFontSync = fontSyncIndices(prevState, next);
       applyState(wrap, banner, next);
       prevState = next;
       if (store && viewSwitched) {
-        requestAnimationFrame(() => {
-          measureTextHeights(banner, store!, null);
-          requestAnimationFrame(() => syncAutoFitFontSizes(banner, store!, null));
-        });
-      } else if (store && (needsRemeasure.length > 0 || needsFontSync.length > 0)) {
-        requestAnimationFrame(() => {
-          // Font sync FIRST: it reads the auto-fitted el.style.fontSize off
-          // the DOM the banner just settled this frame. measureTextHeights
-          // can store.replace() → re-render synchronously, so reading before
-          // it guarantees a clean post-autofit DOM.
-          if (needsFontSync.length > 0) syncAutoFitFontSizes(banner, store!, needsFontSync);
-          if (needsRemeasure.length > 0) measureTextHeights(banner, store!, needsRemeasure);
-        });
+        requestAnimationFrame(() => measureTextHeights(banner, store!, null));
+      } else if (store && needsRemeasure.length > 0) {
+        requestAnimationFrame(() => measureTextHeights(banner, store!, needsRemeasure));
       }
     },
   };
 
   applyState(wrap, banner, state);
 
-  // First paint: measure every unstamped text item so the bounding
-  // box hugs the text, then capture any auto-fit shrink so the props
-  // panel reflects the effective size. Subsequent edits go through
-  // textRemeasureIndices / fontSyncIndices above.
+  // First paint: measure every unstamped text item so the bounding box
+  // hugs the text. Subsequent edits go through textRemeasureIndices above.
+  // Nothing reads the auto-fitted size back — see the note on autofit below.
   if (store) {
-    requestAnimationFrame(() => {
-      measureTextHeights(banner, store, null);
-      // Second rAF: read font sizes after measureTextHeights' re-render
-      // (and its scheduled autofit) has settled.
-      requestAnimationFrame(() => syncAutoFitFontSizes(banner, store, null));
-    });
+    requestAnimationFrame(() => measureTextHeights(banner, store, null));
   }
   return handle;
 }
@@ -114,37 +104,6 @@ function textRemeasureIndices(prev: DesignerState, next: DesignerState): number[
       || a.fontSize !== b.fontSize
       || a.fontFamily !== b.fontFamily
       || a.width !== b.width
-      || a.writingMode !== b.writingMode
-    ) {
-      out.push(i);
-    }
-  }
-  return out;
-}
-
-// Text items whose auto-fit RESULT may have changed since the last
-// render — i.e. anything that affects whether the copy fits its box:
-// the copy itself, the box geometry (width AND height — height is what
-// edge-handle resizes change, and textRemeasureIndices ignores it),
-// the font family/size, or the writing mode. syncAutoFitFontSizes reads
-// the post-autofit size back for these so the props-panel font-size
-// field tracks the rendered size. Returns indices; empty = no sync.
-function fontSyncIndices(prev: DesignerState, next: DesignerState): number[] {
-  if (prev === next) return [];
-  if (prev.pageIdx !== next.pageIdx || prev.mode.key !== next.mode.key) return [];
-  const prevItems = currentLayout(prev);
-  const nextItems = currentLayout(next);
-  const out: number[] = [];
-  for (let i = 0; i < nextItems.length; i++) {
-    const a = prevItems[i];
-    const b = nextItems[i];
-    if (!b || b.type !== "text") continue;
-    if (!a || a.type !== "text") { out.push(i); continue; }
-    if (a.text !== b.text
-      || a.fontSize !== b.fontSize
-      || a.fontFamily !== b.fontFamily
-      || a.width !== b.width
-      || a.height !== b.height
       || a.writingMode !== b.writingMode
     ) {
       out.push(i);
@@ -333,72 +292,6 @@ function measureTextHeights(
     changed = true;
   }
   if (changed) store.replace(next);
-}
-
-// Read the auto-fitted font-size the banner stamped onto each text
-// element and write it back into the store, so the props-panel
-// "font size" field shows the EFFECTIVE rendered size rather than the
-// authored value. autoFitText (motion.ts) shrinks an overflowing text
-// item to fit its box and writes the result to el.style.fontSize in
-// cqmax — the same unit item.fontSize uses (layout-item.ts) — so the
-// two are directly comparable. It only ever SHRINKS, so this can only
-// reduce fontSize; a box that's later grown keeps the smaller size (no
-// separate authored ceiling is retained — the chosen "match what's
-// rendered" model). Mirrors measureTextHeights: post-render, replace()
-// not commit() (a derived value, not its own undo step), 0.1 tolerance
-// to avoid re-render thrash. Only data-autofit items are touched —
-// textFit:"clip" and height-less items render at the authored size.
-export function syncAutoFitFontSizes(
-  banner: HTMLElement, store: Store, filter: number[] | null, retry = true,
-): void {
-  const shadow = banner.shadowRoot;
-  if (!shadow) return;
-  const items = currentLayout(store.state);
-  let next = store.state;
-  let changed = false;
-  // Autofit-tagged elements whose inline font-size hasn't been stamped
-  // yet: we read the DOM BEFORE the banner's own autofit rAF ran (the
-  // desktop expanded overlay schedules its pass in a separate frame).
-  // Reading now would silently keep the stale authored size in the
-  // store — the source of the "text jumps huge on click" mismatch — so
-  // retry those indices once on the next frame instead.
-  const unstamped: number[] = [];
-  const indices = filter ?? items.map((_, i) => i);
-  for (const idx of indices) {
-    const item = items[idx];
-    if (!item || item.type !== "text") continue;
-    const el = shadow.querySelector<HTMLElement>(`[data-layout-idx="${idx}"]`);
-    if (!el || el.dataset.autofit !== "1") continue; // only autofitted items
-    const fitted = parseFloat(el.style.fontSize); // "<n>cqmax" → n
-    if (!Number.isFinite(fitted) || fitted <= 0) {
-      if (retry) unstamped.push(idx);
-      continue;
-    }
-    const rounded = Math.round(fitted * 10) / 10;
-    const current = item.fontSize ?? 5;
-    if (Math.abs(current - rounded) < 0.1) continue; // no-op within tolerance
-    // Field-bound reader text: write the fitted size to the SAME field on
-    // EVERY page, not just this one. The page-1-master subscriber
-    // (syncTypographyFromPage1) instantly reverts a lone page-2/3 write
-    // back to the master's value — which is exactly the "text enlarges
-    // when clicked on page 2/3" bug: the DOM shows the fitted size while
-    // the store keeps snapping back to page 1's bigger one. Converging
-    // all pages (setReaderFieldFontSize) makes the subscriber a no-op,
-    // and matches delivery, where harmonizeAutofit pins the field group
-    // to the smallest fitted size across pages anyway.
-    const field = (item as { field?: string }).field;
-    if (field && isMultiPage(store.state.mode)) {
-      next = setReaderFieldFontSize(next, field, rounded);
-    } else {
-      next = updateItem(next, idx, (it): LayoutItem =>
-        it.type === "text" ? { ...it, fontSize: rounded } : it,
-      );
-    }
-    changed = true;
-  }
-  if (changed) store.replace(next);
-  if (unstamped.length > 0)
-    requestAnimationFrame(() => syncAutoFitFontSizes(banner, store, unstamped, /*retry=*/ false));
 }
 
 // Zoom that fits a format into the canvas viewport, capped at 1× so small

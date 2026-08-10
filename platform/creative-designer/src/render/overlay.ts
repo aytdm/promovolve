@@ -49,7 +49,7 @@ import { itemBoundsPct, type BoundsPct } from "../geometry";
 import { copy, duplicate, hasClipboard, paste } from "../interaction/clipboard";
 import { openContextMenu, type MenuEntry } from "../ui/context-menu";
 import { tokens } from "../ui/tokens";
-import { packTextItemHeight, syncAutoFitFontSizes } from "./canvas";
+import { packTextItemHeight } from "./canvas";
 
 const SELECTION_COLOR = tokens.amber;
 
@@ -257,26 +257,16 @@ export function mountOverlay(canvasWrap: HTMLElement, store: Store): OverlayHand
     openContextMenu(e.clientX, e.clientY, buildMenu(store));
   });
 
-  // Fit-the-box-to-text fires when a text item BECOMES the single
-  // selection — driven by selection state, not the pointer event, so it
-  // isn't swallowed by the click→edit-mode path (clicking an already-
-  // selected text box enters inline edit and never reaches the select
-  // branch). Keyed by (page, mode, idx) so re-selecting the same item
-  // (e.g. entering edit mode) doesn't re-fit and spam undo.
-  let lastFitKey: string | null = null;
+  // SELECTION DOES NOT RESIZE ANYTHING. Clicking a text item used to run
+  // fit-box-to-text, which measures at the AUTHORED font size — so selecting
+  // a box whose copy autoFitText had shrunk grew the box until the text fit
+  // at full size, and the text visibly jumped bigger on click. That was
+  // invisible only while the store chased the DOM (authored == fitted made
+  // the pack a no-op); with the author's size preserved it is the "selecting
+  // text enlarges" bug. Fitting is an explicit gesture now: the props-panel
+  // Fit button, and the re-fit after an inline text edit.
   const handle: OverlayHandle = {
     update(state) {
-      const sel = state.selectedItemIdxs.length === 1 ? state.selectedItemIdxs[0]! : null;
-      const selItem = sel !== null ? currentLayout(state)[sel] : null;
-      if (sel !== null && selItem?.type === "text") {
-        const key = `${state.pageIdx}|${state.mode.key}|${sel}`;
-        if (key !== lastFitKey) {
-          lastFitKey = key;
-          fitTextItem(store, sel);
-        }
-      } else {
-        lastFitKey = null;
-      }
       renderOverlay(root, state);
     },
   };
@@ -532,18 +522,6 @@ function startInlineTextEdit(
   );
   const shadow = banner?.shadowRoot;
   if (!shadow) return;
-  // Reconcile the store with the DOM's auto-fitted size BEFORE editing.
-  // autoFitText may have shrunk this element after the regular
-  // post-render sync read the DOM (the expanded overlay's autofit runs
-  // in its own rAF), leaving item.fontSize at the larger authored value
-  // — editing at that would visibly ENLARGE the text the moment the
-  // editor opens, and the blur re-pack would then grow the box to
-  // match, making the jump permanent. Syncing here is a replace() of a
-  // value the screen already shows, so nothing visibly changes; the
-  // editor then opens at exactly the on-screen size.
-  syncAutoFitFontSizes(banner as HTMLElement, store, [idx], /*retry=*/ false);
-  const freshItem = currentLayout(store.state)[idx];
-  if (freshItem && freshItem.type === "text") item = freshItem;
   const el = shadow.querySelector<HTMLElement>(`[data-layout-idx="${idx}"]`);
   if (!el || el.isContentEditable) return;
 
@@ -571,14 +549,20 @@ function startInlineTextEdit(
   // stamps the correct height when the edit lands. Restored on cancel.
   el.style.height = "auto";
   el.style.overflow = "visible";
-  // Widen-while-typing: edit at the AUTHORED font size and let the box grow
-  // with the content (max-content) up to the canvas edge (max-width = the
-  // space from the box's left to the right edge). So the orange box widens
-  // live as you type instead of wrapping at the old width; only once the
-  // text is longer than one canvas-width line does it wrap and grow taller —
-  // all at full font size. The blur re-fit (packTextItemHeight) then stamps
-  // the same width/height. Restored on cancel.
-  el.style.fontSize = `${item.fontSize ?? 5}cqmax`;
+  // Widen-while-typing: let the box grow with the content (max-content) up
+  // to the canvas edge (max-width = the space from the box's left to the
+  // right edge). So the orange box widens live as you type instead of
+  // wrapping at the old width; only once the text is longer than one
+  // canvas-width line does it wrap and grow taller. The blur re-fit
+  // (packTextItemHeight) then stamps the same width/height.
+  //
+  // Edit at the size CURRENTLY ON SCREEN, not the authored one. Where
+  // autoFitText has clamped the copy the two differ, and stamping the
+  // authored value would visibly enlarge the text the instant the editor
+  // opens — the "text jumps huge on click" report. autoFitText already left
+  // its fitted size on el.style.fontSize, so leaving it alone is exactly
+  // "no jump"; only a never-fitted element needs the authored fallback.
+  if (!parseFloat(el.style.fontSize)) el.style.fontSize = `${item.fontSize ?? 5}cqmax`;
   el.style.width = "max-content";
   el.style.maxWidth = `${100 - (item.left ?? 0)}%`;
   // Hide the overlay completely — its hitboxes' pointer-events: auto

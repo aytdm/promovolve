@@ -294,6 +294,7 @@ function build(panel: HTMLElement, idx: number, item: LayoutItem, store: Store):
       mutateFontSize(store, idx, v, fontSizeBaseline, c);
       if (c) fontSizeBaseline = null;
     });
+    setters.__fitNote = fitNote(typo, idx);
     setters.lineHeight = numberField(typo, "line height", item.lineHeight ?? 1.2,
       (v, c) => mutate(store, idx, (it) => ({ ...it, lineHeight: v }), c), 0.5, 3);
     setters.textAlign = selectField(typo, "align", item.textAlign ?? "left",
@@ -711,6 +712,40 @@ function numberField(
     if (document.activeElement === input) return; // don't clobber user edits
     const v = read ? read(item) : readFieldValue(item, label);
     if (v !== undefined && input.value !== String(v)) input.value = String(v);
+  };
+}
+
+// "drawn at ≈N" — the render-time clamp, made visible.
+//
+// The document keeps the size the author chose; autoFitText shrinks copy that
+// overflows its box and stamps the result on the element, so a too-long
+// headline can't blow out a fixed slot at delivery (render/canvas.ts explains
+// why nothing reads that back). The cost of that split is a size field whose
+// number isn't always what's on screen — without this note the author types 9,
+// sees nothing move, and has no way to learn the box is the constraint.
+//
+// Read from the DOM, never from the store, and two frames late: the banner
+// schedules its own autofit sweep in a rAF, so one frame still shows the
+// pre-shrink value.
+function fitNote(parent: HTMLElement, idx: number): (item: LayoutItem) => void {
+  const note = document.createElement("div");
+  note.style.cssText = `color:${tokens.amber};font-size:11px;margin:-2px 0 6px 88px;display:none;`;
+  appendToGroup(parent, note);
+  let pending = false;
+  return (item) => {
+    if (item.type !== "text" || pending) return;
+    pending = true;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      pending = false;
+      const el = document
+        .querySelector<HTMLElement>("#canvas-host expandable-magazine-banner")
+        ?.shadowRoot?.querySelector<HTMLElement>(`[data-layout-idx="${idx}"]`);
+      const drawn = el ? parseFloat(el.style.fontSize) : NaN;
+      const authored = item.fontSize ?? 5;
+      const clamped = Number.isFinite(drawn) && drawn > 0 && drawn < authored - 0.05;
+      note.style.display = clamped ? "block" : "none";
+      if (clamped) note.textContent = `drawn at ≈${drawn.toFixed(1)} — the box is too small`;
+    }));
   };
 }
 

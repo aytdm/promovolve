@@ -14,6 +14,8 @@
 //   C  SYNC      a DELIBERATE size change must still reach every reader page
 //   D  EDITOR    opening the text editor must not change the rendered size
 //   E  PACKING   the box must hug the text that is actually DRAWN
+//   F  STICKS    an authored size the box can't honour must survive anyway
+//   G  HONEST    …and the panel must SAY it's being clamped
 //
 // Drives the real UI: selection through the light-DOM [data-cd-idx] hitboxes
 // (not the shadow nodes), page nav through the ‹ › buttons, values read from
@@ -48,7 +50,11 @@ const fixture = {
   creativeName: "ratchet", bannerSize: "expanded", bannerScriptUrl: "",
   creativeId: "", lpTextSnapshot: "", brandKitJson: "", templateId: "",
   pages: [1, 2, 3].map((n) => ({
-    headline: `Page ${n}`, body: LONG, tag: "T",
+    // The headline is long enough that a big authored size CANNOT fit its
+    // box — F/G test that such a size survives anyway and is reported as
+    // clamped. A short headline fits everything and skips G.
+    headline: `Page ${n}: a headline too long for its box at full size`,
+    body: LONG, tag: "T",
     banners: { "mobile-expanded": [txt("headline", 8, 6, 20), txt("body", 35, 4, 12)] },
   })),
 };
@@ -84,16 +90,33 @@ try {
   await page.goto(APP_URL, { waitUntil: "networkidle" });
   await page.waitForTimeout(2500);
 
+  // Click NEAR THE TOP EDGE, not the centre: hitboxes overlap once a box
+  // grows (a headline sized up to 9 covers the body's box, and the body's
+  // hitbox paints later, so a centre click selects the wrong item and the
+  // assertion reads someone else's font size).
   const clickItem = async (idx) => {
     const b = await page.evaluate((i) => {
       const el = document.querySelector(`[data-cd-idx="${i}"]`);
       if (!el) return null;
       const r = el.getBoundingClientRect();
-      return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+      return { x: r.x + r.width / 2, y: r.y + Math.min(8, r.height / 2) };
     }, idx);
     if (!b) throw new Error(`no hitbox for item ${idx}`);
     await page.mouse.click(b.x, b.y);
     await page.waitForTimeout(600);
+    // Selection rebuilds the panel with the TEXT group open, so expand
+    // TYPOGRAPHY the way an author reaching for the size field has to.
+    // Font-size assertions that read a value out of a collapsed section
+    // would otherwise pass while the author can see none of it.
+    await page.evaluate(() => {
+      // Case-insensitive: the header renders uppercase via CSS, so its
+      // textContent is "Typography▾".
+      const h = [...document.querySelectorAll(".cd-props .cd-group-header")]
+        .find((b) => /typography/i.test(b.textContent ?? ""));
+      const body = h?.parentElement?.querySelector(".cd-group-body");
+      if (h && body instanceof HTMLElement && body.style.display === "none") h.click();
+    });
+    await page.waitForTimeout(250);
   };
   const panelValue = (label) => page.evaluate((l) => {
     const row = [...document.querySelectorAll("label")]
@@ -131,6 +154,16 @@ try {
     const top = Math.min(...rects.map((r) => r.top));
     const bottom = Math.max(...rects.map((r) => r.bottom));
     return (bottom - top) / box;
+  });
+
+  // offsetParent, not style.display: the note sits inside the Typography
+  // accordion group, so its own display can say "block" while the whole
+  // section is collapsed and the author sees nothing. Only a genuinely
+  // on-screen note counts.
+  const fitNote = () => page.evaluate(() => {
+    const n = [...document.querySelectorAll(".cd-props div")]
+      .find((d) => (d.textContent ?? "").startsWith("drawn at"));
+    return n && n.offsetParent !== null ? n.textContent : null;
   });
 
   const nav = async (d) => {
@@ -247,6 +280,51 @@ try {
       `${beforeEdit} -> ${duringEdit}`);
   }
 
+  // ── F/G: the author's number is the author's ────────────────────────────
+  // The headline is the case that was reported: type 9, get 6 back. It came
+  // from the store chasing the DOM — autofit's fitted size was written into
+  // item.fontSize on every render, so a deliberate edit was overwritten
+  // within a frame. Uses the HEADLINE (idx 0), the item that was reported,
+  // and picks a size its box cannot honour so the clamp is live throughout:
+  // surviving an unhonourable size is the whole point.
+  const HEADLINE = 0;
+  await clickItem(HEADLINE);
+  await setPanel("font size", 9);
+  await page.waitForTimeout(1500);
+  const hlSet = await panelValue("font size");
+  check("F  an authored size sticks", hlSet === "9", `set 9, panel reads ${hlSet}`);
+
+  await nav("›");
+  await clickItem(HEADLINE);
+  const hlP2 = await panelValue("font size");
+  await nav("‹");
+  await clickItem(HEADLINE);
+  const hlBack = await panelValue("font size");
+  check("F  …on every page, and after navigating back",
+    hlP2 === "9" && hlBack === "9", `page 2 ${hlP2}, back on page 1 ${hlBack}`);
+
+  // Squeeze the box so 9 CANNOT be honoured. Sizing up re-packs the box to
+  // accommodate the new size (so F above ends with 9 actually drawn at 9 —
+  // the good case, and why G must force the conflict rather than assume it).
+  // Here the author has said "this box is 4% tall" AND "this text is 9":
+  // both must survive, the render clamps, and the panel must say so.
+  await setPanel("height (%)", 4);
+  await page.waitForTimeout(1800);
+  const hlAuthored = await panelValue("font size");
+  check("F  …and survives a box too small to honour it", hlAuthored === "9",
+    `panel reads ${hlAuthored}`);
+
+  const hlDrawn = parseFloat(String(await page.evaluate(() => {
+    const sr = document.querySelector("#canvas-host expandable-magazine-banner")?.shadowRoot;
+    return sr?.querySelector('[data-layout-idx="0"]')?.style.fontSize ?? "";
+  })));
+  if (!(hlDrawn > 0 && hlDrawn < 8.95)) {
+    console.log(`  SKIP  G  not exercised — 9 fits this box (drawn ${hlDrawn})`);
+  } else {
+    const note = await fitNote();
+    check("G  the panel reports the clamp", note !== null,
+      note ?? `drawn ${hlDrawn} vs authored 9, but no note shown`);
+  }
 
   await browser.close();
 } finally {
