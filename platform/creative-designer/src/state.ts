@@ -218,6 +218,80 @@ export function setReaderFieldFontSize(
   return changed ? { ...state, pages } : state;
 }
 
+// Where a text box STARTS — the corner the copy grows away from. Not
+// always its top-left: vertical-rl stacks columns right-to-left from the
+// top-RIGHT, and rtl horizontal text runs from the right too. So the shared
+// coordinate is the box's INLINE-START edge, which is the right edge in both
+// of those cases and the left edge otherwise. `top` is the block start for
+// every mode we support, so it is shared as-is.
+export interface FieldStart {
+  top: number;
+  side: "left" | "right";
+  pct: number; // the inline-start edge, as a % of the stage width
+}
+
+export function readerFieldStart(it: LayoutItem): FieldStart | null {
+  if (it.type !== "text") return null;
+  const t = it as unknown as { top?: number; left?: number; width?: number; writingMode?: string; direction?: string };
+  const left = t.left ?? 0;
+  const fromRight = t.writingMode === "vertical-rl" || t.direction === "rtl";
+  return {
+    top: t.top ?? 0,
+    side: fromRight ? "right" : "left",
+    pct: fromRight ? left + (t.width ?? 30) : left,
+  };
+}
+
+// setReaderFieldStart: share the START CORNER of a field-bound reader text
+// item across every page, from ANY page — the same "whichever you edit wins"
+// rule the size and face already follow. Only the corner: each page keeps its
+// own width/height, because the three pages carry different copy and
+// fitReaderFieldBoxes exists precisely to let each box hug its own text. So
+// the three headlines begin at the same point and simply run to different
+// lengths. A right-anchored item derives its own left from ITS OWN width, so
+// the shared edge lands in the same place on every page despite the boxes
+// differing in size. Returns the SAME state object when nothing moves, so the
+// subscriber that calls it converges instead of looping.
+export function setReaderFieldStart(
+  state: DesignerState,
+  field: string,
+  start: FieldStart,
+): DesignerState {
+  if (!field || !Number.isFinite(start.top) || !Number.isFinite(start.pct)) return state;
+  if (start.top < 0 || start.top > 100 || start.pct < 0 || start.pct > 100) return state;
+  let pages = state.pages;
+  let changed = false;
+  for (const surf of READER_SURFACES) {
+    let surfChanged = false;
+    const next = pages.map((page) => {
+      const layout = surf.get(page);
+      if (!layout || layout.length === 0) return page;
+      let pageChanged = false;
+      const nextLayout = layout.map((it) => {
+        if (it.type !== "text" || (it as { field?: string }).field !== field) return it;
+        const t = it as unknown as { top?: number; left?: number; width?: number };
+        const w = t.width ?? 30;
+        // The shared start is inviolable — it is the entire promise of this
+        // function. A follower whose box is too wide to fit beside it
+        // overflows and gets clipped, which the author can see and fix;
+        // nudging the start to keep the box on stage would silently break
+        // the alignment they asked for. Only the start itself is guarded,
+        // so a bad input can't push every page off the canvas.
+        const left = start.side === "right" ? start.pct - w : start.pct;
+        const top = start.top;
+        if (t.left === left && t.top === top) return it;
+        pageChanged = true;
+        return { ...it, left, top } as LayoutItem;
+      });
+      if (!pageChanged) return page;
+      surfChanged = true;
+      return surf.set(page, nextLayout);
+    });
+    if (surfChanged) { pages = next; changed = true; }
+  }
+  return changed ? { ...state, pages } : state;
+}
+
 // fitReaderFieldBoxes: after a font-size edit, fit the SAME-FIELD text box
 // on EVERY reader page to that page's OWN content at the authored size.
 // Copying the edited page's box is not enough — pages share geometry but

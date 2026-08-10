@@ -2,7 +2,8 @@
 // mounts a #designer-root div into <body>.
 
 import type {BannerConfig, DesignerContext, LayoutItem, Page } from "./types";
-import { applyBrandKitFontsToText, inheritBannerColors, initialState, setZoom, syncTypographyFromPage1 } from "./state";
+import { applyBrandKitFontsToText, currentLayout, inheritBannerColors, initialState, readerFieldStart, setReaderFieldStart, setZoom, syncTypographyFromPage1 } from "./state";
+import { isMultiPage } from "./modes";
 import { looksLikePercentLayout, normalizePages } from "./normalize";
 import { loadBrandKit, subscribeBrandKit } from "./brand-kit";
 import { syncCanvasFonts } from "./canvas-fonts";
@@ -304,6 +305,45 @@ function boot(ctx: DesignerContext): void {
   };
   syncPage1Typography();
   store.subscribe(syncPage1Typography);
+
+  // Start-corner sync: moving a field-bound reader text item on ANY page
+  // moves it on all three, so the headline (and the body) begins at the same
+  // point throughout the magazine. Only the corner — each page keeps its own
+  // box extent, since the pages carry different copy and fitReaderFieldBoxes
+  // packs each box to its own text.
+  //
+  // Driven by DIFFING state rather than hooked into the drag, so every way of
+  // moving a box is covered by one rule: dragging, the left/top fields,
+  // nudging with the arrow keys, the alignment tools. Mirrors the font-size
+  // rule — whichever page you edit is the one that wins.
+  //
+  // Deliberately NOT run on load: a saved creative whose pages were placed
+  // independently would otherwise be silently rewritten the moment it opens.
+  // Existing drafts converge when the author next moves the item.
+  let startSyncPrev = store.state;
+  const syncFieldStarts = (): void => {
+    const prev = startSyncPrev;
+    const next = store.state;
+    startSyncPrev = next;
+    if (prev === next || !isMultiPage(next.mode)) return;
+    // A page/format switch swaps in a different layout, so the index-based
+    // diff below would compare unrelated items.
+    if (prev.pageIdx !== next.pageIdx || prev.mode.key !== next.mode.key) return;
+    const before = currentLayout(prev);
+    const after = currentLayout(next);
+    for (let i = 0; i < after.length; i++) {
+      const b = after[i];
+      const a = before[i];
+      if (!b || b.type !== "text" || !b.field) continue;
+      if (!a || a.type !== "text" || a.field !== b.field) continue;
+      if (a.left === b.left && a.top === b.top) continue;
+      const start = readerFieldStart(b);
+      if (!start) continue;
+      const synced = setReaderFieldStart(store.state, b.field, start);
+      if (synced !== store.state) store.replace(synced);
+    }
+  };
+  store.subscribe(syncFieldStarts);
 
   // Register the draft's self-hosted web fonts so the canvas draws with
   // the faces that actually ship (see canvas-fonts.ts). Once up front,
