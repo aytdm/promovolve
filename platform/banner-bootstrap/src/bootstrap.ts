@@ -519,6 +519,17 @@ async function batchAttempt(body: BatchServeReq): Promise<BatchOutcome> {
         answered: false, failReason: `http_${resp.status}`,
       };
     }
+    // 204 is a real answer, not a failure: the server deliberately declines
+    // to fill (suspended site, content too old) with an empty body. `resp.ok`
+    // is TRUE for 204, so without this the empty body reaches resp.json(),
+    // throws "Unexpected end of JSON input", and the throw gets misreported
+    // as a transient network fault — which then earns a retry that can only
+    // produce the same 204. Answered with no winners = a clean no_fill.
+    if (resp.status === 204) {
+      return {
+        results: new Map(), stalePins: [], needClassify: false, answered: true,
+      };
+    }
     const data = (await resp.json()) as BatchServeRes;
     const out = new Map<string, BatchImpResult>();
     for (const entry of data.seatbid) out.set(entry.id, entry);

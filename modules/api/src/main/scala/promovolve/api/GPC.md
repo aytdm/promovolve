@@ -1,140 +1,98 @@
 # Global Privacy Control (GPC)
 
-Promovolve respects the Global Privacy Control (GPC) signal, a browser-level
-opt-out mechanism for users who do not wish to have their data sold or shared.
+Global Privacy Control is a browser-level signal that tells a site: *do not sell
+or share my personal information.* Promovolve serves ads to browsers sending
+`Sec-GPC: 1` exactly as it serves every other browser — because there is no
+personal information to sell or share, and never was.
 
-A note on scope: Promovolve serves **contextual** ads (matched to the page's
-content category) on a **CPM-only** basis. It does not build a per-viewer
-profile, does not personalize by individual, and holds no server-side viewer
-identity — so there is structurally nothing to "sell or share" about an
-individual. Honoring GPC here is therefore a conservative, user-respecting
-posture rather than a strict requirement: when the signal is present, we simply
-decline to serve. No identifier is read, stored, or required to do so.
+This page explains that position, because "we serve ads under GPC" is the kind
+of sentence that deserves its reasoning in full.
 
-## How It Works
+## Why serving is the correct response
 
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  User's Browser                                                  │
-│                                                                  │
-│  1. Load publisher site (news.com)                               │
-│     ──────────────────────────► news.com server                  │
-│     ◄──────────────────────────  returns HTML + JS               │
-│                                                                  │
-│  2. JS executes, calls promovolve directly:                      │
-│                                                                  │
-│     POST https://ads.promovolve.com/v1/serve/batch               │
-│           │                                                      │
-│           │  Sec-GPC: 1  (browser adds automatically)            │
-│           ▼                                                      │
-│     ┌─────────────────┐                                          │
-│     │   Promovolve    │                                          │
-│     │   Ad Server     │                                          │
-│     └────────┬────────┘                                          │
-│              │                                                   │
-│              ▼                                                   │
-│     204 No Content  (no ad served)                               │
-│                                                                  │
-│  3. JS receives empty response, shows nothing                    │
-└──────────────────────────────────────────────────────────────────┘
-```
+The auction reads the **page**, not the viewer.
 
-### Key Points
+- **No identifier is ingested.** The serve request carries a publisher id, the
+  page URL, and slot dimensions. No cookie, no device id, no fingerprint, no
+  hashed email.
+- **No profile is built.** Candidates are matched on the page's content
+  category. Nothing about the reader enters the scoring function.
+- **No server-side viewer identity exists.** There is no per-viewer record to
+  attach a preference to, to sell, to share, or to leak.
+- **Pricing is CPM-only.** Nothing about an individual is being valued.
 
-- **Browser sends header automatically**: Once a user enables GPC in their
-  browser, the `Sec-GPC: 1` header is attached to every HTTP request the browser
-  makes.
+Given that, declining to serve on `Sec-GPC: 1` would be an odd gesture: it would
+concede that normal Promovolve serving is the kind of thing GPC exists to stop.
+It is not, and the architecture makes that structurally true rather than
+promised. Honoring an opt-out from data collection by suppressing an ad that
+collects no data communicates the opposite of what is happening.
 
-- **No identity involved**: The decision is made purely on the presence of the
-  header. No user identifier is passed, read, or stored — the opt-out is honored
-  without ever identifying the viewer.
+Privacy here is "can't," not "won't." The one-time cost of that is that the
+usual privacy gestures have nothing to attach to.
 
-- **No publisher changes required**: The browser sends the header directly to
-  Promovolve; the publisher does not need to read or forward anything.
+## Why this is not a revenue rationalization
 
-- **Early exit**: When `Sec-GPC: 1` is detected, `ServeRoutes` returns
-  `204 No Content` immediately without calling the `AdServer`, minimizing server
-  load.
+It would be if the reasoning ran the other way — if the architecture collected
+viewer data and the doc argued its way out of the signal. It doesn't. Test the
+claim directly: read `ServeRoutes.scala`, follow `BatchServeReq` into
+`AdServer.BatchSelect`, and look for a viewer field. There isn't one. The code
+is open source precisely so this is checkable rather than trusted.
 
-## Browser Support
+The revenue consequence is real and worth stating plainly: GPC is **on by
+default** in Brave and DuckDuckGo. Suppressing serve on the header meant every
+one of those viewers was a guaranteed zero-fill on every publisher, with no
+privacy gained by anybody — a cost paid by publishers for a gesture.
 
-| Browser         | GPC Support                          | Default |
-|-----------------|--------------------------------------|---------|
-| **Firefox**     | Native (Settings > Privacy)          | Off     |
-| **Brave**       | Native                               | On      |
-| **DuckDuckGo**  | Native (desktop & mobile)            | On      |
-| **Chrome**      | Via extension (Privacy Badger, etc.) | N/A     |
-| **Safari**      | Not natively supported yet           | N/A     |
-| **Edge**        | Via extension                        | N/A     |
+## What the earlier implementation did
 
-### How Users Enable GPC
+Until 2026-08-12, `ServeRoutes` short-circuited `POST /v1/serve/batch` to
+`204 No Content` whenever `Sec-GPC: 1` was present. That branch has been
+removed.
 
-**Firefox**: Settings → Privacy & Security → "Tell websites not to sell or share my data"
+It also had a bug worth recording. `204` is a 2xx, so the browser tag's
+`resp.ok` check passed and the empty body reached `resp.json()`, which threw
+`Unexpected end of JSON input`. The throw was then classified as a transient
+network fault and **retried**, producing a second 204 and a second throw. Every
+Brave-desktop pageview logged two console errors, made two serve requests, and
+reported a network failure to the mount heartbeat instead of a clean no-fill.
 
-**Brave**: On by default (can be toggled in Shields settings)
+The tag now treats `204` as an answered response with no winners
+(`bootstrap.ts`, `batchAttempt`). That path still matters: the batch endpoint
+returns `204` for an operator-suspended site and for content too old to serve.
 
-**DuckDuckGo**: On by default
+## If you are deploying Promovolve yourself
 
-**Chrome/Edge**: Install Privacy Badger or similar extension
-
-## Legal Recognition
-
-GPC is legally recognized as a valid opt-out signal in several jurisdictions:
-
-| Jurisdiction         | Regulation | Status                                    |
-|----------------------|------------|-------------------------------------------|
-| California (US)      | CCPA/CPRA  | Legally binding opt-out signal            |
-| Colorado (US)        | CPA        | Recognized as universal opt-out mechanism |
-| Connecticut (US)     | CTDPA      | Recognized as universal opt-out mechanism |
-| European Union       | GDPR       | Can be interpreted as withdrawal of consent |
-
-## Implementation
-
-The GPC check guards the serve path, `POST /v1/serve/batch` — one request per
-page load, all slots. It is implemented in `ServeRoutes.scala`:
+This is a per-deployment policy decision, not a law of the codebase. If your
+jurisdiction, counsel, or publisher agreements require declining to serve on
+GPC, reinstate the branch at the top of the batch route:
 
 ```scala
-val routes: Route =
-  concat(
-    pathPrefix("v1" / "serve") {
-      // POST /v1/serve/batch — one request per page load, all slots.
-      path("batch") {
-        post {
-          optionalHeaderValueByName("Sec-GPC") {
-            case Some("1") => complete(StatusCodes.NoContent)
-            case _         =>
-              entity(as[BatchServeReq]) { req =>
-                // Normal ad serving flow (joint auction via AdServer.BatchSelect)
-                ...
-              }
-          }
+path("batch") {
+  post {
+    optionalHeaderValueByName("Sec-GPC") {
+      case Some("1") => complete(StatusCodes.NoContent)
+      case _         =>
+        entity(as[BatchServeReq]) { req =>
+          // normal serving flow
         }
-      }
-    },
-    ...
-  )
+    }
+  }
+}
 ```
 
-The batch endpoint is the **only** serve route: the legacy single-slot
-`GET /v1/serve` was removed when serving consolidated on the batch path (even
-admin tooling posts a one-slot batch request).
+The tag handles the resulting `204` correctly, so reinstating it is a one-place
+change.
 
-## Testing
+## Browser support
 
-```bash
-# With GPC header (should return 204)
-curl -X POST -H "Sec-GPC: 1" -H "Content-Type: application/json" \
-  -d '{"pub":"test","url":"http://example.com","imp":[{"id":"top","w":728,"h":90}]}' \
-  "http://localhost:8080/v1/serve/batch"
-
-# Without GPC header (normal ad serving)
-curl -X POST -H "Content-Type: application/json" \
-  -d '{"pub":"test","url":"http://example.com","imp":[{"id":"top","w":728,"h":90}]}' \
-  "http://localhost:8080/v1/serve/batch"
-```
-
-Also testable in Firefox (enable GPC in Settings → Privacy & Security) or Brave
-(GPC on by default).
+| Browser        | GPC support                          | Default |
+|----------------|--------------------------------------|---------|
+| **Brave**      | Native                               | On      |
+| **DuckDuckGo** | Native (desktop & mobile)            | On      |
+| **Firefox**    | Native (Settings → Privacy)          | Off     |
+| **Chrome**     | Via extension (Privacy Badger, etc.) | N/A     |
+| **Edge**       | Via extension                        | N/A     |
+| **Safari**     | Not natively supported               | N/A     |
 
 ## Why there is no server-side opt-out registry
 
@@ -150,9 +108,6 @@ browser-independently. We deliberately do **not** build this:
   do-not-target registry exists to let a user opt out of being profiled, but
   Promovolve builds no per-viewer profile to begin with. Adding a tracking
   identifier in order to suppress tracking that does not happen is incoherent.
-
-The header-based opt-out above is sufficient and requires no identity. Privacy
-here is structural ("can't"), not a retained promise ("won't").
 
 ## References
 

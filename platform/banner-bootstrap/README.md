@@ -94,7 +94,7 @@ Shares R2 credentials with `banner-component` and the JVM-side `R2ImageStorage` 
 
 - **Not a bidder** — this is a publisher tag, not a DSP client. All auction logic lives on the server side of the batch endpoint.
 - **Not responsive** — each slot has one fixed size. Responsive/multi-size slots are a phase-3 concern (affects server-side candidate matching too).
-- **Not a consent framework** — it respects the server's `Sec-GPC: 1` handling but doesn't implement TCF/GPP signals itself. Publishers needing consent management wrap this with a CMP.
+- **Not a consent framework** — it doesn't implement TCF/GPP signals, and it reads no privacy headers itself; whether a signal like `Sec-GPC: 1` changes anything is the server's call (it doesn't — see `GPC.md`). Publishers needing consent management wrap this with a CMP.
 
 ## Observability
 

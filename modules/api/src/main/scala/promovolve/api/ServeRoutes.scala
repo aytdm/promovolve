@@ -231,222 +231,228 @@ final class ServeRoutes(
         // batch.
         path("batch") {
           post {
-            optionalHeaderValueByName("Sec-GPC") {
-              case Some("1") => complete(StatusCodes.NoContent)
-              case _         =>
-                entity(as[BatchServeReq]) { req =>
-                  // Canonical page identity: strip tracking params (fbclid,
-                  // gclid, utm_*, …) so referral variants of one article don't
-                  // fragment into separate classifications, auctions, placements,
-                  // or tracking rows. Used everywhere the page URL is a key —
-                  // the auction, the freshness token, and the signed click/imp/
-                  // cta/fold tokens (so beacons record the canonical URL too).
-                  val pageUrl = UrlNormalizer.stripTrackingParams(req.url)
-                  val pinByslot: Map[String, String] =
-                    req.pins.fold(Map.empty[String, String])(_.iterator.map(p => p.slotId -> p.creativeId).toMap)
-                  // Site-wide pin block: pins for slots NOT present on this
-                  // page mean the user folded that creative on a different
-                  // page. Treat its creativeId as a hard exclusion across
-                  // every slot of this batch — the user's own bookmark
-                  // shouldn't be burned as a normal-auction impression on
-                  // an unrelated page.
-                  val slotIdsOnPage: Set[String] = req.imp.map(_.id).toSet
-                  val offPagePinCreatives: Set[String] =
-                    req.pins.fold(Set.empty[String])(
-                      _.iterator
-                        .collect { case p if !slotIdsOnPage.contains(p.slotId) => p.creativeId }
-                        .toSet
-                    )
-                  val excludedCreatives: Set[promovolve.CreativeId] =
-                    offPagePinCreatives.map(promovolve.CreativeId.apply)
-                  val resultF = for {
-                    freshnessWindowMs <- publisherSettings.classificationFreshnessWindowMs(SiteId(req.pub))
-                    // Resolve pinned creativeIds → campaignIds via the
-                    // creative repo so the batch can exclude the whole
-                    // advertiser, not just the bookmarked frame. The
-                    // dog-ear is a "save for later" gesture; surfacing
-                    // other creatives from the same advertiser before
-                    // the reader engages the bookmark would feel like a
-                    // recommendation system stalking them. Falls back to
-                    // creative-only if the repo isn't wired or a creative
-                    // can't be found (treat as truly removed).
-                    //
-                    // Per-creative outcomes are kept (not flattened) so
-                    // genuinely-missing creatives can be reported back as
-                    // stalePins. The outer Option distinguishes "lookup
-                    // FAILED" (None — exclude nothing extra, report
-                    // nothing: a transient repo error must never delete a
-                    // user's live bookmark) from "looked up OK" (Some,
-                    // whose inner Option is found/not-found).
-                    pinLookups <- creativeRepo match {
-                      case Some(repo) if offPagePinCreatives.nonEmpty =>
-                        Future.sequence(offPagePinCreatives.toVector.map(cid =>
-                          repo.get(cid)
-                            .map(found => cid -> Option(found.map(_.campaignId)))
-                            .recover { case _ => cid -> Option.empty[Option[String]] }
-                        ))
-                      case _ => Future.successful(Vector.empty[(String, Option[Option[String]])])
-                    }
-                    excludedCampaigns = pinLookups.collect {
-                      case (_, Some(Some(campaignId))) => promovolve.CampaignId(campaignId)
-                    }.toSet
-                    // Slot-existence pass: an off-page pin whose slotId no
-                    // longer exists in the site's slot config can never be
-                    // reconciled by the per-slot dogear channel (its page
-                    // will never be in a batch) — renamed slots, deleted
-                    // pages, redesigns. Guarded on a NON-EMPTY slot config
-                    // so a freshly-resetting site mid-crawl can't mark
-                    // live pins stale; ask failures degrade to "no check".
-                    siteSlotIds <- {
-                      val offPagePins =
-                        req.pins.fold(Vector.empty[PinHint])(_.filterNot(p => slotIdsOnPage.contains(p.slotId)))
-                      if (offPagePins.isEmpty) Future.successful(Set.empty[String])
-                      else
-                        sharding.entityRefFor(promovolve.publisher.SiteEntity.TypeKey, req.pub)
-                          .ask[promovolve.publisher.SiteEntity.SlotsResult](promovolve.publisher.SiteEntity.GetSlots(_))
-                          .map(_.slots.map(_.slotId).toSet)
-                          .recover { case _ => Set.empty[String] }
-                    }
-                    stalePins = StalePins.derive(
-                      pinLookups,
-                      req.pins.getOrElse(Vector.empty),
-                      slotIdsOnPage,
-                      siteSlotIds
-                    )
-                    _ = system.log.info(
-                      "BatchServe pub={} url={} pins.size={} offPagePinCreatives={} excludedCreatives={} excludedCampaigns={}",
-                      req.pub, pageUrl,
-                      req.pins.fold(0)(_.size),
-                      offPagePinCreatives.mkString(","),
-                      excludedCreatives.map(_.value).mkString(","),
-                      excludedCampaigns.map(_.value).mkString(",")
-                    )
-                    adServer = sharding.entityRefFor(AdServer.TypeKey, req.pub)
-                    batchResult <- adServer.ask[AdServer.BatchSelectResult] { replyTo =>
-                      AdServer.BatchSelect(
-                        url = promovolve.URL(pageUrl),
-                        slots = req.imp.map { i =>
-                          AdServer.BatchSlotSpec(
-                            slotId = promovolve.SlotId(i.id),
-                            width = i.w,
-                            height = i.h,
-                            floorCpm = i.floorCpm.map(promovolve.CPM.apply),
-                            pin = pinByslot.get(i.id).map(promovolve.CreativeId.apply)
-                          )
-                        },
-                        classificationFreshnessWindowMs = freshnessWindowMs,
-                        replyTo = replyTo,
-                        excludedCreatives = excludedCreatives,
-                        excludedCampaigns = excludedCampaigns
-                      )
-                    }
-                  } yield (batchResult, stalePins)
-                  onSuccess(resultF) {
-                    case (AdServer.BatchHostNotVerified, _) =>
-                      complete(StatusCodes.Forbidden)
-                    case (AdServer.BatchSiteSuspended, _) =>
-                      // Operator-suspended org: quiet no-ads, never an error
-                      // the page would surface to readers.
-                      complete(StatusCodes.NoContent)
-                    case (AdServer.BatchContentTooOld, _) =>
-                      complete(StatusCodes.NoContent)
-                    case (AdServer.BatchSelected(outcomes, _, reclassifyInMs, needText), stalePins) =>
-                      // Build per-slot ServeRes for every winner in parallel
-                      // (signed URLs are async). Unfilled slots return winner=None.
-                      val resFutures: Vector[Future[BatchImpResult]] = outcomes.map { outcome =>
-                        // Slot-level dogear info — surfaced regardless of
-                        // whether there's a winner so the bootstrap can
-                        // clear stale IDB pins on creative_removed even
-                        // when no fallback creative filled the slot.
-                        val slotDogear: Option[DogearInfo] =
-                          outcome.dogear.map(o => DogearInfo(o.honored, o.reason))
-                        outcome.winner match {
-                          case None       => Future.successful(BatchImpResult(outcome.slotId.value, None, slotDogear))
-                          case Some(cand) =>
-                            val version = cand.classifiedAtMs
-                            val apc = cand.adProductCategory.map(_.value)
-                            val cpmDollars =
-                              if (outcome.clearingPrice > promovolve.CPM.zero) outcome.clearingPrice.toDouble
-                              else cand.cpm.toDouble
-                            for {
-                              click <- clickUrl(req.pub, pageUrl, outcome.slotId.value, cand.creativeId.value, version,
-                                cand.campaignId.value, cand.advertiserId.value, cand.category.value, outcome.requestId,
-                                apc, None)
-                              imp <- impUrl(
-                                req.pub, pageUrl, outcome.slotId.value, cand.creativeId.value, version,
-                                cand.campaignId.value, cand.advertiserId.value, cpmDollars, cand.category.value,
-                                outcome.requestId, apc, None
-                              )
-                              cta <- ctaUrl(req.pub, pageUrl, outcome.slotId.value, cand.creativeId.value, version,
-                                cand.campaignId.value, cand.advertiserId.value, cand.category.value, outcome.requestId,
-                                apc, None)
-                              // Fetch the Creative once to pluck both pagesJson
-                              // and bannerConfigJson together — one DB hit, two
-                              // delivery fields.
-                              creativeOpt <- creativeRepo.map(_.get(cand.creativeId.value))
-                                .getOrElse(Future.successful(None))
-                              // Mint a fold token for every winner — the dog-ear is
-                              // part of the magazine creative format, not a per-campaign
-                              // opt-in. Folds are free (engagement signal, not billed).
-                              foldToken <-
-                                foldTokenFor(req.pub, pageUrl, outcome.slotId.value, cand.creativeId.value, version,
-                                  cand.campaignId.value, cand.advertiserId.value)
-                              pinExpiresAt <- campaignPinExpiresAt(cand.advertiserId.value, cand.campaignId.value)
-                            } yield {
-                              val pagesJson = creativeOpt.flatMap(_.pagesJson)
-                              val bannerConfigJson = creativeOpt.flatMap(_.bannerConfigJson)
-                              (click, imp) match {
-                                case (Some(c), Some(i)) =>
-                                  BatchImpResult(
-                                    id = outcome.slotId.value,
-                                    winner = Some(ServeRes(
-                                      s"$cdnBaseUrl/${cand.assetUrl.value}",
-                                      cand.mime.value,
-                                      c, i, cta.getOrElse(""),
-                                      cand.creativeId.value,
-                                      version,
-                                      // Fill the advertiser's {curly} attribution
-                                      // macros from trusted auction context (no
-                                      // user data — Promovolve doesn't track people).
-                                      LandingMacros.substitute(
-                                        cand.landingUrl,
-                                        LandingMacros.valuesFor(
-                                          source = "promovolve",
-                                          campaignId = cand.campaignId.value,
-                                          creativeId = cand.creativeId.value,
-                                          site = req.pub,
-                                          category = cand.category.value,
-                                          slot = outcome.slotId.value
-                                        )
-                                      ),
-                                      pagesJson,
-                                      if (pagesJson.isDefined) Some(bannerScriptUrl) else None,
-                                      bannerConfigJson,
-                                      canFold = foldToken.isDefined,
-                                      honorPin = true,
-                                      foldToken = foldToken,
-                                      dogear = slotDogear,
-                                      pinExpiresAt = pinExpiresAt
-                                    )),
-                                    dogear = slotDogear
-                                  )
-                                case _ =>
-                                  // Can't sign URLs → fall through as unfilled.
-                                  BatchImpResult(outcome.slotId.value, None, slotDogear)
-                              }
-                            }
-                        }
-                      }
-                      onSuccess(Future.sequence(resFutures)) { results =>
-                        complete(BatchServeRes(
-                          results,
-                          stalePins = if (stalePins.nonEmpty) Some(stalePins) else None,
-                          needText = needText,
-                          reclassifyInMs = reclassifyInMs
-                        ))
-                      }
-                  }
+            // No Sec-GPC branch here, deliberately. GPC signals "do not sell
+            // or share my personal information" — and there is none to sell:
+            // the auction reads the PAGE, never the viewer. No identifier is
+            // ingested, no profile is built, no viewer identity is held
+            // server-side. Declining to serve on the header would imply the
+            // normal path does the thing GPC exists to stop, which is exactly
+            // the claim this architecture makes structurally false. It also
+            // cost every Brave-desktop and DuckDuckGo viewer a guaranteed
+            // zero-fill on every publisher — GPC is ON BY DEFAULT there.
+            // See GPC.md for the full reasoning.
+            entity(as[BatchServeReq]) { req =>
+              // Canonical page identity: strip tracking params (fbclid,
+              // gclid, utm_*, …) so referral variants of one article don't
+              // fragment into separate classifications, auctions, placements,
+              // or tracking rows. Used everywhere the page URL is a key —
+              // the auction, the freshness token, and the signed click/imp/
+              // cta/fold tokens (so beacons record the canonical URL too).
+              val pageUrl = UrlNormalizer.stripTrackingParams(req.url)
+              val pinByslot: Map[String, String] =
+                req.pins.fold(Map.empty[String, String])(_.iterator.map(p => p.slotId -> p.creativeId).toMap)
+              // Site-wide pin block: pins for slots NOT present on this
+              // page mean the user folded that creative on a different
+              // page. Treat its creativeId as a hard exclusion across
+              // every slot of this batch — the user's own bookmark
+              // shouldn't be burned as a normal-auction impression on
+              // an unrelated page.
+              val slotIdsOnPage: Set[String] = req.imp.map(_.id).toSet
+              val offPagePinCreatives: Set[String] =
+                req.pins.fold(Set.empty[String])(
+                  _.iterator
+                    .collect { case p if !slotIdsOnPage.contains(p.slotId) => p.creativeId }
+                    .toSet
+                )
+              val excludedCreatives: Set[promovolve.CreativeId] =
+                offPagePinCreatives.map(promovolve.CreativeId.apply)
+              val resultF = for {
+                freshnessWindowMs <- publisherSettings.classificationFreshnessWindowMs(SiteId(req.pub))
+                // Resolve pinned creativeIds → campaignIds via the
+                // creative repo so the batch can exclude the whole
+                // advertiser, not just the bookmarked frame. The
+                // dog-ear is a "save for later" gesture; surfacing
+                // other creatives from the same advertiser before
+                // the reader engages the bookmark would feel like a
+                // recommendation system stalking them. Falls back to
+                // creative-only if the repo isn't wired or a creative
+                // can't be found (treat as truly removed).
+                //
+                // Per-creative outcomes are kept (not flattened) so
+                // genuinely-missing creatives can be reported back as
+                // stalePins. The outer Option distinguishes "lookup
+                // FAILED" (None — exclude nothing extra, report
+                // nothing: a transient repo error must never delete a
+                // user's live bookmark) from "looked up OK" (Some,
+                // whose inner Option is found/not-found).
+                pinLookups <- creativeRepo match {
+                  case Some(repo) if offPagePinCreatives.nonEmpty =>
+                    Future.sequence(offPagePinCreatives.toVector.map(cid =>
+                      repo.get(cid)
+                        .map(found => cid -> Option(found.map(_.campaignId)))
+                        .recover { case _ => cid -> Option.empty[Option[String]] }
+                    ))
+                  case _ => Future.successful(Vector.empty[(String, Option[Option[String]])])
                 }
+                excludedCampaigns = pinLookups.collect {
+                  case (_, Some(Some(campaignId))) => promovolve.CampaignId(campaignId)
+                }.toSet
+                // Slot-existence pass: an off-page pin whose slotId no
+                // longer exists in the site's slot config can never be
+                // reconciled by the per-slot dogear channel (its page
+                // will never be in a batch) — renamed slots, deleted
+                // pages, redesigns. Guarded on a NON-EMPTY slot config
+                // so a freshly-resetting site mid-crawl can't mark
+                // live pins stale; ask failures degrade to "no check".
+                siteSlotIds <- {
+                  val offPagePins =
+                    req.pins.fold(Vector.empty[PinHint])(_.filterNot(p => slotIdsOnPage.contains(p.slotId)))
+                  if (offPagePins.isEmpty) Future.successful(Set.empty[String])
+                  else
+                    sharding.entityRefFor(promovolve.publisher.SiteEntity.TypeKey, req.pub)
+                      .ask[promovolve.publisher.SiteEntity.SlotsResult](promovolve.publisher.SiteEntity.GetSlots(_))
+                      .map(_.slots.map(_.slotId).toSet)
+                      .recover { case _ => Set.empty[String] }
+                }
+                stalePins = StalePins.derive(
+                  pinLookups,
+                  req.pins.getOrElse(Vector.empty),
+                  slotIdsOnPage,
+                  siteSlotIds
+                )
+                _ = system.log.info(
+                  "BatchServe pub={} url={} pins.size={} offPagePinCreatives={} excludedCreatives={} excludedCampaigns={}",
+                  req.pub, pageUrl,
+                  req.pins.fold(0)(_.size),
+                  offPagePinCreatives.mkString(","),
+                  excludedCreatives.map(_.value).mkString(","),
+                  excludedCampaigns.map(_.value).mkString(",")
+                )
+                adServer = sharding.entityRefFor(AdServer.TypeKey, req.pub)
+                batchResult <- adServer.ask[AdServer.BatchSelectResult] { replyTo =>
+                  AdServer.BatchSelect(
+                    url = promovolve.URL(pageUrl),
+                    slots = req.imp.map { i =>
+                      AdServer.BatchSlotSpec(
+                        slotId = promovolve.SlotId(i.id),
+                        width = i.w,
+                        height = i.h,
+                        floorCpm = i.floorCpm.map(promovolve.CPM.apply),
+                        pin = pinByslot.get(i.id).map(promovolve.CreativeId.apply)
+                      )
+                    },
+                    classificationFreshnessWindowMs = freshnessWindowMs,
+                    replyTo = replyTo,
+                    excludedCreatives = excludedCreatives,
+                    excludedCampaigns = excludedCampaigns
+                  )
+                }
+              } yield (batchResult, stalePins)
+              onSuccess(resultF) {
+                case (AdServer.BatchHostNotVerified, _) =>
+                  complete(StatusCodes.Forbidden)
+                case (AdServer.BatchSiteSuspended, _) =>
+                  // Operator-suspended org: quiet no-ads, never an error
+                  // the page would surface to readers.
+                  complete(StatusCodes.NoContent)
+                case (AdServer.BatchContentTooOld, _) =>
+                  complete(StatusCodes.NoContent)
+                case (AdServer.BatchSelected(outcomes, _, reclassifyInMs, needText), stalePins) =>
+                  // Build per-slot ServeRes for every winner in parallel
+                  // (signed URLs are async). Unfilled slots return winner=None.
+                  val resFutures: Vector[Future[BatchImpResult]] = outcomes.map { outcome =>
+                    // Slot-level dogear info — surfaced regardless of
+                    // whether there's a winner so the bootstrap can
+                    // clear stale IDB pins on creative_removed even
+                    // when no fallback creative filled the slot.
+                    val slotDogear: Option[DogearInfo] =
+                      outcome.dogear.map(o => DogearInfo(o.honored, o.reason))
+                    outcome.winner match {
+                      case None       => Future.successful(BatchImpResult(outcome.slotId.value, None, slotDogear))
+                      case Some(cand) =>
+                        val version = cand.classifiedAtMs
+                        val apc = cand.adProductCategory.map(_.value)
+                        val cpmDollars =
+                          if (outcome.clearingPrice > promovolve.CPM.zero) outcome.clearingPrice.toDouble
+                          else cand.cpm.toDouble
+                        for {
+                          click <- clickUrl(req.pub, pageUrl, outcome.slotId.value, cand.creativeId.value, version,
+                            cand.campaignId.value, cand.advertiserId.value, cand.category.value, outcome.requestId,
+                            apc, None)
+                          imp <- impUrl(
+                            req.pub, pageUrl, outcome.slotId.value, cand.creativeId.value, version,
+                            cand.campaignId.value, cand.advertiserId.value, cpmDollars, cand.category.value,
+                            outcome.requestId, apc, None
+                          )
+                          cta <- ctaUrl(req.pub, pageUrl, outcome.slotId.value, cand.creativeId.value, version,
+                            cand.campaignId.value, cand.advertiserId.value, cand.category.value, outcome.requestId,
+                            apc, None)
+                          // Fetch the Creative once to pluck both pagesJson
+                          // and bannerConfigJson together — one DB hit, two
+                          // delivery fields.
+                          creativeOpt <- creativeRepo.map(_.get(cand.creativeId.value))
+                            .getOrElse(Future.successful(None))
+                          // Mint a fold token for every winner — the dog-ear is
+                          // part of the magazine creative format, not a per-campaign
+                          // opt-in. Folds are free (engagement signal, not billed).
+                          foldToken <-
+                            foldTokenFor(req.pub, pageUrl, outcome.slotId.value, cand.creativeId.value, version,
+                              cand.campaignId.value, cand.advertiserId.value)
+                          pinExpiresAt <- campaignPinExpiresAt(cand.advertiserId.value, cand.campaignId.value)
+                        } yield {
+                          val pagesJson = creativeOpt.flatMap(_.pagesJson)
+                          val bannerConfigJson = creativeOpt.flatMap(_.bannerConfigJson)
+                          (click, imp) match {
+                            case (Some(c), Some(i)) =>
+                              BatchImpResult(
+                                id = outcome.slotId.value,
+                                winner = Some(ServeRes(
+                                  s"$cdnBaseUrl/${cand.assetUrl.value}",
+                                  cand.mime.value,
+                                  c, i, cta.getOrElse(""),
+                                  cand.creativeId.value,
+                                  version,
+                                  // Fill the advertiser's {curly} attribution
+                                  // macros from trusted auction context (no
+                                  // user data — Promovolve doesn't track people).
+                                  LandingMacros.substitute(
+                                    cand.landingUrl,
+                                    LandingMacros.valuesFor(
+                                      source = "promovolve",
+                                      campaignId = cand.campaignId.value,
+                                      creativeId = cand.creativeId.value,
+                                      site = req.pub,
+                                      category = cand.category.value,
+                                      slot = outcome.slotId.value
+                                    )
+                                  ),
+                                  pagesJson,
+                                  if (pagesJson.isDefined) Some(bannerScriptUrl) else None,
+                                  bannerConfigJson,
+                                  canFold = foldToken.isDefined,
+                                  honorPin = true,
+                                  foldToken = foldToken,
+                                  dogear = slotDogear,
+                                  pinExpiresAt = pinExpiresAt
+                                )),
+                                dogear = slotDogear
+                              )
+                            case _ =>
+                              // Can't sign URLs → fall through as unfilled.
+                              BatchImpResult(outcome.slotId.value, None, slotDogear)
+                          }
+                        }
+                    }
+                  }
+                  onSuccess(Future.sequence(resFutures)) { results =>
+                    complete(BatchServeRes(
+                      results,
+                      stalePins = if (stalePins.nonEmpty) Some(stalePins) else None,
+                      needText = needText,
+                      reclassifyInMs = reclassifyInMs
+                    ))
+                  }
+              }
             }
           }
         }

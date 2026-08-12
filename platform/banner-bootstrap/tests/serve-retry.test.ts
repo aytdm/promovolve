@@ -128,3 +128,38 @@ describe("runBatch retry", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+// A deliberate no-fill arrives as 204 with an empty body — suspended site,
+// content too old, or (until 2026-08-12) a Sec-GPC opt-out. 204 is a 2xx, so
+// `resp.ok` is true and the empty body used to reach resp.json(), throw
+// "Unexpected end of JSON input", and be misfiled as a transient `network`
+// fault — which then earned a retry that could only produce the same 204.
+// Found live in Brave desktop, where GPC is on by default: two console errors
+// and two serve requests per pageview, reported to the heartbeat as breakage.
+describe("runBatch 204", () => {
+  beforeEach(() => vi.unstubAllGlobals());
+
+  function noContentResponse(): Response {
+    return {
+      ok: true,
+      status: 204,
+      json: async () => {
+        throw new SyntaxError("Unexpected end of JSON input");
+      },
+    } as unknown as Response;
+  }
+
+  it("treats 204 as an answered no-fill and never retries it", async () => {
+    const { runBatch } = await load();
+    const fetchMock = vi.fn().mockResolvedValue(noContentResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    const out = await runBatch(SLOTS, []);
+
+    expect(fetchMock).toHaveBeenCalledTimes(1); // answered → no second attempt
+    expect(out.answered).toBe(true);
+    expect(out.failReason).toBeUndefined(); // heartbeat reads this as no_fill
+    expect(out.results.size).toBe(0);
+    expect(out.needClassify).toBe(false);
+  });
+});
