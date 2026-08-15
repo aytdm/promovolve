@@ -37,6 +37,50 @@ object PacingLogic {
     }.toMap
 
   /**
+   * Campaigns still able to spend today: todaySpend < dailyBudget.
+   *
+   * Exhausted campaigns deliberately KEEP their ServeIndex entries (approval
+   * preservation — see AuctioneerEntity's budget-exhaustion flow) and their
+   * spendInfoCache entries, so without this filter a spent-out campaign sits
+   * in the pacing aggregate all day contributing todaySpend == dailyBudget
+   * against an expected spend of only dailyBudget × f — phantom over-pace
+   * that throttles the campaigns still live (issue #8 F1). Apply this ONCE,
+   * upstream of EVERY consumer of the aggregate (computeAggregateBudget,
+   * the dayStart anchor, computeAggregateExpectedSpend): filtering only the
+   * spend sums while the expected side still counts exhausted budgets would
+   * bias the ratio the other way.
+   *
+   * An empty result with a non-empty input means the whole pool is spent —
+   * callers should refuse the serve outright (TryReserve would deny every
+   * candidate anyway) rather than fail open.
+   *
+   * "Able to spend" is FUNCTIONAL, not exact: campaigns exhaust with dust
+   * left (remaining < the price of any single impression — observed live as
+   * `TryReserve DENIED … remaining=0.0022` all day), so a strict
+   * `todaySpend < dailyBudget` never fires in practice. A campaign is live
+   * only while it can still afford one impression at its own cheapest CPM;
+   * campaigns with no CPM entry (not in the current candidate pool's map)
+   * fall back to the strict check.
+   */
+  def liveInfos(
+      infos: Seq[(CampaignId, CachedSpendInfo)],
+      minCpmByCampaign: Map[CampaignId, Double] = Map.empty
+  ): Seq[(CampaignId, CachedSpendInfo)] =
+    infos.filter { case (campId, info) =>
+      val minImpCost = BigDecimal(minCpmByCampaign.getOrElse(campId, 0.0) / 1000.0)
+      info.todaySpend.value + minImpCost < info.dailyBudget.value
+    }
+
+  /**
+   * Cheapest CPM per campaign in the candidate pool — the cost floor of one
+   * impression, used by [[liveInfos]] to detect functional exhaustion.
+   */
+  def minCpmByCampaign(candidates: Vector[CandidateView]): Map[CampaignId, Double] =
+    candidates.groupBy(_.campaignId).view.mapValues { cands =>
+      cands.map(_.cpm.toDouble).min
+    }.toMap
+
+  /**
    * Compute aggregate budget metrics for pacing decisions.
    *
    * Calculates total daily budget, total spend (including pending),

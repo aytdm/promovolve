@@ -210,4 +210,84 @@ class PacingLogicWindowSpec extends AnyFlatSpec with Matchers {
     expected.toDouble shouldBe 0.0
     maxWindowEnd shouldBe Instant.parse("2026-07-14T15:00:00Z")
   }
+
+  // ==================== liveInfos ====================
+
+  private def spentInfo(budget: Double, spend: Double): CachedSpendInfo =
+    CachedSpendInfo(
+      advertiserId = AdvertiserId("adv-1"),
+      dailyBudget = Budget(budget),
+      todaySpend = Spend(spend),
+      dayStart = Instant.parse("2026-07-13T00:00:00Z"),
+      timestamp = Instant.parse("2026-07-13T00:00:00Z"),
+      timezone = ""
+    )
+
+  "liveInfos" should "drop campaigns whose spend reached their budget and keep the rest" in {
+    val infos = Seq(
+      CampaignId("live") -> spentInfo(budget = 10.0, spend = 4.0),
+      CampaignId("exact") -> spentInfo(budget = 5.0, spend = 5.0),
+      CampaignId("over") -> spentInfo(budget = 5.0, spend = 5.5),
+      CampaignId("fresh") -> spentInfo(budget = 5.0, spend = 0.0)
+    )
+    PacingLogic.liveInfos(infos).map(_._1.value) shouldBe Seq("live", "fresh")
+  }
+
+  it should "drop a campaign that can no longer afford one impression at its cheapest CPM" in {
+    // Functional exhaustion: campaigns die with dust remaining (observed
+    // live: remaining=$0.0022 against $0.005+ clearing prices). With a
+    // min-CPM map the filter fires on the dust; without it the strict
+    // check keeps the campaign forever.
+    val dusty = CampaignId("dusty") -> spentInfo(budget = 2.0, spend = 1.9978)
+    val funded = CampaignId("funded") -> spentInfo(budget = 10.0, spend = 5.0)
+    val minCpm = Map(CampaignId("dusty") -> 6.0, CampaignId("funded") -> 8.0) // one imp = $0.006 / $0.008
+    PacingLogic.liveInfos(Seq(dusty, funded), minCpm).map(_._1.value) shouldBe Seq("funded")
+    // Same dust WITHOUT cpm knowledge falls back to the strict check.
+    PacingLogic.liveInfos(Seq(dusty, funded)).map(_._1.value) shouldBe Seq("dusty", "funded")
+  }
+
+  it should "compute the per-campaign minimum CPM from the candidate pool" in {
+    import promovolve.{ CategoryId, CPM, CreativeId }
+    import promovolve.publisher.{ CandidateView, CDNPath, MimeType }
+    def cand(camp: String, cpm: Double): CandidateView =
+      CandidateView(
+        creativeId = CreativeId(s"cr-$camp-$cpm"),
+        campaignId = CampaignId(camp),
+        advertiserId = AdvertiserId("adv-1"),
+        assetUrl = CDNPath("https://cdn.example/x"),
+        mime = MimeType("image/png"),
+        width = 300,
+        height = 250,
+        category = CategoryId("653"),
+        cpm = CPM(cpm),
+        classifiedAtMs = 0L
+      )
+    val m = PacingLogic.minCpmByCampaign(Vector(cand("a", 8.0), cand("a", 3.0), cand("b", 5.0)))
+    m(CampaignId("a")) shouldBe 3.0
+    m(CampaignId("b")) shouldBe 5.0
+  }
+
+  it should "return empty when every campaign is spent (caller refuses the serve)" in {
+    val infos = Seq(
+      CampaignId("a") -> spentInfo(budget = 5.0, spend = 5.0),
+      CampaignId("b") -> spentInfo(budget = 2.0, spend = 2.0)
+    )
+    PacingLogic.liveInfos(infos) shouldBe empty
+  }
+
+  it should "keep the aggregate truthful: exhausted spend leaves BOTH sums" in {
+    // Whale on pace + a spent-out small: unfiltered, the small reads as
+    // phantom over-pace (its whole budget vs a fraction of expected); with
+    // liveInfos the aggregate is exactly the whale's own pace.
+    val whale = CampaignId("whale") -> spentInfo(budget = 10.0, spend = 5.0)
+    val dead = CampaignId("dead") -> spentInfo(budget = 2.0, spend = 2.0)
+    val live = PacingLogic.liveInfos(Seq(whale, dead))
+    val (budget, spend, _) = PacingLogic.computeAggregateBudget(
+      live,
+      Map(whale._1 -> 8.0),
+      Map.empty
+    )
+    budget shouldBe BigDecimal(10.0)
+    spend shouldBe BigDecimal(5.0)
+  }
 }

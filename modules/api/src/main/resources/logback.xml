@@ -30,6 +30,13 @@
     <logger name="promovolve.publisher.assessment" level="INFO"/>
     <logger name="promovolve.creative" level="INFO"/>
 
+    <!-- Pacing decisions (BATCH PACING throttle/spendRatio, PI resets, day
+         rollovers) at INFO: one line per batch serve, not per slot — the
+         only runtime view of the pacing controller (no metrics backend).
+         Dedicated logger name in AdServer, separate from the per-auction
+         firehose the WARN pin exists to silence. -->
+    <logger name="promovolve.pacing" level="INFO"/>
+
     <!-- Per-class DEBUG logging: set via -DLOG_CLASS=fully.qualified.ClassName -->
     <logger name="${LOG_CLASS:-_no_debug_target_}" level="DEBUG"/>
 

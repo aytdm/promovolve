@@ -290,10 +290,41 @@ object RunScenario {
 
     Thread.sleep(500)
 
-    // 1b. Force-verify site domain (bypass HTTP check for testing)
-    println("\n[1b/5] Force-verifying site domain...")
+    // 1a. Create the site. Site endpoints are ownership-gated
+    // (requireOwnedSite asks SiteEntity.GetConfig and matches publisherId),
+    // so force-verify against a never-created site fails with
+    // site_not_found and every serve afterwards dies on host-mismatch.
+    // Idempotent: createSite refuses to re-Initialize an existing id, so
+    // re-running a scenario against a warm server is safe.
+    println("\n[1a/5] Creating site...")
     val publisherId = "publisher-1"
     val siteId = config.siteId
+    val createSiteBody = s"""{
+      "id": "$siteId",
+      "domain": "publisher.com",
+      "crawlConfig": {
+        "seedUrl": "https://publisher.com",
+        "cronSchedule": "",
+        "maxDepth": 1,
+        "concurrency": 1,
+        "hostRegex": "",
+        "targetElements": []
+      },
+      "slots": [{"slotId": "${config.slotId}", "width": 728, "height": 90}],
+      "taxonomyIds": [],
+      "minFloorCpm": "0.01"
+    }"""
+    val createSiteResp = basicRequest
+      .post(uri"${config.baseUrl}/v1/publishers/$publisherId/sites")
+      .header("Content-Type", "application/json")
+      .body(createSiteBody)
+      .send(backend)
+    println(s"       Create site: ${createSiteResp.code} ${createSiteResp.body.fold(identity, _.take(120))}")
+
+    Thread.sleep(500)
+
+    // 1b. Force-verify site domain (bypass HTTP check for testing)
+    println("\n[1b/5] Force-verifying site domain...")
     val verifyResp = basicRequest
       .post(uri"${config.baseUrl}/v1/publishers/$publisherId/sites/$siteId/force-verify?host=publisher.com")
       .header("Content-Type", "application/json")
@@ -312,17 +343,30 @@ object RunScenario {
 
     Thread.sleep(1000)
 
-    // 3. Approve all pending creatives
-    println("\n[3/5] Approving all pending creatives...")
-    val (approved, failed) = approveAll(config, pageUrl)
-    println(s"       $pageUrl -> approved: $approved, failed: $failed")
-
-    Thread.sleep(2000)  // Increased delay to allow DData propagation
-
-    // 4. Verify serve index
-    println("\n[4/5] Verifying ServeIndex...")
-    val totalCandidates = checkServeIndex(config, pageUrl)
-    println(s"       $pageUrl -> $totalCandidates candidates")
+    // 3+4. Approve pending creatives and verify the ServeIndex, retrying
+    // the auction→approve→check loop until candidates appear. Approval
+    // queue rows are written at AUCTION time, and the first auction can
+    // race the campaigns' bid registration — a single approve pass then
+    // finds nothing pending and the whole run serves zero (the
+    // creative-race setup already retries for the same reason).
+    println("\n[3/5] Approving pending creatives (with retry)...")
+    var totalCandidates = 0
+    var attempt = 0
+    while (totalCandidates == 0 && attempt < 6) {
+      attempt += 1
+      if (attempt > 1) {
+        triggerAuction(config, config.category, pageUrl)
+        Thread.sleep(2000)
+      }
+      val (approved, failed) = approveAll(config, pageUrl)
+      Thread.sleep(2000) // DData propagation
+      totalCandidates = checkServeIndex(config, pageUrl)
+      println(s"       attempt $attempt: approved=$approved failed=$failed candidates=$totalCandidates")
+    }
+    if (totalCandidates == 0) {
+      println("       ERROR: No candidates in ServeIndex after retries - setup failed")
+      sys.exit(1)
+    }
 
     // 5. Configure pacing
     println("\n[5/5] Configuring pacing...")
@@ -341,6 +385,13 @@ object RunScenario {
     val effectiveCpm = cpmOverride.getOrElse(config.cpm)
     val effectiveBudget = budgetOverride.getOrElse(config.budget)
 
+    // targetCategories must be DECLARED: the static adProductCategory→content
+    // bridge was removed (see CreateCampaignRequest), so a campaign without
+    // explicit target categories registers no category_demand and never bids
+    // (CategoryBidder seeds 0, every auction comes back empty). Target the
+    // same set the classify call stamps on the page so the match is exact.
+    val targetCategoriesJson =
+      (config.category :: config.additionalCategories).distinct.map(c => s""""$c"""").mkString(", ")
     val response = basicRequest
       .post(uri"${config.baseUrl}/v1/advertisers/$advId/campaigns")
       .header("Content-Type", "application/json")
@@ -350,7 +401,8 @@ object RunScenario {
         "schedule": {"startAt": "$now"},
         "adProductCategory": "${config.adProductCategory}",
         "bidding": {"strategy": "fixed", "maxCpm": "$effectiveCpm"},
-        "landingUrl": "https://example.com/landing"
+        "landingUrl": "https://example.com/landing",
+        "targetCategories": [$targetCategoriesJson]
       }""")
       .send(backend)
 
@@ -397,11 +449,18 @@ object RunScenario {
   }
 
   def activateCampaign(config: Config, advId: String, campaignId: String): Unit = {
-    basicRequest
+    val response = basicRequest
       .put(uri"${config.baseUrl}/v1/advertisers/$advId/campaigns/$campaignId/status")
       .header("Content-Type", "application/json")
       .body(s"""{"status": "active"}""")
       .send(backend)
+    // Loud on failure: an inactive campaign registers no demand and the
+    // scenario silently serves nothing (this is how the setup rot after the
+    // targetCategories API change went unnoticed).
+    if (!response.code.isSuccess) {
+      System.err.println(
+        s"ERROR: activate failed for $advId/$campaignId: ${response.code} ${response.body.fold(identity, identity)}")
+    }
   }
 
   def triggerAuction(config: Config, category: String, pageUrl: String): Unit = {
@@ -775,6 +834,18 @@ object RunScenario {
   private var trackingExceptionCount = 0
   private var emptyImpUrlCount = 0
 
+  /**
+   * Rebase a signed tracking URL onto the test server. The serve response
+   * mints impUrl/clickUrl on the deployment's public tracking base (e.g.
+   * https://ads.programmer.llc on a prod-parity dev cluster) — beaconing
+   * that verbatim sends every event to the WRONG server, which 403s it
+   * (unknown pub secret) and the local loop never records an impression.
+   * The HMAC covers only the query params, not the host, so swapping the
+   * origin for config.baseUrl keeps the token valid.
+   */
+  def rebaseTrackingUrl(config: Config, trackingUrl: String): String =
+    trackingUrl.replaceFirst("^https?://[^/]+", config.baseUrl)
+
   def trackImpression(config: Config, url: String, resp: ServeResponse): Boolean = {
     if (resp.impUrl.isEmpty) {
       emptyImpUrlCount += 1
@@ -784,7 +855,7 @@ object RunScenario {
       // Use the signed impUrl from serve response - this goes through production tracking
       // which writes to TrackingEventJournal for dashboard projection
       val r = basicRequest
-        .get(uri"${resp.impUrl}")
+        .get(uri"${rebaseTrackingUrl(config, resp.impUrl)}")
         .header("User-Agent", "RunScenario/1.0")
         .send(backend)
 
@@ -822,7 +893,7 @@ object RunScenario {
       // Use the signed clickUrl from serve response - this goes through production tracking
       // which writes to TrackingEventJournal for dashboard projection
       val r = basicRequest
-        .get(uri"${resp.clickUrl}")
+        .get(uri"${rebaseTrackingUrl(config, resp.clickUrl)}")
         .header("User-Agent", "RunScenario/1.0")
         .followRedirects(false)  // Don't follow redirect to destination
         .send(backend)

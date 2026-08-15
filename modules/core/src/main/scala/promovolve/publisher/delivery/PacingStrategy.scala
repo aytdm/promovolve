@@ -29,7 +29,6 @@ final case class PacingContext(
     dayStart: Instant,
     now: Instant,
     requestArrivalRate: Double = 0.0, // Observed requests/sec (tracked synchronously by AdServer)
-    competingCampaigns: Int = 1, // Number of campaigns sharing this traffic pool
     avgCpm: Double = 5.0, // Average CPM for this campaign's creatives ($/1000 imps)
     dayDurationSeconds: Int = 86400, // Simulated day length (default: 24h). Set lower for testing.
     trafficShape: Option[TrafficShapeTracker] = None, // Traffic pattern for shaped pacing

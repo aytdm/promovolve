@@ -460,11 +460,6 @@ object ClusterBootstrap {
         budgetEventTopic: ActorRef[Topic.Command[BudgetEvent]]
     ): Unit = {
       val cfg = system.settings.config
-      // Pacing is always on: budget protection must never be a toggle (a
-      // disabled pacing path is a foot-gun — it lets a campaign blow its daily
-      // budget). Low traffic under-paces (throttle ~0) so serving isn't blocked;
-      // only artificial bursts get throttled, which is correct.
-      val pacingStrategy = AdaptivePacing()
 
       // Per-page-winners TTL: how long after a campaign wins on a URL
       // it stays excluded from re-winning that URL. Default 15s ≈
@@ -496,7 +491,16 @@ object ClusterBootstrap {
           statsSnapshotRepo,
           trafficShapeSnapshotRepo,
           budgetEventTopic,
-          pacingStrategy = pacingStrategy,
+          // Pacing is always on: budget protection must never be a toggle (a
+          // disabled pacing path is a foot-gun — it lets a campaign blow its
+          // daily budget). Low traffic under-paces (throttle ~0) so serving
+          // isn't blocked; only artificial bursts get throttled.
+          // Constructed INSIDE the factory: RateAwarePacing is mutable,
+          // unsynchronized PI state — a single instance built outside the
+          // lambda was shared by every AdServer entity on the node (cross-site
+          // state pollution + a data race on serve-dispatcher) until the
+          // site's PacingConfigUpdated happened to swap in a fresh one.
+          pacingStrategy = AdaptivePacing(),
           pageWinnersTtl = pageWinnersTtl,
           zoneAwarePacing = zoneAwarePacing
         )(using system)

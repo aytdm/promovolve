@@ -1,0 +1,29 @@
+{
+  "name": "Exhaustion Drag",
+  "description": "Pool budget sized to deliverable inventory (~$20/day at ~14 req/s through the dev port-forward) so aggregate pacing CAN reach 1.0. Small campaigns exhaust mid-day while the big one stays live — exercises whether exhausted campaigns' spend keeps inflating the site-level spendRatio and throttles the survivors (issue #8 F1). Watch BATCH PACING spendRatio between the smalls' exhaustion and the day rollover.",
+
+  "setup": {
+    "mode": "pacing",
+    "advertisers": 5,
+    "campaignsPerAdvertiser": 1,
+    "creativesPerCampaign": 2,
+    "adProductCategory": "1529",
+    "additionalCategories": ["653", "654", "655"],
+    "budget": 2.0,
+    "budgets": [10.0, 2.0, 2.0, 2.0, 2.0],
+    "cpm": 5.0,
+    "cpms": [8.0, 3.0, 4.0, 5.0, 6.0],
+    "userPoolSize": 500
+  },
+  "pacing": {
+    "dayDurationSeconds": 300
+  },
+  "traffic": {
+    "continuous": true,
+    "reportEvery": 400,
+    "clickRate": 0.03,
+    "variableDelay": false,
+    "delayMs": 10,
+    "stopAfterDays": 4
+  }
+}

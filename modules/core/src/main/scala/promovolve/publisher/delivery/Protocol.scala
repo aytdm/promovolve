@@ -348,6 +348,18 @@ object Protocol {
   final case class CampaignPaused(campaignId: CampaignId, revokeApprovals: Boolean = false) extends Command
 
   /**
+   * Campaign hit its daily budget (CampaignBudgetExhausted on the budget
+   * topic). Marks the campaign spent in the pacing spend cache so the
+   * live-campaign filter retires it from the aggregate immediately. The
+   * cached todaySpend systematically lags the truth by up to a flush batch
+   * (the entity flushes on batch size; a denied campaign never reserves
+   * again, so its FINAL spend never flushes) — without this event the cache
+   * freezes just under the budget and the dust filter never fires. Cleared
+   * naturally by the next SpendUpdate (budget reset publishes one).
+   */
+  final case class CampaignExhausted(campaignId: CampaignId) extends Command
+
+  /**
    * Notifies AdServer that a campaign has narrowed its media targeting and is
    * no longer allowed to bid on THIS site (the advertiser dropped this site
    * from a non-empty siteAllowlist). Mirrors CampaignPaused removal: the
