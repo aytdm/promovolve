@@ -947,6 +947,10 @@ object AdServer {
             // Retire the campaign from the pacing aggregate NOW — its final
             // spend never flushes (see Protocol.CampaignExhausted).
             Protocol.CampaignExhausted(campaignId)
+          case promovolve.AdvertiserBudgetReset(advertiserId, _, _) =>
+            // Account refunded above spend — un-retire its campaigns
+            // immediately (see Protocol.AdvertiserRecovered).
+            Protocol.AdvertiserRecovered(advertiserId)
           case _ => NoOp
         }
         budgetEventTopic ! Topic.Subscribe(budgetEventAdapter)
@@ -1686,6 +1690,30 @@ private[delivery] class AdServer(
               pendingSpendByCampaign = pendingSpendByCampaign - campaignId
             ))
           case _ => Behaviors.same
+        }
+
+      case Protocol.AdvertiserRecovered(advertiserId) =>
+        // Evict (don't guess) the advertiser's campaigns from the spend
+        // cache: their marked/stale entries are why the gate still refuses.
+        // The next batch's cache-miss path fetches fresh SpendInfo from the
+        // entities, the advertiser gate passes, and serving resumes within
+        // seconds instead of waiting for the hourly idle eviction.
+        val evicted = spendInfoCache.collect {
+          case (campId, info) if info.advertiserId == advertiserId => campId
+        }.toSet
+        if (evicted.isEmpty) Behaviors.same
+        else {
+          pacingLog.info(
+            "BATCH PACING: site={} advertiser {} refunded, evicting {} campaign(s) from pacing cache for re-fetch",
+            siteId.value,
+            advertiserId.value,
+            evicted.size: java.lang.Integer
+          )
+          behavior(state.copy(
+            spendInfoCache = spendInfoCache -- evicted,
+            spendInfoLastUpdated = spendInfoLastUpdated -- evicted,
+            pendingSpendByCampaign = pendingSpendByCampaign -- evicted
+          ))
         }
 
       case Protocol.CampaignPaused(campaignId, revokeApprovals) =>

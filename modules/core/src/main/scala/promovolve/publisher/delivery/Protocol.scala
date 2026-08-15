@@ -360,6 +360,20 @@ object Protocol {
   final case class CampaignExhausted(campaignId: CampaignId) extends Command
 
   /**
+   * Advertiser's daily budget was raised back above its spend
+   * (AdvertiserBudgetReset on the budget topic). Evict the advertiser's
+   * campaigns from the pacing spend cache so the next batch re-fetches
+   * fresh truth and serving resumes immediately. Without this, campaigns
+   * marked spent via the advertiser gate stay retired until the hourly
+   * cache eviction rediscovers the money — retirement was instant (600ms
+   * observed live) but recovery was polled. The entity publishes the
+   * event and the auction layer already reacts; only this mapping was
+   * missing (the same case _ => NoOp discard that ate
+   * CampaignBudgetExhausted).
+   */
+  final case class AdvertiserRecovered(advertiserId: AdvertiserId) extends Command
+
+  /**
    * Notifies AdServer that a campaign has narrowed its media targeting and is
    * no longer allowed to bid on THIS site (the advertiser dropped this site
    * from a non-empty siteAllowlist). Mirrors CampaignPaused removal: the
