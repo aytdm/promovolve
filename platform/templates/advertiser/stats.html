@@ -23,18 +23,21 @@
 </div>
 {{else}}
 
-{{/* Hourly delivery chart — account-level, today (UTC). Static across
+{{/* Hourly delivery chart — account-level, today in the ADVERTISER'S
+     time zone (the API buckets hours AT TIME ZONE the advertiser's zone,
+     over the advertiser's budget day — see getAdvertiserHourlyTodayLogic).
+     Labels must not claim UTC. Static across
      the auto-refresh (only #stats-content below is swapped); hourly
      granularity doesn't need a 5s cadence. */}}
 {{if gt .AdvHourlyTotal 0}}
 <div class="bg-white p-4 rounded-lg border mb-6">
   <div class="flex items-baseline justify-between mb-2">
     <h2 class="text-sm font-semibold">{{t "Today's delivery"}}</h2>
-    <span class="text-xs text-gray-400">{{t "%d impressions · per UTC hour · hover for spend" .AdvHourlyTotal}}</span>
+    <span class="text-xs text-gray-400">{{t "%d impressions · per hour, your time zone · hover for spend" .AdvHourlyTotal}}</span>
   </div>
   <div class="flex items-end gap-1 h-24">
     {{range .AdvHourly}}
-    <div class="flex-1 flex flex-col justify-end h-full group" title="{{t "%s:00 UTC — %d imp · %s" (printf "%02d" .Hour) .Imps .Spend}}">
+    <div class="flex-1 flex flex-col justify-end h-full group" title="{{t "%s:00 — %d imp · %s" (printf "%02d" .Hour) .Imps .Spend}}">
       {{if .Imps}}
       <div class="bg-brand group-hover:bg-brand-hover rounded-t" style="height:{{.HeightPct}}%;"></div>
       {{else}}

@@ -3349,7 +3349,9 @@ func (h *Handler) AdvertiserStats(w http.ResponseWriter, r *http.Request) {
 		campaigns = append(campaigns, cd)
 	}
 
-	// Hourly delivery chart: today's impressions per UTC hour. All 24
+	// Hourly delivery chart: today's impressions per hour in the
+	// ADVERTISER'S time zone (the endpoint buckets AT TIME ZONE the
+	// advertiser's zone over its budget day). All 24
 	// buckets are materialized (the endpoint omits empty hours) so the
 	// chart's x-axis is a stable day, not just the active hours.
 	var hourly []hourlyBar
