@@ -4742,8 +4742,17 @@ private[delivery] class AdServer(
     advertiserRef
       .ask[AdvertiserEntity.AdvertiserBudgetStatus](ref => AdvertiserEntity.GetBudgetStatus(ref))
       .flatMap { advStatus =>
-        if (!advStatus.withinBudget) Future.successful(false)
-        else
+        if (!advStatus.withinBudget) {
+          // Advertiser-level exhaustion starves its campaigns WITHOUT any
+          // campaign-side InsufficientBudget (this gate runs first), so the
+          // campaign-level marking never fires and the campaign lingers in
+          // the pacing aggregate with frozen stale numbers — found live on
+          // prod 2026-08-15 when an advertiser budget was cut below spend
+          // mid-day. Mark it spent the same way; the next SpendUpdate
+          // (advertiser refunded → campaign serves → flush) heals the mark.
+          self ! Protocol.CampaignExhausted(candidate.campaignId)
+          Future.successful(false)
+        } else
           campaignRef
             .ask[CampaignEntity.ReserveResult](ref => CampaignEntity.TryReserve(requestId, spendAmount, ref))
             .map {
