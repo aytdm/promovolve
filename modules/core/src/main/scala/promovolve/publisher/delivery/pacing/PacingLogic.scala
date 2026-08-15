@@ -81,6 +81,45 @@ object PacingLogic {
     }.toMap
 
   /**
+   * Each campaign's OWN pace ratio: (spend + pending) / expected spend by
+   * now (issue #8 F3). The site gate regulates the pool's total volume but
+   * is blind to the split — a campaign that keeps winning front-loads while
+   * a small one next to a whale is arithmetically invisible. These ratios
+   * drive a per-campaign pass filter on the eligible candidates: ratio <= 1
+   * always passes; ratio r > 1 passes with probability 1/r (proportional
+   * slowdown, never a hard cut). Campaigns absent from `infos` (no spend
+   * info) must FAIL OPEN at the caller — filtering on cache PRESENCE is the
+   * d4ae4e5 doom loop; filtering on a KNOWN pace ratio is not.
+   *
+   * Denominator carries the same slack floor as PacingContext.spendRatio
+   * (1% of budget, min 1 cent) so a sleeping traffic shape reads as
+   * under-paced rather than exploding the ratio at day start.
+   *
+   * Zone-aware real days use each campaign's own advertiser-zone window
+   * fraction; otherwise the pool's expected-spend fraction applies to all.
+   */
+  def perCampaignPaceRatios(
+      infos: Seq[(CampaignId, CachedSpendInfo)],
+      pendingSpend: Map[CampaignId, (Double, Instant)],
+      tracker: TrafficShapeTracker,
+      now: Instant,
+      zoneAware: Boolean,
+      dayDurationSeconds: Int,
+      poolFraction: Double
+  ): Map[CampaignId, Double] =
+    infos.map { case (campId, info) =>
+      val fraction =
+        if (zoneAware && dayDurationSeconds == 86400)
+          expectedWindowFraction(tracker, info.dayStart, windowEndFor(info.dayStart, info.timezone), now)
+        else poolFraction
+      val slack = (info.dailyBudget.value * 0.01).max(BigDecimal(0.01))
+      val denom = (info.dailyBudget.value * BigDecimal(fraction)).max(slack)
+      val spent =
+        info.todaySpend.value + BigDecimal(pendingSpend.get(campId).map(_._1).getOrElse(0.0))
+      (campId, (spent / denom).toDouble)
+    }.toMap
+
+  /**
    * Compute aggregate budget metrics for pacing decisions.
    *
    * Calculates total daily budget, total spend (including pending),

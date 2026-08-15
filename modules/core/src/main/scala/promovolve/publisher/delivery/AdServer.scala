@@ -2615,7 +2615,7 @@ private[delivery] class AdServer(
             // the rate observer / lifecycle bookkeeping.
             behavior(state.copy(requestCount = requestCount + 1, lastRequestTimeMs = System.currentTimeMillis()))
           } else {
-            val (newState, action) = recordRequestArrival(state)
+            val (newState, action) = recordRequestArrival(state, slots.size)
             action match {
               case ArrivalAction.SkipRolloverGrace =>
                 // All-null outcomes — clients render unfilled slots, retry next page load.
@@ -2775,7 +2775,10 @@ private[delivery] class AdServer(
               val selCtx = SelectionContext(
                 creativeStats = creativeStats,
                 pacingStrategy = pacingStrategy,
-                requestArrivalRate = smoothedReqRate,
+                // Impression-opportunity rate, not raw request rate: the
+                // pacing feedforward targets imps/sec, and a k-slot batch
+                // can deliver k impressions per request (issue #8 F4).
+                requestArrivalRate = smoothedReqRate * smoothedSlotsPerReq,
                 pendingSpendByCampaign = pendingSpendByCampaign,
                 dayDurationSeconds = dayDurationSeconds,
                 spendInfoCache = spendInfoCache,
@@ -2843,12 +2846,21 @@ private[delivery] class AdServer(
             lastRequestTimeMs = now.toEpochMilli
           ))
         } else {
-          // Mix-change reset if needed.
-          if (lastCampaignSet.nonEmpty && currentCampaignSet != lastCampaignSet) {
+          // Mix-change reset if needed. Compare the SITE-WIDE cache keyset,
+          // never the per-URL candidate set (issue #8 F6): candidates differ
+          // page to page and shrink transiently during re-auction view
+          // rebuilds — observed live as 5 PI resets in 300ms of churn, which
+          // wipes the integral and starves selfTune of samples. The cache is
+          // site-wide and stable: a key appears when a campaign first serves
+          // here (a real join — reset) and persists through exhaustion marks
+          // and rollovers (no reset; the runs showed the PI re-adapts through
+          // budget-staircase steps in seconds WITHOUT a reset).
+          val mixSet = updatedCache.keySet
+          if (lastCampaignSet.nonEmpty && mixSet != lastCampaignSet) {
             pacingLog.info("BATCH PACING: site={} campaign mix changed, resetting PI (added={} removed={})",
               siteId.value,
-              (currentCampaignSet -- lastCampaignSet).map(_.value).mkString(","),
-              (lastCampaignSet -- currentCampaignSet).map(_.value).mkString(","))
+              (mixSet -- lastCampaignSet).map(_.value).mkString(","),
+              (lastCampaignSet -- mixSet).map(_.value).mkString(","))
             pacingStrategy.reset()
           }
           // Pace against the LIVE campaigns only (issue #8 F1): exhausted
@@ -2876,7 +2888,7 @@ private[delivery] class AdServer(
               eligibleCandidates = Vector.empty,
               pageBlocked = pageBlocked,
               replyTo = replyTo,
-              currentCampaignSet = currentCampaignSet,
+              currentCampaignSet = mixSet,
               excludedCreatives = excludedCreatives,
               excludedCampaigns = excludedCampaigns
             )
@@ -2885,7 +2897,7 @@ private[delivery] class AdServer(
               spendInfoLastUpdated =
                 state.spendInfoLastUpdated ++ fetchedInfo.keys.map(_ -> now),
               lastRequestTimeMs = now.toEpochMilli,
-              lastCampaignSet = currentCampaignSet
+              lastCampaignSet = mixSet
             ))
           } else {
             loggedAllExhausted = false // re-arm the refusal log
@@ -2937,27 +2949,44 @@ private[delivery] class AdServer(
               val h = validInfos.head._2
               CampaignEntity.SpendInfo(h.dailyBudget, h.todaySpend, h.dayStart)
             }
-            // Site-level pass/no-pass only — never per-candidate presence
-            // filtering (see checkBatchPacingGate; TryReserve gates money).
-            val eligibleCandidates = if (requestPasses) view.candidates else Vector.empty
+            // Per-campaign pace filter (issue #8 F3): the site gate caps
+            // total volume; this shapes the SPLIT. A campaign running ahead
+            // of its own budget's pace passes with probability 1/ratio;
+            // on/behind pace or UNKNOWN spend info always passes (fail
+            // open — d4ae4e5 bans filtering on cache presence, this filters
+            // on KNOWN pace only). One draw per campaign per batch so a
+            // campaign's creatives move together.
+            val paceRatios = PacingLogic.perCampaignPaceRatios(
+              validInfos, pendingSpendByCampaign, selCtx.trafficShapeTracker,
+              now, zoneAwarePacing, selCtx.dayDurationSeconds, pacingCtx.expectedSpendFraction)
+            val campaignPass: Map[CampaignId, Boolean] =
+              paceRatios.map { case (id, r) => id -> (r <= 1.0 || rng.nextDouble() < 1.0 / r) }
+            val paceFiltered =
+              if (requestPasses) view.candidates.filter(c => campaignPass.getOrElse(c.campaignId, true))
+              else Vector.empty
+            // If per-campaign filtering emptied a passing batch, fall back
+            // to the throttled path so pin honoring still runs.
+            val effectivePasses = requestPasses && (paceFiltered.nonEmpty || view.candidates.isEmpty)
+            val eligibleCandidates = if (effectivePasses) paceFiltered else Vector.empty
             val pageKey = AdServer.pageWinnersKeyFor(siteId, url)
             val pageBlocked: Set[String] = state.pageWinners.get(pageKey)
               .map(_.campaigns).getOrElse(Set.empty)
             pacingLog.info(
-              "BATCH PACING: site={} throttle={}% passes={} candidates={} spendRatio={} budget={} spend={}",
-              siteId.value, f"${throttle * 100}%.0f", requestPasses,
-              eligibleCandidates.size: java.lang.Integer, f"${pacingCtx.spendRatio}%.2f",
+              "BATCH PACING: site={} throttle={}% passes={} candidates={} overpaced={} spendRatio={} budget={} spend={}",
+              siteId.value, f"${throttle * 100}%.0f", effectivePasses,
+              eligibleCandidates.size: java.lang.Integer,
+              campaignPass.count(!_._2): java.lang.Integer, f"${pacingCtx.spendRatio}%.2f",
               f"${totalDailyBudget.toDouble}%.2f", f"${totalTodaySpend.toDouble}%.2f")
             val _ = firstInfo // reserved for future logging parity
             ctx.self ! BatchPacingGateResult(
-              shouldServe = requestPasses,
+              shouldServe = effectivePasses,
               view = view,
               url = url,
               slots = slots,
               eligibleCandidates = eligibleCandidates,
               pageBlocked = pageBlocked,
               replyTo = replyTo,
-              currentCampaignSet = currentCampaignSet,
+              currentCampaignSet = mixSet,
               excludedCreatives = excludedCreatives,
               excludedCampaigns = excludedCampaigns
             )
@@ -2967,7 +2996,7 @@ private[delivery] class AdServer(
               spendInfoLastUpdated =
                 state.spendInfoLastUpdated ++ fetchedInfo.keys.map(_ -> now),
               lastRequestTimeMs = now.toEpochMilli,
-              lastCampaignSet = currentCampaignSet
+              lastCampaignSet = mixSet
             ))
           }
         }
@@ -4462,11 +4491,18 @@ private[delivery] class AdServer(
   // Returns (state', action) — caller dispatches selection logic on Proceed.
   // ═══════════════════════════════════════════════════════════════════════════
 
-  private def recordRequestArrival(state: State): (State, ArrivalAction) = {
+  private def recordRequestArrival(state: State, slotCount: Int = 1): (State, ArrivalAction) = {
     import state.*
     val nowMs = System.currentTimeMillis()
     val newRate = trafficObserver.recordRequest(nowMs)
     val newRequestCount = requestCount + 1
+    // Slots-per-request EMA (issue #8 F4): the pacing feedforward compares
+    // an impressions/sec target against the REQUEST rate, but a k-slot
+    // batch can deliver k impressions — baseThrottle under-throttled by ~k
+    // exactly when it's the only control (grace / post-staleness).
+    // Tracked here rather than in TrafficObserver so the persisted traffic
+    // shape keeps meaning requests.
+    val newSlotsPerReq = 0.9 * smoothedSlotsPerReq + 0.1 * slotCount.max(1)
 
     // Post-rollover grace: skip serving until SpendInfo cache is populated.
     if (rolloverGraceUntilMs > 0 && nowMs < rolloverGraceUntilMs) {
@@ -4474,6 +4510,7 @@ private[delivery] class AdServer(
       val newState = state.copy(
         serveStats = serveStats.recordPacingSkipped,
         smoothedReqRate = newRate,
+        smoothedSlotsPerReq = newSlotsPerReq,
         requestCount = newRequestCount,
         lastRequestTimeMs = nowMs
       )
@@ -4605,6 +4642,7 @@ private[delivery] class AdServer(
           serveStats = serveStats.recordWarmup,
           lastDayStart = newDayStart,
           smoothedReqRate = newRate,
+          smoothedSlotsPerReq = newSlotsPerReq,
           rolloverGraceUntilMs = clearedGracePeriod,
           requestCount = newRequestCount,
           lastRequestTimeMs = nowMs,
@@ -4636,6 +4674,7 @@ private[delivery] class AdServer(
           serveStats = resetServeStats,
           lastDayStart = updatedDayStart,
           smoothedReqRate = newRate,
+          smoothedSlotsPerReq = newSlotsPerReq,
           pendingSpendByCampaign = clearedPending,
           spendInfoCache = resetCache,
           rolloverGraceUntilMs = 0L,
@@ -4793,13 +4832,14 @@ private[delivery] class AdServer(
     val uniqueCampaigns = view.candidates.map(_.campaignId).distinct
     val currentCampaignSet = uniqueCampaigns.toSet
 
-    // Mix-change detection — reset the PI so it doesn't chase phantom
-    // traffic caused by a different campaign set.
-    if (lastCampaignSet.nonEmpty && currentCampaignSet != lastCampaignSet) {
+    // Mix-change detection — SITE-WIDE cache keyset, never the per-URL
+    // candidate set (issue #8 F6; see the fetched-path comment).
+    val mixSet = spendInfoCache.keySet
+    if (lastCampaignSet.nonEmpty && mixSet != lastCampaignSet) {
       pacingLog.info("BATCH PACING: site={} campaign mix changed, resetting PI controller (added={} removed={})",
         siteId.value,
-        (currentCampaignSet -- lastCampaignSet).map(_.value).mkString(","),
-        (lastCampaignSet -- currentCampaignSet).map(_.value).mkString(","))
+        (mixSet -- lastCampaignSet).map(_.value).mkString(","),
+        (lastCampaignSet -- mixSet).map(_.value).mkString(","))
       pacingStrategy.reset()
     }
 
@@ -4876,7 +4916,7 @@ private[delivery] class AdServer(
           eligibleCandidates = Vector.empty,
           pageBlocked = pageBlocked,
           replyTo = replyTo,
-          currentCampaignSet = currentCampaignSet,
+          currentCampaignSet = mixSet,
           excludedCreatives = excludedCreatives,
           excludedCampaigns = excludedCampaigns
         )
@@ -4915,26 +4955,37 @@ private[delivery] class AdServer(
         )
         val throttle = pacingStrategy.throttleProbability(pacingCtx)
         val requestPasses = rng.nextDouble() >= throttle
-        // Pacing is a site-level pass/no-pass; spend-info presence must never
-        // gate individual candidates (TryReserve at reservation time is the
-        // money gate). Reaching here means every campaign was cached anyway.
-        val eligibleCandidates = if (requestPasses) view.candidates else Vector.empty
+        // Per-campaign pace filter — same rules as the batch path (issue #8
+        // F3): known over-pace slows proportionally, unknown fails open
+        // (d4ae4e5: never filter on cache presence).
+        val paceRatios = PacingLogic.perCampaignPaceRatios(
+          liveInfos, pendingSpendByCampaign, trafficShapeTracker,
+          now, zoneAwarePacing, dayDurationSeconds, pacingCtx.expectedSpendFraction)
+        val campaignPass: Map[CampaignId, Boolean] =
+          paceRatios.map { case (id, r) => id -> (r <= 1.0 || rng.nextDouble() < 1.0 / r) }
+        val paceFiltered =
+          if (requestPasses) view.candidates.filter(c => campaignPass.getOrElse(c.campaignId, true))
+          else Vector.empty
+        val effectivePasses = requestPasses && (paceFiltered.nonEmpty || view.candidates.isEmpty)
+        val eligibleCandidates = if (effectivePasses) paceFiltered else Vector.empty
         val pageKey = AdServer.pageWinnersKeyFor(siteId, url)
         val pageBlocked: Set[String] = pageWinners.get(pageKey)
           .map(_.campaigns).getOrElse(Set.empty)
-        pacingLog.info("BATCH PACING: site={} throttle={}% passes={} candidates={} spendRatio={} budget={} spend={}",
-          siteId.value, f"${throttle * 100}%.0f", requestPasses,
-          eligibleCandidates.size: java.lang.Integer, f"${pacingCtx.spendRatio}%.2f",
+        pacingLog.info(
+          "BATCH PACING: site={} throttle={}% passes={} candidates={} overpaced={} spendRatio={} budget={} spend={}",
+          siteId.value, f"${throttle * 100}%.0f", effectivePasses,
+          eligibleCandidates.size: java.lang.Integer,
+          campaignPass.count(!_._2): java.lang.Integer, f"${pacingCtx.spendRatio}%.2f",
           f"${totalDailyBudget.toDouble}%.2f", f"${totalTodaySpend.toDouble}%.2f")
         ctx.self ! Protocol.BatchPacingGateResult(
-          shouldServe = requestPasses,
+          shouldServe = effectivePasses,
           view = view,
           url = url,
           slots = slots,
           eligibleCandidates = eligibleCandidates,
           pageBlocked = pageBlocked,
           replyTo = replyTo,
-          currentCampaignSet = currentCampaignSet,
+          currentCampaignSet = mixSet,
           excludedCreatives = excludedCreatives,
           excludedCampaigns = excludedCampaigns
         )
@@ -5004,6 +5055,10 @@ private[delivery] class AdServer(
         java.time.LocalDate.now(java.time.ZoneOffset.UTC).atStartOfDay(java.time.ZoneOffset.UTC).toInstant),
       pacingStrategy: PacingStrategy = initialPacingStrategy,
       smoothedReqRate: Double = 0.0,
+      // EMA of ad slots per batch request (issue #8 F4): converts the
+      // request rate into an impression-opportunity rate for the pacing
+      // feedforward. 1.0 = single-slot pages.
+      smoothedSlotsPerReq: Double = 1.0,
       pendingSpendByCampaign: Map[CampaignId, (Double, Instant)] = Map.empty,
       dayDurationSeconds: Int = 86400,
       spendInfoCache: Map[CampaignId, CachedSpendInfo] = Map.empty,

@@ -275,6 +275,37 @@ class PacingLogicWindowSpec extends AnyFlatSpec with Matchers {
     PacingLogic.liveInfos(infos) shouldBe empty
   }
 
+  // ==================== perCampaignPaceRatios ====================
+
+  "perCampaignPaceRatios" should "rate each campaign against its OWN expected spend" in {
+    // Pool fraction 0.5: whale $10 with $5 spent = exactly on pace (1.0);
+    // small $2 with $1.5 spent = 1.5x ahead; fresh $2 with nothing = 0.
+    val infos = Seq(
+      CampaignId("whale") -> spentInfo(budget = 10.0, spend = 5.0),
+      CampaignId("ahead") -> spentInfo(budget = 2.0, spend = 1.5),
+      CampaignId("fresh") -> spentInfo(budget = 2.0, spend = 0.0)
+    )
+    val r = PacingLogic.perCampaignPaceRatios(
+      infos, Map.empty, uniformTracker, Instant.parse("2026-07-13T12:00:00Z"),
+      zoneAware = false, dayDurationSeconds = 300, poolFraction = 0.5
+    )
+    r(CampaignId("whale")) shouldBe 1.0 +- 1e-9
+    r(CampaignId("ahead")) shouldBe 1.5 +- 1e-9
+    r(CampaignId("fresh")) shouldBe 0.0 +- 1e-9
+  }
+
+  it should "include pending spend and floor the denominator at the slack" in {
+    val infos = Seq(CampaignId("c") -> spentInfo(budget = 10.0, spend = 0.05))
+    // Near day start (fraction ~0): denominator floors at 1% of budget
+    // ($0.10) instead of exploding; spend 0.05 + pending 0.05 = 0.10 → 1.0.
+    val r = PacingLogic.perCampaignPaceRatios(
+      infos, Map(CampaignId("c") -> (0.05, Instant.parse("2026-07-13T00:00:00Z"))),
+      uniformTracker, Instant.parse("2026-07-13T00:00:01Z"),
+      zoneAware = false, dayDurationSeconds = 300, poolFraction = 0.0
+    )
+    r(CampaignId("c")) shouldBe 1.0 +- 1e-9
+  }
+
   it should "keep the aggregate truthful: exhausted spend leaves BOTH sums" in {
     // Whale on pace + a spent-out small: unfiltered, the small reads as
     // phantom over-pace (its whole budget vs a fraction of expected); with
