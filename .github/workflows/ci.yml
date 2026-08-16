@@ -67,6 +67,10 @@ jobs:
   designer:
     name: Creative designer (unit + animation viewability)
     runs-on: ubuntu-latest
+    # The browser suite spawns vite + Chromium; a wedge there must fail
+    # the job in minutes (the suite's own watchdog is 180s), not idle
+    # into the runner's 6h default and stall the deploy gate.
+    timeout-minutes: 10
     defaults:
       run:
         working-directory: platform/creative-designer

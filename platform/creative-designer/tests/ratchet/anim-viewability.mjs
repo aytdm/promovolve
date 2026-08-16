@@ -41,10 +41,28 @@ const ENTRANCE_OFF = "-10%";
 const REST = "10%";
 const END_POSE = "30%";
 
+// Watchdog: every phase below is individually bounded, but a hang
+// anywhere (browser launch, page load, an orphaned child holding the
+// event loop open) must fail the suite in minutes, not eat a CI
+// runner's 6-hour default. Cleared on the normal exit paths.
+const watchdog = setTimeout(() => {
+  console.error("\nsuite watchdog: no completion within 180s — aborting");
+  process.exit(2);
+}, 180000);
+
+// detached → its own process group, so the kill below can take out the
+// whole npx → vite chain. Killing just the wrapper leaves vite alive
+// and its pipes into this process keep the event loop from ever
+// exiting (the CI hang this suite shipped with).
 const vite = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], {
   cwd: new URL("../..", import.meta.url).pathname,
   stdio: ["ignore", "pipe", "pipe"],
+  detached: true,
 });
+const stopVite = () => {
+  try { process.kill(-vite.pid, "SIGTERM"); } catch { /* already gone */ }
+  try { vite.kill(); } catch { /* already gone */ }
+};
 // Readiness by polling the HTTP port, not by grepping stdout for
 // "Local:" — the banner in non-TTY environments (CI runners) isn't a
 // stable contract, and a missed line looks like "vite did not start"
@@ -122,11 +140,15 @@ try {
 
   await browser.close();
 } finally {
-  vite.kill();
+  stopVite();
 }
 
+clearTimeout(watchdog);
 if (failures.length > 0) {
   console.log(`\n${failures.length} assertion(s) FAILED`);
   process.exit(1);
 }
 console.log("\nanimation viewability contract: all assertions hold");
+// Explicit even on success: a straggler handle (an orphaned child's
+// pipe, a stuck socket) must not turn a green suite into a CI hang.
+process.exit(0);
