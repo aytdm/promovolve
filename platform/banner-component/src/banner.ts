@@ -103,6 +103,13 @@ export class ExpandableMagazineBanner extends HTMLElement {
   // banner scrolls out and back in.
   private _impressionFired = false;
   private _impressionObserver: IntersectionObserver | null = null;
+  // One-shot ≥50% viewability latch for the collapsed item animations —
+  // same threshold as the impression gate, so motion greets the reader
+  // instead of playing off-screen on render. Latched per mount: once
+  // viewable, later re-renders play at render time (the banner is
+  // already on screen).
+  private _viewablePromise: Promise<void> | null = null;
+  private _viewableObserver: IntersectionObserver | null = null;
   // One-shot on-view teaser peel: a transient corner-lift hint played
   // when the collapsed banner first becomes viewable, advertising that
   // the ad can be dog-eared. Purely visual — it settles back and never
@@ -304,6 +311,8 @@ export class ExpandableMagazineBanner extends HTMLElement {
     this._preloadObserver = null;
     this._impressionObserver?.disconnect();
     this._impressionObserver = null;
+    this._viewableObserver?.disconnect();
+    this._viewableObserver = null;
     this._hiddenRenderRO?.disconnect();
     this._hiddenRenderRO = null;
   }
@@ -464,6 +473,36 @@ export class ExpandableMagazineBanner extends HTMLElement {
     }, { threshold: [0.5] });
     observer.observe(this);
     this._impressionObserver = observer;
+  }
+
+  /** Resolves the first time the banner is ≥50% visible — the same
+    * IAB-style threshold the impression gate uses, kept as a separate
+    * observer because the impression one is gated on `imp-url` and
+    * edit/preview modes, while this latch must work for any served or
+    * demoed banner. One-shot per mount: the promise is cached, so
+    * post-viewability re-renders resolve immediately. Browsers without
+    * IntersectionObserver resolve at once (same accepted trade-off as
+    * the preload/impression fallbacks). */
+  private whenViewable(): Promise<void> {
+    if (this._viewablePromise) return this._viewablePromise;
+    if (typeof IntersectionObserver !== "function") {
+      this._viewablePromise = Promise.resolve();
+      return this._viewablePromise;
+    }
+    this._viewablePromise = new Promise((resolve) => {
+      const observer = new IntersectionObserver((entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting || entry.intersectionRatio < 0.5) continue;
+          observer.disconnect();
+          this._viewableObserver = null;
+          resolve();
+          return;
+        }
+      }, { threshold: [0.5] });
+      observer.observe(this);
+      this._viewableObserver = observer;
+    });
+    return this._viewablePromise;
   }
 
   private fireImpression(impUrl: string): void {
@@ -1511,48 +1550,89 @@ export class ExpandableMagazineBanner extends HTMLElement {
     // dead/glacial image can't hold the slot hostage; edit mode renders
     // visible from the start (the canvas re-renders on every keystroke).
     const bannerEl = this.shadowRoot.querySelector<HTMLElement>(".banner");
-    if (!editMode && bannerEl) this.revealWhenImagesReady(bannerEl);
+    const revealed = !editMode && bannerEl
+      ? this.revealWhenImagesReady(bannerEl)
+      : Promise.resolve();
 
     // Tween items that declare animationTo from base state → target.
     // Items without animationFrom/animationTo are static. Edit mode
     // skips animation.
     if (editMode) return;
-    items.forEach((item, i) => {
-      const el = this.shadowRoot?.querySelector<HTMLElement>(`[data-layout-idx="${i}"]`);
-      if (!el) return;
-
-      const baseValues = {
-        left: item.left ?? 0,
-        top: item.top ?? 0,
-        rotation: item.rotation ?? 0,
-        scale: 1,
-        opacity: item.opacity ?? 1,
-      };
-      // Entrance first: snap to the off-pose NOW (before this frame
-      // paints) and tween home. Composable with animationTo below,
-      // which rides its own delay.
-      if (item.animationFrom) this.playEntrance(el, item.animationFrom, baseValues);
-      const to = item.animationTo;
-      if (!to) return;
-      if (prefersReducedMotion()) {
-        // Motion-sensitive users get the END pose instantly — it's the
-        // meaningful state (authors use animationTo for emphasis).
-        applyTargetState(el, to, resolveTargetValues(to, baseValues));
-        return;
-      }
-      const delay = targetStartSeconds(to, item.animationFrom);
-      setTimeout(() => {
-        el.style.transition = transitionFor({ ...to, delay: 0 }, 0.8);
-        // Two rAFs: the first lets the browser paint the baseline with
-        // the new transition rule committed; the second changes the
-        // target properties so the transition actually fires. A single
-        // rAF or a sync reflow isn't enough — the browser batches both
-        // style mutations and skips the animation.
-        requestAnimationFrame(() => requestAnimationFrame(() => {
-          applyTargetState(el, to, resolveTargetValues(to, baseValues));
-        }));
-      }, delay * 1000);
+    const baseOf = (item: LayoutItem): {
+      left: number; top: number; rotation: number; scale: number; opacity: number;
+    } => ({
+      left: item.left ?? 0,
+      top: item.top ?? 0,
+      rotation: item.rotation ?? 0,
+      scale: 1,
+      opacity: item.opacity ?? 1,
     });
+
+    if (prefersReducedMotion()) {
+      // Motion-sensitive users get the END pose instantly — it's the
+      // meaningful state (authors use animationTo for emphasis). Posed
+      // at render, NOT at viewability: there is no motion to time, and
+      // snapping content as the banner crosses the threshold would be
+      // exactly the jump this preference asks to avoid.
+      items.forEach((item, i) => {
+        const to = item.animationTo;
+        if (!to) return;
+        const el = this.shadowRoot?.querySelector<HTMLElement>(`[data-layout-idx="${i}"]`);
+        if (el) applyTargetState(el, to, resolveTargetValues(to, baseOf(item)));
+      });
+      return;
+    }
+
+    const playAll = (): void => {
+      items.forEach((item, i) => {
+        const el = this.shadowRoot?.querySelector<HTMLElement>(`[data-layout-idx="${i}"]`);
+        if (!el) return;
+        const baseValues = baseOf(item);
+        // Entrance first: snap to the off-pose NOW (before this frame
+        // paints) and tween home. Composable with animationTo below,
+        // which rides its own delay.
+        if (item.animationFrom) this.playEntrance(el, item.animationFrom, baseValues);
+        const to = item.animationTo;
+        if (!to) return;
+        const delay = targetStartSeconds(to, item.animationFrom);
+        setTimeout(() => {
+          el.style.transition = transitionFor({ ...to, delay: 0 }, 0.8);
+          // Two rAFs: the first lets the browser paint the baseline with
+          // the new transition rule committed; the second changes the
+          // target properties so the transition actually fires. A single
+          // rAF or a sync reflow isn't enough — the browser batches both
+          // style mutations and skips the animation.
+          requestAnimationFrame(() => requestAnimationFrame(() => {
+            applyTargetState(el, to, resolveTargetValues(to, baseValues));
+          }));
+        }, delay * 1000);
+      });
+    };
+
+    // The designer's preview modal owns its own timing — play on render
+    // as before (mirrors the preload/impression preview-frame carve-out).
+    if (this.getAttribute("preview-frame") === "1") {
+      playAll();
+      return;
+    }
+
+    // Delivery: hold the choreography until the reader can actually see
+    // it — the atomic reveal has lifted (nothing plays behind the
+    // opacity-0 curtain) AND the banner has been ≥50% visible (the same
+    // moment the impression counts and the teaser peel plays). Until
+    // then, entrance items sit at their OFF-pose (snapped here at render)
+    // so a partially-visible banner shows the start state, not resting
+    // items that later jump backwards to animate. playEntrance re-snaps
+    // the same pose when it plays, which is invisible. Timers are armed
+    // per render; a re-render before viewability leaves the old timers
+    // mutating detached nodes, which is harmless (same reasoning as the
+    // reveal path above).
+    items.forEach((item, i) => {
+      if (!item.animationFrom) return;
+      const el = this.shadowRoot?.querySelector<HTMLElement>(`[data-layout-idx="${i}"]`);
+      if (el) applyEntranceStart(el, item.animationFrom, baseOf(item));
+    });
+    void Promise.all([revealed, this.whenViewable()]).then(playAll);
   }
 
   /** Rendered-items snapshot for the collapsed/edit canvas — see
@@ -1562,8 +1642,10 @@ export class ExpandableMagazineBanner extends HTMLElement {
   /** Fade `root` in once all of its <img>s are fetched + decoded (or the
     * cap expires — a broken image must not blank the slot forever). decode()
     * resolves only when the bitmap is paint-ready, so the reveal is truly
-    * atomic; images that error resolve too and render as their alt/blank. */
-  private revealWhenImagesReady(root: HTMLElement): void {
+    * atomic; images that error resolve too and render as their alt/blank.
+    * Returns a promise that settles at the reveal, so the item-animation
+    * gate can wait for it. */
+  private revealWhenImagesReady(root: HTMLElement): Promise<void> {
     const CAP_MS = 2000;
     const imgs = Array.from(root.querySelectorAll("img"));
     const waits: Promise<unknown>[] = imgs.map((img) => {
@@ -1588,7 +1670,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
       }));
     }
     const cap = new Promise<void>((res) => setTimeout(res, CAP_MS));
-    Promise.race([Promise.all(waits), cap]).then(() => {
+    return Promise.race([Promise.all(waits), cap]).then(() => {
       // A re-render replaces the shadow DOM wholesale; touching the old
       // node then is harmless (it's detached), so no generation check.
       root.style.opacity = "1";
