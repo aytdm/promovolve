@@ -89,9 +89,40 @@ jobs:
       bootstrap: ${{ steps.filter.outputs.bootstrap == 'true' }}
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Diff since the LAST SUCCESSFUL Deploy, not since this push's
+      # parent. The default push-range diff has no memory: when a push's
+      # Deploy fails the ci-gate, the changes it carried are invisible to
+      # the next push's filter, and a later green Deploy ships everything
+      # EXCEPT them (2026-08-16: a banner-component change stranded behind
+      # a red CI run — the follow-up fix push deployed green but skipped
+      # "Publish banner → R2", leaving visitors on the old bundle).
+      # Anchoring the diff at the last commit Deploy fully succeeded on
+      # makes stranded changes reappear in the range until they actually
+      # ship. Over-matching is safe: builds are cheap re-runs and the R2
+      # publish is content-hashed/idempotent. The pin commits that land
+      # between deploys touch only k8s/kustomization.yaml, which matches
+      # no filter. No prior successful run (fresh fork) → empty base →
+      # paths-filter falls back to the default push-range behaviour.
+      - name: Find last successful Deploy commit
+        id: last-success
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          base=$(gh api \
+            "repos/${{ github.repository }}/actions/workflows/deploy.yml/runs?branch=main&status=success&per_page=1" \
+            --jq '.workflow_runs[0].head_sha // empty' || true)
+          echo "base=$base" >> "$GITHUB_OUTPUT"
+          echo "diff base: ${base:-<none — falling back to the push range>}"
+
       - uses: dorny/paths-filter@v3
         id: filter
         with:
+          # A commit SHA base makes paths-filter diff merge-base(base,
+          # HEAD)..HEAD — on linear main that is exactly base..HEAD. It
+          # fetches the history it needs from the shallow checkout itself.
+          base: ${{ steps.last-success.outputs.base }}
           filters: |
             # POSITIVE patterns only. With the default predicate-quantifier
             # (some), a '!'-negation matches every file OUTSIDE its glob, so
