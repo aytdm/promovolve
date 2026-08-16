@@ -281,6 +281,45 @@ class CampaignEntityRolloverSpec extends AnyWordSpec with Matchers with BeforeAn
       spendInfo(revived).timezone shouldBe JST
     }
 
+    "publish a SpendUpdate on a TIMER-driven roll (CheckWindowRoll), not only on spend-driven rolls" in {
+      // The 2026-08-16 midnight latch: with pacing hard-stopped at the
+      // boundary there is no spend, so the timer roll is the ONLY roll that
+      // can fire — if it rolls silently, AdServer's spend cache keeps the
+      // finished window forever and the site stays dark until the 1h purge.
+      val campaignId = CampaignId("camp-timer-roll")
+      val c = spawnCampaign(campaignId.value, "adv-timer-roll")
+
+      // Same-day spend (no roll) so the roll below demonstrably flushes it.
+      recordSpend(c, 10.0, Instant.now())
+
+      val probe = testKit.createTestProbe[BudgetEvent]()
+      budgetTopic ! Topic.Subscribe(probe.ref)
+      val statsProbe = testKit.createTestProbe[Topic.TopicStats]()
+      probe.awaitAssert(
+        {
+          budgetTopic ! Topic.GetTopicStats(statsProbe.ref)
+          statsProbe.receiveMessage(1.second).localSubscriberCount should be >= 1
+        },
+        5.seconds
+      )
+
+      // Timer tick with an injected clock two UTC days ahead — a later
+      // local day than lastResetInstant, and a later epoch day than any
+      // the double-roll guard has marked (the guard is monotonic).
+      val tickAt = Instant.now().plusSeconds(2 * 86400L)
+      c ! CampaignEntity.CheckWindowRoll(Some(tickAt))
+
+      probe.fishForMessage(5.seconds) {
+        case u: SpendUpdate
+            if u.campaignId == campaignId && u.todaySpend == Spend.zero &&
+            u.dayStart == tickAt =>
+          FishingOutcomes.complete
+        case _ =>
+          FishingOutcomes.continueAndIgnore
+      }
+      budgetTopic ! Topic.Unsubscribe(probe.ref)
+    }
+
     "publish a SpendUpdate carrying the new timezone on zone change" in {
       val campaignId = CampaignId("camp-tz-publish")
       val c = spawnCampaign(campaignId.value, "adv-tz-publish")

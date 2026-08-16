@@ -61,6 +61,47 @@ class PacingLogicWindowSpec extends AnyFlatSpec with Matchers {
     Instant.parse("2026-07-14T15:00:00Z")
   }
 
+  // ==================== windowExpired ====================
+
+  private def cachedInfo(dayStart: Instant, tz: String): CachedSpendInfo =
+    CachedSpendInfo(
+      advertiserId = AdvertiserId("adv"),
+      dailyBudget = Budget(100.0),
+      todaySpend = Spend(1.0),
+      dayStart = dayStart,
+      timestamp = dayStart,
+      timezone = tz
+    )
+
+  // The 2026-08-16 midnight latch scenario: a JST entry stamped at 14:36Z
+  // has a window ending 24 minutes later (15:00Z = JST midnight). At and
+  // after that boundary the entry is stale and must read as expired so the
+  // pacing gate refetches instead of hard-stopping on remainingHours=0.
+  "windowExpired" should "be false while the entry's zone window is still open" in {
+    val info = cachedInfo(Instant.parse("2026-08-16T14:36:14Z"), "Asia/Tokyo")
+    PacingLogic.windowExpired(info, Instant.parse("2026-08-16T14:59:59Z")) shouldBe false
+  }
+
+  it should "be true exactly at the zone-midnight window end, and after" in {
+    val info = cachedInfo(Instant.parse("2026-08-16T14:36:14Z"), "Asia/Tokyo")
+    PacingLogic.windowExpired(info, Instant.parse("2026-08-16T15:00:00Z")) shouldBe true
+    PacingLogic.windowExpired(info, Instant.parse("2026-08-16T15:22:00Z")) shouldBe true
+  }
+
+  it should "keep a freshly rolled entry live for its full new day" in {
+    // Entry rolled at JST midnight: window ends at the NEXT JST midnight.
+    val info = cachedInfo(Instant.parse("2026-08-16T15:00:00Z"), "Asia/Tokyo")
+    PacingLogic.windowExpired(info, Instant.parse("2026-08-16T15:22:00Z")) shouldBe false
+    PacingLogic.windowExpired(info, Instant.parse("2026-08-17T14:59:59Z")) shouldBe false
+    PacingLogic.windowExpired(info, Instant.parse("2026-08-17T15:00:00Z")) shouldBe true
+  }
+
+  it should "use UTC midnight for the default zone" in {
+    val info = cachedInfo(Instant.parse("2026-07-13T11:00:00Z"), "")
+    PacingLogic.windowExpired(info, Instant.parse("2026-07-13T23:59:59Z")) shouldBe false
+    PacingLogic.windowExpired(info, Instant.parse("2026-07-14T00:00:00Z")) shouldBe true
+  }
+
   // ==================== wrappedMass ====================
 
   "wrappedMass" should "reduce to a plain CDF difference when the interval does not wrap" in {

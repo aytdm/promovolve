@@ -1147,6 +1147,37 @@ private[delivery] class AdServer(
         poolSize: java.lang.Integer
       )
     }
+
+  // Rate limit for the hard-stop WARN below (one line per minute while
+  // stopped, mirroring DEMAND-LIVENESS cadence — enough to alert on,
+  // bounded under request storms).
+  private var lastHardStopWarnMs: Long = 0L
+
+  /**
+   * A throttle of exactly 1.0 can only come from a pacing hard stop (no
+   * budget / day over / budget exhausted) — the PI path caps at
+   * MaxThrottleProb 0.99. A hard stop with budget left is a blackout, and
+   * the routine INFO pacing line does not distinguish it from healthy
+   * no-demand: on 2026-08-16 a site sat at throttle=100% with green
+   * auctions for 36 minutes and nothing named it. WARN with the window
+   * fields so the next occurrence diagnoses itself.
+   */
+  private def warnIfHardStop(throttle: Double, pc: PacingContext): Unit =
+    if (throttle >= 1.0) {
+      val nowMs = System.currentTimeMillis()
+      if (nowMs - lastHardStopWarnMs >= 60000L) {
+        lastHardStopWarnMs = nowMs
+        pacingLog.warn(
+          "PACING HARD STOP site={} remainingHours={} budget={} spend={} dayStart={} windowEnd={}",
+          siteId.value,
+          f"${pc.remainingHours}%.2f",
+          pc.dailyBudget,
+          pc.todaySpend,
+          pc.dayStart,
+          pc.windowEnd.map(_.toString).getOrElse("-")
+        )
+      }
+    }
   // Per-category floors, carried on
   // CandidatesCollected from the auctioneer. Empty in off/shadow →
   // `categoryFloorFor` falls back to `siteFloorCpm` (legacy behavior).
@@ -2830,10 +2861,22 @@ private[delivery] class AdServer(
         // The fetch may have covered only the campaigns the cache was
         // missing — pacing aggregates must see the UNION of fetched and
         // already-cached entries, not just this fetch's results.
-        val mergedInfos: Seq[(CampaignId, CachedSpendInfo)] =
+        val mergedInfos0: Seq[(CampaignId, CachedSpendInfo)] =
           view.candidates.map(_.campaignId).distinct.flatMap { campId =>
             updatedCache.get(campId).map(info => (campId, info))
           }
+        // Stale-day latch guard, fetch side: an entry can come back from the
+        // fetch STILL carrying a finished window (the CampaignEntity hasn't
+        // rolled yet — its CheckWindowRoll tick is up to 5 min behind the
+        // boundary). Excluding it here makes those campaigns fail OPEN
+        // (absent from pacing aggregates, "serving them ungated" below —
+        // TryReserve stays the money gate) instead of feeding
+        // remainingHours=0 into the hard stop and blacking the site out
+        // until the entity's own roll lands.
+        val mergedInfos =
+          if (selCtx.dayDurationSeconds == 86400)
+            mergedInfos0.filterNot { case (_, info) => PacingLogic.windowExpired(info, now) }
+          else mergedInfos0
         val stillMissing = currentCampaignSet -- mergedInfos.map(_._1)
         if (stillMissing.nonEmpty) {
           // Their asks timed out/failed. They stay ELIGIBLE (TryReserve is
@@ -2972,6 +3015,7 @@ private[delivery] class AdServer(
               windowEnd = windowEnd
             )
             val throttle = pacingStrategy.throttleProbability(pacingCtx)
+            warnIfHardStop(throttle, pacingCtx)
             val requestPasses = rng.nextDouble() >= throttle
             val firstInfo = {
               val h = validInfos.head._2
@@ -4683,15 +4727,35 @@ private[delivery] class AdServer(
         // Normal proceed: apply rollover-related cache resets, yield Proceed.
         val newDayStart = Instant.ofEpochMilli(nowMs)
         val (clearedPending, resetServeStats, resetCache) = if (needsReset) {
-          log.info("Day rollover: resetting cache values (todaySpend=0, dayStart={})", newDayStart)
-          val resetCacheEntries = spendInfoCache.map { case (campaignId, cached) =>
-            campaignId -> cached.copy(
-              todaySpend = Spend.zero,
-              dayStart = newDayStart,
-              timestamp = newDayStart
+          if (dayDurationSeconds == 86400) {
+            // Real days: CampaignEntity owns the budget window (advertiser-
+            // zone midnight — see the roll comment above). Rewriting the
+            // cached entries here stamped a WALL-CLOCK dayStart whose zone
+            // window could end minutes later: a deploy at 14:29Z restarted
+            // the entity, the UTC-date check above fired a spurious
+            // rollover, dayStart became 14:36Z, and the JST window ended at
+            // 15:00Z — remainingHours hit 0 and the pacing hard stop went
+            // dark for the site (2026-08-16 midnight latch). EVICT instead:
+            // the pacing gate's missing-campaign fetch repopulates each
+            // entry with the campaign's authoritative dayStart on the next
+            // request.
+            log.info(
+              "Day rollover: evicting {} spend cache entries (real day — CampaignEntity owns dayStart)",
+              spendInfoCache.size: java.lang.Integer
             )
+            (Map.empty[CampaignId, (Double, Instant)], ServeStats(siteId.value),
+              Map.empty[CampaignId, CachedSpendInfo])
+          } else {
+            log.info("Day rollover: resetting cache values (todaySpend=0, dayStart={})", newDayStart)
+            val resetCacheEntries = spendInfoCache.map { case (campaignId, cached) =>
+              campaignId -> cached.copy(
+                todaySpend = Spend.zero,
+                dayStart = newDayStart,
+                timestamp = newDayStart
+              )
+            }
+            (Map.empty[CampaignId, (Double, Instant)], ServeStats(siteId.value), resetCacheEntries)
           }
-          (Map.empty[CampaignId, (Double, Instant)], ServeStats(siteId.value), resetCacheEntries)
         } else {
           (pendingSpendByCampaign, serveStats, spendInfoCache)
         }
@@ -4705,6 +4769,10 @@ private[delivery] class AdServer(
           smoothedSlotsPerReq = newSlotsPerReq,
           pendingSpendByCampaign = clearedPending,
           spendInfoCache = resetCache,
+          // Evicted entries must not leave orphan cleanup timestamps behind.
+          spendInfoLastUpdated =
+            if (needsReset && dayDurationSeconds == 86400) Map.empty
+            else state.spendInfoLastUpdated,
           rolloverGraceUntilMs = 0L,
           requestCount = newRequestCount,
           lastRequestTimeMs = nowMs,
@@ -4880,8 +4948,27 @@ private[delivery] class AdServer(
       pacingStrategy.reset()
     }
 
-    val validInfos: Seq[(CampaignId, CachedSpendInfo)] = uniqueCampaigns.flatMap { campId =>
+    val cachedInfos: Seq[(CampaignId, CachedSpendInfo)] = uniqueCampaigns.flatMap { campId =>
       spendInfoCache.get(campId).map(info => (campId, info))
+    }
+    // Stale-day latch guard (2026-08-16): a cached entry whose budget window
+    // has already ENDED describes a finished day — feeding it forward drives
+    // remainingHours to 0 and the hard stop refuses every serve, while the
+    // SpendUpdate that would refresh the entry mostly rides on serving.
+    // Treat such entries as cache MISSES so THIS request refetches the
+    // campaign's real (rolled) dayStart. Real days only — simulated days
+    // roll the cache in place via the rollover reset.
+    val (validInfos, expiredWindows) =
+      if (dayDurationSeconds == 86400)
+        cachedInfos.partition { case (_, info) => !PacingLogic.windowExpired(info, now) }
+      else (cachedInfos, Seq.empty[(CampaignId, CachedSpendInfo)])
+    if (expiredWindows.nonEmpty) {
+      pacingLog.warn(
+        "BATCH PACING: site={} {} cached spend entries past their budget-window end — refetching: {}",
+        siteId.value,
+        expiredWindows.size: java.lang.Integer,
+        expiredWindows.map(_._1.value).mkString(",")
+      )
     }
     val missingCampaigns: Set[CampaignId] =
       currentCampaignSet -- validInfos.map(_._1)
@@ -4991,6 +5078,7 @@ private[delivery] class AdServer(
           windowEnd = windowEnd
         )
         val throttle = pacingStrategy.throttleProbability(pacingCtx)
+        warnIfHardStop(throttle, pacingCtx)
         val requestPasses = rng.nextDouble() >= throttle
         // Per-campaign pace filter — same rules as the batch path (issue #8
         // F3): known over-pace slows proportionally, unknown fails open

@@ -246,6 +246,18 @@ object PacingLogic {
   def windowEndFor(dayStart: Instant, timezone: String): Instant =
     Timezones.nextMidnightAfter(dayStart, timezone)
 
+  /**
+   * True when a cached spend entry's budget window has already ENDED — the
+   * entry describes a finished day and is stale by definition, whatever its
+   * cache timestamp says. Feeding it forward drives `remainingHours` to 0
+   * and the pacing hard stop refuses every serve, while the SpendUpdate
+   * that would refresh the entry mostly rides on serving — the 2026-08-16
+   * midnight latch. Callers treat such entries as cache MISSES (refetch
+   * the campaign's real, rolled dayStart) instead of trusting them.
+   */
+  def windowExpired(info: CachedSpendInfo, now: Instant): Boolean =
+    !windowEndFor(info.dayStart, info.timezone).isAfter(now)
+
   /** Seconds into the UTC day of `instant` (traffic-shape bucket coordinate). */
   def secOfUtcDay(instant: Instant): Double =
     instant.atZone(ZoneOffset.UTC).toLocalTime.toSecondOfDay.toDouble

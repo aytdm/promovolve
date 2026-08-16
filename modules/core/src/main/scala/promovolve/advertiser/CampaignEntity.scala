@@ -730,14 +730,14 @@ object CampaignEntity {
             }
             Effect.none
 
-          case CheckWindowRoll =>
+          case CheckWindowRoll(nowOverride) =>
             // Piggyback the timezone self-heal on the roll tick.
             refreshTimezoneFromAdvertiser()
             // Auto-flip Active → Ended when endAt has passed. This is a
             // pure UI / housekeeping transition — canBid already returns
             // false from isWithinSchedule regardless of status, so the
             // serve path doesn't depend on this flip happening.
-            val nowForEnd = Instant.now()
+            val nowForEnd = nowOverride.getOrElse(Instant.now())
             val needsEndFlip = state.status == Status.Active && state.endAt.exists(nowForEnd.isAfter)
             if (needsEndFlip) {
               ctx.log.info(
@@ -755,7 +755,7 @@ object CampaignEntity {
               // Skip in simulated mode — day resets driven by ResetDayStart.
               // Day boundary = the advertiser account zone's midnight, not UTC.
               val simulatedMode = simDayDurationSeconds < 86400.0
-              val today = Timezones.localEpochDay(Instant.now(), state.timezone)
+              val today = Timezones.localEpochDay(nowForEnd, state.timezone)
               val needsRoll =
                 !simulatedMode && Timezones.localEpochDay(state.lastResetInstant, state.timezone) != today
               // Guard against double roll: if RecordSpend already rolled to this day, skip
@@ -773,7 +773,7 @@ object CampaignEntity {
                 // Reset ephemeral filter for new day (old day's filter discarded)
                 resetFilter()
 
-                val now = Instant.now()
+                val now = nowForEnd
                 val cpmFlushId =
                   if (amount.isPositive)
                     Some(nextFlushId(epochDayOf(state.lastResetInstant)))
@@ -794,6 +794,24 @@ object CampaignEntity {
 
                 Effect.persist(newState).thenRun { _ =>
                   cpmFlushId.foreach(id => initiateSpendReport(id, amount, now))
+                  // Publish the roll. The spend-triggered roll (RecordSpend)
+                  // already does this; this timer path used to roll SILENTLY,
+                  // which latched the 2026-08-16 midnight blackout: pacing
+                  // hard-stopped on the old window at JST midnight, no
+                  // serving meant no RecordSpend, so the only roll that
+                  // could fire was this one — and AdServer's spend cache
+                  // never learned the day rolled until the 1h stale purge.
+                  budgetEventTopic ! Topic.Publish(
+                    promovolve.SpendUpdate(
+                      campaignId = campaignId,
+                      advertiserId = advertiserId,
+                      dailyBudget = newState.dailyBudget,
+                      todaySpend = totalSpend(newState),
+                      dayStart = newState.lastResetInstant,
+                      timestamp = now,
+                      timezone = newState.timezone
+                    )
+                  )
                 }
               } else Effect.none
             }
@@ -1546,7 +1564,7 @@ object CampaignEntity {
 
           // Start timers AFTER recovery to prevent processing timer messages before state is ready
           timers.startTimerWithFixedDelay(FlushTick, flushInterval)
-          timers.startTimerWithFixedDelay(CheckWindowRoll, 5.minutes)
+          timers.startTimerWithFixedDelay(CheckWindowRoll(), 5.minutes)
           // Bid-book heartbeat, hash-staggered so campaigns don't thunder.
           timers.startTimerWithFixedDelay(
             QuoteTick,
@@ -1604,7 +1622,7 @@ object CampaignEntity {
 
   sealed trait ReplenishResult extends promovolve.CborSerializable
 
-  private sealed trait Internal extends Command
+  private[advertiser] sealed trait Internal extends Command
 
   /**
    * Self-message sent once after recovery if persisted state still carries
@@ -2162,6 +2180,11 @@ object CampaignEntity {
 
   private case object FlushTick extends Internal
 
-  private case object CheckWindowRoll extends Internal
+  // private[advertiser] (not private) so CampaignEntityRolloverSpec can
+  // drive the timer roll deterministically — the roll that must publish.
+  // `nowOverride` is the timer-path twin of RecordSpend's injectable `ts`:
+  // the periodic timer always sends None (wall clock); tests inject a
+  // boundary-crossing instant so the roll is reproducible without sleeps.
+  private[advertiser] final case class CheckWindowRoll(nowOverride: Option[Instant] = None) extends Internal
 
 }
