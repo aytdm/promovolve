@@ -64,6 +64,31 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run test:hostile
 
+  designer:
+    name: Creative designer (unit + animation viewability)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: platform/creative-designer
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: platform/creative-designer/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx vitest run
+      # Animation viewability contract: collapsed-banner item motion must
+      # HOLD until the banner is ≥50% visible (and the atomic reveal has
+      # lifted), then play; reduced-motion poses instantly at render. The
+      # gate is an IntersectionObserver, so this needs real Chromium —
+      # the fixture imports the banner component from source via the
+      # @banner vite alias (see tests/ratchet/anim-viewability.mjs).
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:anim-viewability
+
   bootstrap:
     name: Bootstrap (publisher ad tag)
     runs-on: ubuntu-latest

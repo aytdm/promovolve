@@ -15,7 +15,8 @@
     "fanout": "node scripts/fanout.mjs",
     "release": "npm run typecheck && npm run lint && npm run test && npm run build && npm run fanout",
     "test:ratchet": "node tests/ratchet/run.mjs",
-    "test:start-sync": "node tests/ratchet/start-sync.mjs"
+    "test:start-sync": "node tests/ratchet/start-sync.mjs",
+    "test:anim-viewability": "node tests/ratchet/anim-viewability.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.17.0",

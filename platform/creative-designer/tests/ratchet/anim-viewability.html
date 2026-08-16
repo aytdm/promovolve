@@ -1,0 +1,44 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>anim viewability fixture</title></head>
+<!-- Fixture for anim-viewability.mjs: a collapsed banner parked 250vh
+     below the fold, with one entrance item and one end-pose item. The
+     banner component is imported FROM SOURCE via the designer's
+     @banner vite alias, so the suite guards the code as written, not a
+     stale published bundle. -->
+<body style="margin:0">
+  <div style="height:250vh;background:#eee"></div>
+  <div id="slot" style="width:300px;height:250px;margin:0 auto">
+    <expandable-magazine-banner id="b" width="300" height="250"></expandable-magazine-banner>
+  </div>
+  <div style="height:150vh;background:#eee"></div>
+  <script type="module">
+    import "@banner/index.ts";
+    const pages = [{
+      headline: "H", body: "B", tag: "T",
+      banners: {
+        "300x250": [
+          // entrance item: slides in from the left (off-pose left = -10%)
+          { type: "rect", left: 10, top: 10, width: 30, height: 20, fill: "#3366ff",
+            animationFrom: { dx: -20, duration: 0.3, delay: 0 } },
+          // end-pose item: drifts right by 20% after 0.1s
+          { type: "rect", left: 10, top: 50, width: 30, height: 20, fill: "#ff6633",
+            animationTo: { dx: 20, duration: 0.3, delay: 0.1 } },
+        ],
+      },
+    }];
+    const b = document.getElementById("b");
+    b.setAttribute("pages", JSON.stringify(pages));
+    b.setAttribute("collapsed-page-index", "0");
+    window.__itemStyles = () => {
+      const sr = b.shadowRoot;
+      const items = [...(sr?.querySelectorAll("[data-layout-idx]") ?? [])];
+      return items.map((el) => ({ left: el.style.left }));
+    };
+    window.__bannerOpacity = () => {
+      const el = b.shadowRoot?.querySelector(".banner");
+      return el ? el.style.opacity : null;
+    };
+  </script>
+</body>
+</html>
