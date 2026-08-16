@@ -1,6 +1,6 @@
 {
   "name": "@promovolve/banner-component",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Expandable magazine banner web component — vanilla TypeScript, no framework. Built into an IIFE bundle that publishers and the dashboard load as a script.",
   "type": "module",
