@@ -14,7 +14,7 @@
 //     (one undo step per completed edit)
 
 import { refitItemCropToBox } from "../auto-crop";
-import { packReaderFieldBoxes, packTextItemHeight } from "../render/canvas";
+import { packReaderFieldBoxes, packSizedFieldBoxes, packTextItemHeight } from "../render/canvas";
 import { isMultiPage } from "../modes";
 import { currentItem, currentLayout, currentPage, fieldColorSyncKey, hasLocalTextOverride, isFieldColorSynced, propagateTypography, setItemContent, setReaderFieldFontSize, setSyncFieldColor, TYPO_SYNC_KEYS, updateItem } from "../state";
 import type { Store } from "../store";
@@ -949,7 +949,13 @@ function mutateFontSize(
     // view shows the body "relatively small".
     requestAnimationFrame(() => {
       packTextItemHeight(store, idx, true);
-      if (field) packReaderFieldBoxes(store, field);
+      if (field) {
+        packReaderFieldBoxes(store, field);
+        // The proportional fan-out just rescaled every bucket's fontSize;
+        // re-fit their boxes too or the resized copy sits auto-shrunk (or
+        // swimming) in the old rectangles.
+        packSizedFieldBoxes(store, field);
+      }
     });
   } else {
     store.replace(next);
@@ -970,7 +976,15 @@ function mutateContent(store: Store, idx: number, value: string, kind: "text" | 
   // After committing a text change, re-fit the box height to the (trimmed)
   // text — the inline-edit path does this via fitTextItem; the props field
   // didn't, so editing text here used to leave the box at its old size.
-  if (commit && kind === "text") requestAnimationFrame(() => packTextItemHeight(store, idx, true));
+  // A field-bound edit also synced the text into every banner bucket, so
+  // re-fit their boxes to the new copy as well.
+  if (commit && kind === "text") {
+    const field = (currentLayout(store.state)[idx] as { field?: string } | undefined)?.field;
+    requestAnimationFrame(() => {
+      packTextItemHeight(store, idx, true);
+      if (field) packSizedFieldBoxes(store, field);
+    });
+  }
 }
 
 // The value an item actually shows: its own baked text/src, or the shared

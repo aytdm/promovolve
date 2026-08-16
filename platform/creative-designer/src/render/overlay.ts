@@ -49,7 +49,7 @@ import { itemBoundsPct, type BoundsPct } from "../geometry";
 import { copy, duplicate, hasClipboard, paste } from "../interaction/clipboard";
 import { openContextMenu, type MenuEntry } from "../ui/context-menu";
 import { tokens } from "../ui/tokens";
-import { packTextItemHeight } from "./canvas";
+import { packSizedFieldBoxes, packTextItemHeight } from "./canvas";
 
 const SELECTION_COLOR = tokens.amber;
 
@@ -612,6 +612,11 @@ function startInlineTextEdit(
       // (drops the empty space + any trimmed trailing whitespace).
       // packTextItemHeight no-ops when the box already fits, so no undo spam.
       fitTextItem(store, idx, true);
+      // A synced field edit also rewrote every banner bucket's copy — re-fit
+      // their boxes too (no-op for local/override text: the buckets' own
+      // effective text didn't change, so the measure lands on the same box).
+      const field = (currentLayout(store.state)[idx] as { field?: string } | undefined)?.field;
+      if (field) requestAnimationFrame(() => packSizedFieldBoxes(store, field));
     } else {
       el.textContent = originalText;
     }

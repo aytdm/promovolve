@@ -93,16 +93,35 @@ describe("fitReaderFieldBoxes", () => {
     expect(seen).toEqual(["override text that is longer"]);
   });
 
-  it("skips vertical items and null measurements; fixpoint when heights match", () => {
+  it("skips null measurements; fixpoint when extents already match", () => {
     const p: Page[] = [
       { body: "b", layout: [
-        { type: "text", field: "body", fontSize: 5, height: 10, writingMode: "vertical-rl" } as LayoutItem,
+        { type: "text", field: "body", fontSize: 5, left: 30, width: 7, height: 10,
+          writingMode: "vertical-rl" } as LayoutItem,
       ] },
       { body: "b", layout: [boxed("body", 7)] },
     ] as Page[];
     const s1 = initialState(p, "expanded");
-    // measurer returns 7 → page 2 already at 7, vertical skipped → same state
+    // measurer returns 7 → page 2's height already 7 AND page 1's vertical
+    // width already 7 → same state
     expect(fitReaderFieldBoxes(s1, "body", () => 7)).toBe(s1);
     expect(fitReaderFieldBoxes(s1, "body", () => null)).toBe(s1);
+  });
+
+  it("packs a vertical-rl item's WIDTH, keeping the right edge fixed", () => {
+    const p: Page[] = [
+      { body: "b", layout: [
+        { type: "text", field: "body", fontSize: 5, left: 30, width: 20, height: 60,
+          writingMode: "vertical-rl" } as LayoutItem,
+      ] },
+    ] as Page[];
+    const out = fitReaderFieldBoxes(initialState(p, "expanded"), "body", () => 8);
+    const it = out.pages[0]!.layout![0] as unknown as {
+      width: number; left: number; height: number;
+    };
+    // right edge was 30 + 20 = 50; packed width 8 → left 42, height untouched
+    expect(it.width).toBe(8);
+    expect(it.left).toBe(42);
+    expect(it.height).toBe(60);
   });
 });

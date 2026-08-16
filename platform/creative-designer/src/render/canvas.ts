@@ -16,8 +16,8 @@
 // the drawn size separately when the two differ.
 
 import type { DesignerState, LayoutItem, Page } from "../types";
-import { currentLayout, fitReaderFieldBoxes, currentPage, updateItem } from "../state";
-import { isSized, isMultiPage, type Mode } from "../modes";
+import { currentLayout, fitReaderFieldBoxes, fitSizedFieldBoxes, currentPage, updateItem } from "../state";
+import { MODES, isSized, isMultiPage, type Mode } from "../modes";
 import type { Store } from "../store";
 import { tokens } from "../ui/tokens";
 
@@ -214,17 +214,20 @@ export function packTextItemHeight(store: Store, idx: number, fitWidth = false):
 }
 
 /** Per-page box fit after a font-size edit: measure EVERY reader page's
- * own text for `field` at the authored size and stamp the heights
- * (state.fitReaderFieldBoxes). The clone is measured in the CURRENT
- * page's stage — reader pages share one geometry, so the container-query
- * context is valid for all of them; only the text differs, which is
- * exactly what's cloned in. One store.replace, no undo entry. */
+ * own text for `field` at the authored size and stamp the block-axis
+ * extents (state.fitReaderFieldBoxes) — height for horizontal items,
+ * width for vertical-rl. The clone is measured in the CURRENT page's
+ * stage — reader pages share one geometry, so the container-query
+ * context is valid for all of them. The measured ITEM's writing mode is
+ * stamped on the clone explicitly: the headline's orientation is a
+ * per-dimension choice, so the template element's surface can disagree
+ * with the surface being measured. One store.replace, no undo entry. */
 export function packReaderFieldBoxes(store: Store, field: string): void {
   if (!field) return;
   const banner = document.querySelector<HTMLElement>("#canvas-host expandable-magazine-banner");
   const shadow = banner?.shadowRoot;
   const stage = shadow?.querySelector<HTMLElement>(".design-box");
-  if (!shadow || !stage || stage.clientHeight <= 0) return;
+  if (!shadow || !stage || stage.clientHeight <= 0 || stage.clientWidth <= 0) return;
   // Style template: the current page's element for this field.
   const idx = currentLayout(store.state).findIndex(
     (it) => it.type === "text" && (it as { field?: string }).field === field,
@@ -233,21 +236,138 @@ export function packReaderFieldBoxes(store: Store, field: string): void {
   if (!el) return;
 
   const next = fitReaderFieldBoxes(store.state, field, (text, item) => {
+    const it = item as unknown as {
+      fontSize?: number; width?: number; height?: number; writingMode?: string;
+    };
+    const vertical = it.writingMode === "vertical-rl";
     const clone = el.cloneNode(true) as HTMLElement;
     clone.textContent = text;
     clone.style.visibility = "hidden";
     clone.style.position = "absolute";
-    clone.style.height = "auto";
     clone.removeAttribute("data-layout-idx");
-    const it = item as unknown as { fontSize?: number; width?: number };
     clone.style.fontSize = `${it.fontSize ?? 5}cqmax`;
-    if (it.width != null) clone.style.width = `${it.width}%`;
+    clone.style.writingMode = vertical ? "vertical-rl" : "horizontal-tb";
+    clone.style.textOrientation = vertical ? "mixed" : "";
+    if (vertical) {
+      // Columns grow leftward; the authored height is the column length.
+      clone.style.width = "auto";
+      clone.style.height = it.height != null ? `${it.height}%` : "auto";
+    } else {
+      clone.style.height = "auto";
+      if (it.width != null) clone.style.width = `${it.width}%`;
+    }
     stage.appendChild(clone);
-    const h = clone.scrollHeight;
+    const block = vertical ? clone.scrollWidth : clone.scrollHeight;
     clone.remove();
-    if (h <= 0) return null;
-    return Math.ceil((h / stage.clientHeight) * 100 * 10) / 10;
+    if (block <= 0) return null;
+    const extent = vertical ? stage.clientWidth : stage.clientHeight;
+    return Math.ceil((block / extent) * 100 * 10) / 10;
   });
+  if (next !== store.state) store.replace(next);
+}
+
+/** The banner-bucket counterpart of packReaderFieldBoxes: after a synced
+ * field edit (content or font size), fit the same-field box in EVERY
+ * IAB bucket to the text it now renders. Reader pages share the live
+ * stage's geometry; buckets don't — each is measured inside a hidden
+ * `container-type: size` div at its own canonical pixel size, so cqmax
+ * fonts and %-extents resolve exactly as that bucket renders them. The
+ * live element for the field is the style template (typography is one
+ * identity per role); per-bucket properties that legitimately differ
+ * (fontSize, writingMode, geometry) are overridden per item. */
+export function packSizedFieldBoxes(store: Store, field: string): void {
+  if (!field) return;
+  const banner = document.querySelector<HTMLElement>("#canvas-host expandable-magazine-banner");
+  const shadow = banner?.shadowRoot;
+  const stage = shadow?.querySelector<HTMLElement>(".design-box");
+  if (!shadow || !stage) return;
+  const idx = currentLayout(store.state).findIndex(
+    (it) => it.type === "text" && (it as { field?: string }).field === field,
+  );
+  const el = idx >= 0 ? shadow.querySelector<HTMLElement>(`[data-layout-idx="${idx}"]`) : null;
+  if (!el) return;
+
+  // One measuring container per bucket, created on first use. Parented in
+  // the stage so the clones inherit the same font/inheritance context.
+  const containers = new Map<string, HTMLElement>();
+  const containerFor = (sizeKey: string): HTMLElement | null => {
+    const cached = containers.get(sizeKey);
+    if (cached) return cached;
+    const mode = MODES.find((m) => m.sizeKey === sizeKey);
+    if (!mode) return null; // retired key (336x280 …) — still served, not editable
+    const c = document.createElement("div");
+    c.style.cssText =
+      `position:absolute;left:0;top:0;visibility:hidden;overflow:hidden;` +
+      `width:${mode.w}px;height:${mode.h}px;container-type:size;`;
+    stage.appendChild(c);
+    containers.set(sizeKey, c);
+    return c;
+  };
+
+  const next = fitSizedFieldBoxes(store.state, field, (text, item, sizeKey) => {
+    const box = containerFor(sizeKey);
+    if (!box || box.clientWidth <= 0 || box.clientHeight <= 0) return null;
+    const t = item as unknown as {
+      fontSize?: number; lineHeight?: number; left?: number; top?: number;
+      height?: number; writingMode?: string; direction?: string;
+    };
+    const vertical = t.writingMode === "vertical-rl";
+    const mkClone = (): HTMLElement => {
+      const clone = el.cloneNode(true) as HTMLElement;
+      clone.removeAttribute("data-layout-idx");
+      clone.textContent = text;
+      clone.style.visibility = "hidden";
+      clone.style.position = "absolute";
+      clone.style.left = "0";
+      clone.style.top = "0";
+      // Measure at the bucket item's AUTHORED size, not whatever autoFitText
+      // left on the live template — same rule as packTextItemHeight.
+      clone.style.fontSize = `${t.fontSize ?? 5}cqmax`;
+      clone.style.lineHeight = String(t.lineHeight ?? 1.2);
+      clone.style.writingMode = vertical ? "vertical-rl" : "horizontal-tb";
+      clone.style.textOrientation = vertical ? "mixed" : "";
+      clone.style.direction = t.direction === "rtl" ? "rtl" : "ltr";
+      return clone;
+    };
+    // Inline extent first — the longest rendered line (column, for
+    // vertical), laid out at the full space available from the box's
+    // block-start anchor — then the block extent at that inline size.
+    // Mirrors packTextItemHeight's fitWidth+height sequence with the
+    // axes swapped for vertical-rl.
+    const availPct = Math.max(1, 100 - ((vertical ? t.top : t.left) ?? 0));
+    const ic = mkClone();
+    if (vertical) { ic.style.height = `${availPct}%`; ic.style.width = "auto"; }
+    else { ic.style.width = `${availPct}%`; ic.style.height = "auto"; }
+    box.appendChild(ic);
+    let maxLine = 0;
+    try {
+      const range = document.createRange();
+      range.selectNodeContents(ic);
+      for (const r of range.getClientRects()) {
+        maxLine = Math.max(maxLine, vertical ? r.height : r.width);
+      }
+    } catch { /* fall back below */ }
+    if (maxLine <= 0) maxLine = vertical ? ic.scrollHeight : ic.scrollWidth;
+    ic.remove();
+    if (maxLine <= 0) return null;
+    const inlineExtent = vertical ? box.clientHeight : box.clientWidth;
+    const inlinePct = Math.min(
+      Math.ceil((maxLine / inlineExtent) * 100 * 10) / 10, availPct);
+
+    const bc = mkClone();
+    if (vertical) { bc.style.height = `${inlinePct}%`; bc.style.width = "auto"; }
+    else { bc.style.width = `${inlinePct}%`; bc.style.height = "auto"; }
+    box.appendChild(bc);
+    const block = vertical ? bc.scrollWidth : bc.scrollHeight;
+    bc.remove();
+    if (block <= 0) return null;
+    const blockExtent = vertical ? box.clientWidth : box.clientHeight;
+    const blockPct = Math.ceil((block / blockExtent) * 100 * 10) / 10;
+    return vertical
+      ? { width: blockPct, height: inlinePct }
+      : { width: inlinePct, height: blockPct };
+  });
+  for (const c of containers.values()) c.remove();
   if (next !== store.state) store.replace(next);
 }
 

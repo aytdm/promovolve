@@ -299,12 +299,15 @@ export function setReaderFieldStart(
 // ("body stays small until clicked"). The DOM-measuring callback lives in
 // render/canvas (clone in the live stage = same container-query context,
 // valid for every page since reader pages share one geometry); this walks
-// the surfaces and stamps the returned heights. Vertical-rl items are
-// left alone (their packing moves left too — the per-item Fit handles it).
+// the surfaces and stamps the returned BLOCK-axis extent: height for
+// horizontal text, width for vertical-rl — whose columns stack leftward
+// from a right anchor, so the packed width derives a new `left` that
+// keeps the right edge (the shared inline-start corner, see
+// readerFieldStart) exactly where it was.
 export function fitReaderFieldBoxes(
   state: DesignerState,
   field: string,
-  measureHeightPct: (text: string, item: LayoutItem) => number | null,
+  measureBlockPct: (text: string, item: LayoutItem) => number | null,
 ): DesignerState {
   if (!field) return state;
   let pages = state.pages;
@@ -317,16 +320,21 @@ export function fitReaderFieldBoxes(
       let pageChanged = false;
       const nextLayout = layout.map((it) => {
         if (it.type !== "text" || (it as { field?: string }).field !== field) return it;
-        if ((it as { writingMode?: string }).writingMode === "vertical-rl") return it;
         const text = ((it as { text?: string }).text
           ?? (page as unknown as Record<string, unknown>)[field]) as string | undefined;
         if (!text) return it;
-        const h = measureHeightPct(text, it);
-        if (h == null || !Number.isFinite(h) || h <= 0) return it;
-        const cur = (it as unknown as { height?: number }).height;
-        if (cur != null && Math.abs(cur - h) < 0.1) return it;
+        const b = measureBlockPct(text, it);
+        if (b == null || !Number.isFinite(b) || b <= 0) return it;
+        const t = it as unknown as { width?: number; height?: number; left?: number };
+        if ((it as { writingMode?: string }).writingMode === "vertical-rl") {
+          const curW = t.width ?? 0;
+          if (Math.abs(curW - b) < 0.1) return it;
+          pageChanged = true;
+          return { ...it, width: b, left: (t.left ?? 0) + (curW - b) } as LayoutItem;
+        }
+        if (t.height != null && Math.abs(t.height - b) < 0.1) return it;
         pageChanged = true;
-        return { ...it, height: h } as LayoutItem;
+        return { ...it, height: b } as LayoutItem;
       });
       if (!pageChanged) return page;
       surfChanged = true;
@@ -334,6 +342,78 @@ export function fitReaderFieldBoxes(
     });
     if (surfChanged) { pages = next; changed = true; }
   }
+  return changed ? { ...state, pages } : state;
+}
+
+// fitSizedFieldBoxes: the bucket counterpart of fitReaderFieldBoxes. A
+// field edit on the expanded master syncs the TEXT (and, for size, a
+// proportional fontSize) into every banner bucket, but the buckets'
+// boxes kept their pre-edit geometry — the reader packs on edit, the
+// buckets never did, so a shortened headline sat in a huge stale
+// rectangle (worst for vertical-rl, where the packing axis is width).
+// The DOM-measuring callback lives in render/canvas (it needs a
+// per-bucket container-query context — buckets don't share the current
+// stage's aspect the way reader pages share one geometry); this walks
+// every page's buckets and stamps the returned extents. Anchors follow
+// readerFieldStart's model: the box hugs by moving its inline-END —
+// horizontal keeps `left`, vertical-rl keeps the RIGHT edge (derives a
+// new left from the packed width), and both keep `top`.
+export interface SizedBoxFit {
+  width: number;
+  height?: number; // absent = leave the authored height alone
+}
+
+export function fitSizedFieldBoxes(
+  state: DesignerState,
+  field: string,
+  measure: (text: string, item: LayoutItem, sizeKey: string) => SizedBoxFit | null,
+): DesignerState {
+  if (!field) return state;
+  let changed = false;
+  const pages = state.pages.map((page) => {
+    if (!page.banners) return page;
+    let bChanged = false;
+    const banners: Record<string, LayoutItem[]> = {};
+    for (const [sizeKey, items] of Object.entries(page.banners)) {
+      // The mobile-expanded bucket is a READER surface — fitReaderFieldBoxes
+      // owns it (and shares the current stage's geometry, which this
+      // callback's per-bucket containers don't model).
+      if (sizeKey === MOBILE_EXPANDED_KEY) { banners[sizeKey] = items; continue; }
+      let any = false;
+      banners[sizeKey] = items.map((it) => {
+        if (it.type !== "text" || (it as { field?: string }).field !== field) return it;
+        // Effective text: a detached override keeps its own copy — measuring
+        // it is a no-op when the master edit didn't touch it.
+        const local = (it as { text?: string }).text;
+        const text = (local != null && local !== ""
+          ? local
+          : (page as unknown as Record<string, unknown>)[field]) as string | undefined;
+        if (!text) return it;
+        const m = measure(text, it, sizeKey);
+        if (!m || !Number.isFinite(m.width) || m.width <= 0) return it;
+        const t = it as unknown as {
+          width?: number; height?: number; left?: number; writingMode?: string;
+        };
+        const curW = t.width ?? 0;
+        const wSame = Math.abs(curW - m.width) < 0.1;
+        const hSame = m.height == null
+          || (t.height != null && Math.abs(t.height - m.height) < 0.1);
+        if (wSame && hSame) return it;
+        any = true;
+        const left = t.writingMode === "vertical-rl"
+          ? (t.left ?? 0) + (curW - m.width) // keep the right edge fixed
+          : (t.left ?? 0);
+        return {
+          ...it, width: m.width, left,
+          ...(m.height != null ? { height: m.height } : {}),
+        } as LayoutItem;
+      });
+      if (any) bChanged = true;
+    }
+    if (!bChanged) return page;
+    changed = true;
+    return { ...page, banners };
+  });
   return changed ? { ...state, pages } : state;
 }
 
