@@ -45,12 +45,30 @@ const vite = spawn("npx", ["vite", "--port", String(PORT), "--strictPort"], {
   cwd: new URL("../..", import.meta.url).pathname,
   stdio: ["ignore", "pipe", "pipe"],
 });
-const ready = new Promise((resolve, reject) => {
-  const timer = setTimeout(() => reject(new Error("vite did not start")), 30000);
-  vite.stdout.on("data", (d) => {
-    if (String(d).includes("Local:")) { clearTimeout(timer); resolve(); }
-  });
-});
+// Readiness by polling the HTTP port, not by grepping stdout for
+// "Local:" — the banner in non-TTY environments (CI runners) isn't a
+// stable contract, and a missed line looks like "vite did not start"
+// with zero diagnostics. Output is still captured so a real startup
+// failure prints WHY.
+let viteOutput = "";
+vite.stdout.on("data", (d) => { viteOutput += String(d); });
+vite.stderr.on("data", (d) => { viteOutput += String(d); });
+const ready = (async () => {
+  const deadline = Date.now() + 60000;
+  for (;;) {
+    if (vite.exitCode !== null) {
+      throw new Error(`vite exited with code ${vite.exitCode}:\n${viteOutput}`);
+    }
+    try {
+      const r = await fetch(`http://localhost:${PORT}/`);
+      if (r.ok || r.status < 500) return;
+    } catch { /* not listening yet */ }
+    if (Date.now() > deadline) {
+      throw new Error(`vite did not start within 60s:\n${viteOutput}`);
+    }
+    await new Promise((res) => setTimeout(res, 250));
+  }
+})();
 
 const failures = [];
 const check = (name, ok, detail) => {
