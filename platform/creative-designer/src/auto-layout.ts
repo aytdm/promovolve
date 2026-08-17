@@ -362,15 +362,21 @@ function applyLayout(store: Store, pageIdx: number, mode: Mode, items: Page["lay
   }
 }
 
-/** Run `fn` once the live canvas stage is mounted and measurable —
-  * immediately when it already is, else retrying across frames (the boot
-  * fan-out generates every bucket before first paint). Gives up quietly
-  * after ~20 frames: packing is an enhancement, an unmeasurable canvas
-  * must not queue work forever. */
+/** Run `fn` once the live canvas stage is mounted and measurable,
+  * retrying across frames (the boot fan-out generates every bucket before
+  * first paint). ALWAYS defers at least one frame, even when the stage is
+  * already up: the packer clones the current tab's field element as its
+  * style template, and running synchronously after store.replace would
+  * read the PREVIOUS render's DOM — where the new layout's indices can
+  * point at a different item entirely (an image where the headline now
+  * is). One frame is the same settle the edit paths give their packs.
+  * Gives up quietly after ~20 frames: packing is an enhancement, an
+  * unmeasurable canvas must not queue work forever. */
 function whenStageReady(fn: () => void, tries = 20): void {
-  const stage = document.querySelector<HTMLElement>("#canvas-host expandable-magazine-banner")
-    ?.shadowRoot?.querySelector<HTMLElement>(".design-box");
-  if (stage && stage.clientWidth > 0) { fn(); return; }
-  if (tries <= 0) return;
-  requestAnimationFrame(() => whenStageReady(fn, tries - 1));
+  requestAnimationFrame(() => {
+    const stage = document.querySelector<HTMLElement>("#canvas-host expandable-magazine-banner")
+      ?.shadowRoot?.querySelector<HTMLElement>(".design-box");
+    if (stage && stage.clientWidth > 0) { fn(); return; }
+    if (tries > 0) whenStageReady(fn, tries - 1);
+  });
 }

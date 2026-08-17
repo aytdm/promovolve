@@ -10,6 +10,7 @@
 // for any item) lives in state.ts and is reachable from outside if
 // future panels want it back.
 
+import { packTextItemHeight } from "../render/canvas";
 import { currentItem, updateItem } from "../state";
 import type { Store } from "../store";
 import { tokens } from "./tokens";
@@ -45,6 +46,21 @@ export function mountAlignToolbar(host: HTMLElement, store: Store): void {
   addAlign(ICON_ALIGN_HCENTER, "Align text center", "center");
   addAlign(ICON_ALIGN_RIGHT,   "Align text right",  "right");
 
+  // Pack: shrink the selected text box to hug its content — the same fit
+  // the edit paths and generation apply automatically, exposed as one
+  // click for boxes that predate those fixes (or that the author sized by
+  // hand and wants hugged again). Explicit and author-invoked: drafts are
+  // never normalized on load, so this is THE sanctioned way to fix a
+  // stale oversized box without re-generating or re-typing the copy.
+  const packBtn = iconBtn(ICON_PACK, "Pack box to text", () => {
+    const item = currentItem(store.state);
+    if (!item || item.type !== "text") return;
+    const idxs = store.state.selectedItemIdxs;
+    if (idxs.length !== 1) return;
+    packTextItemHeight(store, idxs[0]!, true);
+  });
+  bar.appendChild(packBtn);
+
   const refresh = (): void => {
     const item = currentItem(store.state);
     const enabled = !!item && item.type === "text";
@@ -58,6 +74,9 @@ export function mountAlignToolbar(host: HTMLElement, store: Store): void {
       btn.style.background = active ? tokens.ink700 : "transparent";
       btn.style.color = active ? tokens.ink100 : tokens.ink300;
     }
+    packBtn.disabled = !enabled;
+    packBtn.style.opacity = enabled ? "1" : "0.35";
+    packBtn.style.cursor = enabled ? "pointer" : "default";
   };
   refresh();
   store.subscribe(refresh);
@@ -107,3 +126,5 @@ function iconBtn(iconSvg: string, title: string, onClick: () => void): HTMLButto
 const ICON_ALIGN_LEFT = `<svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 4 L12 4"/><path d="M2 7 L8 7"/><path d="M2 10 L10 10"/></svg>`;
 const ICON_ALIGN_HCENTER = `<svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 4 L12 4"/><path d="M4 7 L10 7"/><path d="M3 10 L11 10"/></svg>`;
 const ICON_ALIGN_RIGHT = `<svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M2 4 L12 4"/><path d="M6 7 L12 7"/><path d="M4 10 L12 10"/></svg>`;
+// Corners collapsing onto a text line: shrink-to-content.
+const ICON_PACK = `<svg viewBox="0 0 14 14" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7 L10 7"/><path d="M2 2 L4.5 4.5"/><path d="M12 2 L9.5 4.5"/><path d="M2 12 L4.5 9.5"/><path d="M12 12 L9.5 9.5"/></svg>`;
