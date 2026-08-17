@@ -166,5 +166,5 @@ images:
     digest: sha256:5cdc6c6f4784f8c349ba72a08695637dad916188a311a499db090546054600bb
   - name: promovolve/platform
     newName: docker.io/hanishi/promovolve-platform
-    # build: 34193a4 2026-08-16T14:28Z (Deploy run 31952596011)
-    digest: sha256:7ef93e8c43e159951e01c5524c29fdd8cac207658a360dfbdaf4f2eb46edd1e4
+    # build: 3c4f453 2026-08-17T09:20Z (Deploy run 32014403449)
+    digest: sha256:cc2b3f350af70ce5f8f31f252e814cdc7847089056664ac0c5b534c8aa1cd563
