@@ -2756,6 +2756,17 @@ export class ExpandableMagazineBanner extends HTMLElement {
         // sheet has rotated away (reset in onDone) — resetting now
         // would visibly snap them mid-turn.
         this.resetItemAnimations(el);
+        // UPCOMING pages (still in the pile) hold their entrance START
+        // pose while they wait — the interactive peel progressively
+        // reveals the sheet beneath, and resting items there meant the
+        // text was ALREADY READ mid-drag, then snapped away and
+        // replayed when the turn landed (shown → hidden → shown again).
+        // Posed in the pile, the reveal shows the start state and the
+        // choreography plays exactly once, at the open. Read pages
+        // (behind) stay at rest — they're off the pile and hidden.
+        // Reduced motion keeps resting poses everywhere: there is no
+        // choreography to time, and off-poses would just hide content.
+        if (i > current && !this._reducedMotion) this.poseItemAnimationsAtStart(el);
       }
 
       const divider = el.querySelector<HTMLElement>(".divider");
@@ -2779,6 +2790,14 @@ export class ExpandableMagazineBanner extends HTMLElement {
             // slide while the page is still settling).
             this.applyStackLayout(overlay, pages.length, current, new Set());
             this.resetItemAnimations(outgoing);
+            // A PREV turn sends the outgoing page back to the pile
+            // (it's upcoming again) — re-pose its entrance start so
+            // its pile sliver doesn't flash read text and its next
+            // open replays cleanly. After a NEXT turn the outgoing
+            // page is read/off-pile and stays at rest.
+            if (turnFrom !== null && turnFrom > current) {
+              this.poseItemAnimationsAtStart(outgoing);
+            }
             // The page is open NOW — play its motion (posed at the
             // entrance start when the turn began). Skipped when
             // navigation already moved on (spamming next/prev settles
