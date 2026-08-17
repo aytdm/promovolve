@@ -12,7 +12,7 @@
 import { generateLayout } from "./api/generate-layout";
 import { rewriteCopy } from "./api/rewrite-copy";
 import { loadBrandKit } from "./brand-kit";
-import { masterColor } from "./state";
+import { currentLayout, masterColor } from "./state";
 import { enforceContrast } from "./color-contrast";
 import { TEMPLATES } from "./layout-templates";
 import { presetLayoutFor } from "./presets";
@@ -123,10 +123,57 @@ export function installAutoLayoutGenerator(
     });
   };
 
+  // Self-healing buckets: pack MACHINE-GENERATED boxes when their tab
+  // opens. Buckets have no edit gesture of their own (field-bound items
+  // can't be inline-edited in sized tabs), so a bucket whose boxes were
+  // generated oversized — before generation-time packing existed, or by
+  // any older pipeline — could never heal: no edit means no re-fit, and
+  // the author packed by hand, box by box (reported 2026-08-17/18).
+  //
+  // Scope is exactly `_generated: true`: the flag marks "machine filled
+  // this in, the author never touched it" (updateItem strips it on the
+  // first touch, and the banners map round-trips opaquely through save,
+  // so it survives load). There is no author intent on such a box to
+  // preserve — this is generation-time packing completing late, NOT the
+  // banned load-time normalization of authored work. Hand-sized boxes
+  // (wrap-width choices included) are never touched; packTextItemHeight
+  // no-ops when a box already hugs, so revisits are idempotent, and the
+  // commit it makes is undoable like any gesture.
+  let lastTabKey = "";
+  const packGeneratedOnTabOpen = (): void => {
+    const state = store.state;
+    const key = `${state.pageIdx}|${state.mode.key}`;
+    if (key === lastTabKey) return;
+    lastTabKey = key;
+    if (state.mode.key === "expanded" || state.mode.key === "mobile") return;
+    const sizeKey = state.mode.sizeKey;
+    if (!sizeKey) return;
+    whenStageReady(() => {
+      // The author may have moved on while the stage settled.
+      if (`${store.state.pageIdx}|${store.state.mode.key}` !== key) return;
+      // Via the FIELD packer, not packTextItemHeight: it preserves
+      // `_generated` (packTextItemHeight commits through updateItem,
+      // which strips the flag — the heal would mislabel the bucket
+      // "authored" in the fanout status), it fits BOTH axes for
+      // vertical-rl, and it walks a machine-bloated font down to fit
+      // (see packSizedFieldBoxes). onlyGenerated + this sizeKey keeps
+      // the blast radius at exactly the machine boxes of this tab.
+      const fields = new Set<string>();
+      currentLayout(store.state).forEach((it) => {
+        if (it.type !== "text") return;
+        if (!(it as { _generated?: boolean })._generated) return;
+        const f = (it as { field?: string }).field;
+        if (f) fields.add(f);
+      });
+      fields.forEach((f) => packSizedFieldBoxes(store, f, sizeKey, true));
+    });
+  };
+
   // Run on boot for every page × mode cell. Subscribe to catch future
   // page adds. Existing state changes short-circuit via the `generated`
   // set so they don't fan out N×M requests on every drag.
   fanOutAllCells();
+  packGeneratedOnTabOpen();
   // After the synchronous preset pass, lock the populated state in
   // as the baseline so the user's first real commit doesn't push a
   // blank creative into the undo stack. Async Gemini responses for
@@ -135,6 +182,7 @@ export function installAutoLayoutGenerator(
   // the next seed-equivalent moment (their first real edit).
   store.seed();
   const unsubscribe = store.subscribe(fanOutAllCells);
+  const unsubscribePack = store.subscribe(packGeneratedOnTabOpen);
 
   return {
     isGenerating: (state) => inFlight.has(keyFor(state)),
@@ -144,6 +192,7 @@ export function installAutoLayoutGenerator(
     },
     destroy: () => {
       unsubscribe();
+      unsubscribePack();
       listeners.clear();
     },
   };

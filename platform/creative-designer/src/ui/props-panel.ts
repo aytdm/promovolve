@@ -322,7 +322,32 @@ function build(panel: HTMLElement, idx: number, item: LayoutItem, store: Store):
     );
     setters.writingMode = selectField(layoutGroup, "writing", item.writingMode ?? "horizontal-tb",
       ["horizontal-tb", "vertical-rl"],
-      (v, c) => mutate(store, idx, (it) => ({ ...it, writingMode: v as "horizontal-tb" | "vertical-rl" }), c),
+      (v, c) => {
+        mutate(store, idx, (it) => ({ ...it, writingMode: v as "horizontal-tb" | "vertical-rl" }), c);
+        // Re-pack the box for its NEW axis. The toggle changes which way
+        // the text grows (horizontal wraps down; vertical-rl adds columns
+        // leftward), so the old extent is always shaped for the wrong
+        // axis — dropping vertical copy into a wide/short box forces a
+        // huge autofit shrink, and the author then packs by hand ("this
+        // is when I see 'don't pack'", 2026-08-18). The box's extent was
+        // fit to the OLD axis, never an authored choice about the new
+        // one; the start corner and the text itself are untouched. Same
+        // rAF-then-measure pattern as the content/font-size edit paths.
+        // Field-bound items in a SIZED bucket use the field packer — it
+        // fits BOTH axes (packTextItemHeight hugs only the pack axis, so
+        // a toggle to vertical kept the horizontal-era height and wrapped
+        // the copy into stubby columns). Readers and free text keep the
+        // single-item pack. The toggle is an authored gesture (mutate
+        // stripped _generated above), so the font is never walked.
+        if (c) requestAnimationFrame(() => {
+          const it = currentLayout(store.state)[idx];
+          const field = it && it.type === "text" ? (it as { field?: string }).field : undefined;
+          const sizeKey = store.state.mode.sizeKey;
+          const isBucket = !isMultiPage(store.state.mode) && sizeKey != null;
+          if (field && isBucket) packSizedFieldBoxes(store, field, sizeKey);
+          else packTextItemHeight(store, idx, true);
+        });
+      },
     );
     setters.direction = selectField(layoutGroup, "direction", item.direction ?? "ltr",
       ["ltr", "rtl"],

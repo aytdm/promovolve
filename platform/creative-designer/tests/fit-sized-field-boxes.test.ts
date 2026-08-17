@@ -70,6 +70,34 @@ describe("fitSizedFieldBoxes", () => {
     expect(body.height).toBe(40);
   });
 
+  // Font correction: machine-set sizes are the machine's to correct;
+  // authored sizes are untouchable. The guard lives HERE (the stamping
+  // site), so no measurer bug can ever reach an authored fontSize.
+  it("stamps a corrected fontSize ONLY on _generated items", () => {
+    const st = initialState(mk({
+      "300x250": [text({ _generated: true, fontSize: 20 }), text({ field: "body", fontSize: 20 })],
+    }), "mobile");
+    const r = fitSizedFieldBoxes(st, "headline", () => ({ width: 30, height: 12, fontSize: 6 }));
+    const gen = r.pages[0].banners!["300x250"]![0] as unknown as Record<string, unknown>;
+    expect(gen.fontSize).toBe(6);
+    expect(gen._generated).toBe(true); // the fit must not mark it authored
+    // Same measure result against a NON-generated item: font untouched.
+    const r2 = fitSizedFieldBoxes(st, "body", () => ({ width: 30, height: 12, fontSize: 6 }));
+    const authored = r2.pages[0].banners!["300x250"]![1] as unknown as Record<string, unknown>;
+    expect(authored.fontSize).toBe(20);
+  });
+
+  it("onlyGenerated skips items the author has touched", () => {
+    const st = initialState(mk({
+      "300x250": [text({ fontSize: 20 })], // no _generated: authored
+    }), "mobile");
+    const seen: string[] = [];
+    const r = fitSizedFieldBoxes(st, "headline", (t) => { seen.push(t); return { width: 30, height: 12 }; },
+      undefined, true);
+    expect(seen).toEqual([]); // never even measured
+    expect(r).toBe(st);
+  });
+
   // Generation-time packing (applyLayout) scopes the fit to the mode it
   // just generated: re-generating one bucket must never rewrite a box the
   // author hand-tuned in another. Synced edits keep the everywhere fit.

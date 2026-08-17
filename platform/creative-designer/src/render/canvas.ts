@@ -275,7 +275,9 @@ export function packReaderFieldBoxes(store: Store, field: string): void {
  * live element for the field is the style template (typography is one
  * identity per role); per-bucket properties that legitimately differ
  * (fontSize, writingMode, geometry) are overridden per item. */
-export function packSizedFieldBoxes(store: Store, field: string, onlySizeKey?: string): void {
+export function packSizedFieldBoxes(
+  store: Store, field: string, onlySizeKey?: string, onlyGenerated?: boolean,
+): void {
   if (!field) return;
   const banner = document.querySelector<HTMLElement>("#canvas-host expandable-magazine-banner");
   const shadow = banner?.shadowRoot;
@@ -309,10 +311,11 @@ export function packSizedFieldBoxes(store: Store, field: string, onlySizeKey?: s
     if (!box || box.clientWidth <= 0 || box.clientHeight <= 0) return null;
     const t = item as unknown as {
       fontSize?: number; lineHeight?: number; left?: number; top?: number;
-      height?: number; writingMode?: string; direction?: string;
+      width?: number; height?: number; writingMode?: string; direction?: string;
+      _generated?: boolean;
     };
     const vertical = t.writingMode === "vertical-rl";
-    const mkClone = (): HTMLElement => {
+    const mkClone = (fontSize: number): HTMLElement => {
       const clone = el.cloneNode(true) as HTMLElement;
       clone.removeAttribute("data-layout-idx");
       clone.textContent = text;
@@ -320,9 +323,9 @@ export function packSizedFieldBoxes(store: Store, field: string, onlySizeKey?: s
       clone.style.position = "absolute";
       clone.style.left = "0";
       clone.style.top = "0";
-      // Measure at the bucket item's AUTHORED size, not whatever autoFitText
-      // left on the live template — same rule as packTextItemHeight.
-      clone.style.fontSize = `${t.fontSize ?? 5}cqmax`;
+      // Measure at the requested size, not whatever autoFitText left on
+      // the live template — same rule as packTextItemHeight.
+      clone.style.fontSize = `${fontSize}cqmax`;
       clone.style.lineHeight = String(t.lineHeight ?? 1.2);
       clone.style.writingMode = vertical ? "vertical-rl" : "horizontal-tb";
       clone.style.textOrientation = vertical ? "mixed" : "";
@@ -334,39 +337,70 @@ export function packSizedFieldBoxes(store: Store, field: string, onlySizeKey?: s
     // block-start anchor — then the block extent at that inline size.
     // Mirrors packTextItemHeight's fitWidth+height sequence with the
     // axes swapped for vertical-rl.
-    const availPct = Math.max(1, 100 - ((vertical ? t.top : t.left) ?? 0));
-    const ic = mkClone();
-    if (vertical) { ic.style.height = `${availPct}%`; ic.style.width = "auto"; }
-    else { ic.style.width = `${availPct}%`; ic.style.height = "auto"; }
-    box.appendChild(ic);
-    let maxLine = 0;
-    try {
-      const range = document.createRange();
-      range.selectNodeContents(ic);
-      for (const r of range.getClientRects()) {
-        maxLine = Math.max(maxLine, vertical ? r.height : r.width);
-      }
-    } catch { /* fall back below */ }
-    if (maxLine <= 0) maxLine = vertical ? ic.scrollHeight : ic.scrollWidth;
-    ic.remove();
-    if (maxLine <= 0) return null;
-    const inlineExtent = vertical ? box.clientHeight : box.clientWidth;
-    const inlinePct = Math.min(
-      Math.ceil((maxLine / inlineExtent) * 100 * 10) / 10, availPct);
+    const availInline = Math.max(1, 100 - ((vertical ? t.top : t.left) ?? 0));
+    // Available BLOCK space: horizontal text stacks lines below `top`;
+    // vertical-rl adds columns leftward from the box's fixed RIGHT edge.
+    const availBlock = vertical
+      ? Math.max(1, Math.min(100, (t.left ?? 0) + (t.width ?? 0)))
+      : Math.max(1, 100 - (t.top ?? 0));
+    const measureAt = (fontSize: number): { inlinePct: number; blockPct: number } | null => {
+      const ic = mkClone(fontSize);
+      if (vertical) { ic.style.height = `${availInline}%`; ic.style.width = "auto"; }
+      else { ic.style.width = `${availInline}%`; ic.style.height = "auto"; }
+      box.appendChild(ic);
+      let maxLine = 0;
+      try {
+        const range = document.createRange();
+        range.selectNodeContents(ic);
+        for (const r of range.getClientRects()) {
+          maxLine = Math.max(maxLine, vertical ? r.height : r.width);
+        }
+      } catch { /* fall back below */ }
+      if (maxLine <= 0) maxLine = vertical ? ic.scrollHeight : ic.scrollWidth;
+      ic.remove();
+      if (maxLine <= 0) return null;
+      const inlineExtent = vertical ? box.clientHeight : box.clientWidth;
+      const inlinePct = Math.min(
+        Math.ceil((maxLine / inlineExtent) * 100 * 10) / 10, availInline);
+      const bc = mkClone(fontSize);
+      if (vertical) { bc.style.height = `${inlinePct}%`; bc.style.width = "auto"; }
+      else { bc.style.width = `${inlinePct}%`; bc.style.height = "auto"; }
+      box.appendChild(bc);
+      const block = vertical ? bc.scrollWidth : bc.scrollHeight;
+      bc.remove();
+      if (block <= 0) return null;
+      const blockExtent = vertical ? box.clientWidth : box.clientHeight;
+      const blockPct = Math.ceil((block / blockExtent) * 100 * 10) / 10;
+      return { inlinePct, blockPct };
+    };
 
-    const bc = mkClone();
-    if (vertical) { bc.style.height = `${inlinePct}%`; bc.style.width = "auto"; }
-    else { bc.style.width = `${inlinePct}%`; bc.style.height = "auto"; }
-    box.appendChild(bc);
-    const block = vertical ? bc.scrollWidth : bc.scrollHeight;
-    bc.remove();
-    if (block <= 0) return null;
-    const blockExtent = vertical ? box.clientWidth : box.clientHeight;
-    const blockPct = Math.ceil((block / blockExtent) * 100 * 10) / 10;
-    return vertical
-      ? { width: blockPct, height: inlinePct }
-      : { width: inlinePct, height: blockPct };
-  }, onlySizeKey);
+    const authored = t.fontSize ?? 5;
+    let size = authored;
+    let m = measureAt(size);
+    if (!m) return null;
+    // Font correction — MACHINE items only (fitSizedFieldBoxes enforces
+    // the stamp guard; skipping the walk for authored items here keeps
+    // their measure identical to before). A machine-set size that cannot
+    // fit the bucket even at the full available extent walks down until
+    // the copy fits: a headline fanned into 970x250 at a master-tuned
+    // cqmax renders glyphs taller than the banner, and hugging a box
+    // around it displays the bloat instead of containing it. Floor at
+    // 1.5cqmax, ~12 steps of ×0.85 — never a loop, never invisible text.
+    if (t._generated === true) {
+      const MIN_FONT = 1.5;
+      let steps = 12;
+      while (m && m.blockPct > availBlock && size > MIN_FONT && steps > 0) {
+        size = Math.max(MIN_FONT, Math.round(size * 0.85 * 10) / 10);
+        m = measureAt(size);
+        steps -= 1;
+      }
+      if (!m) return null;
+    }
+    const fit = vertical
+      ? { width: m.blockPct, height: m.inlinePct }
+      : { width: m.inlinePct, height: m.blockPct };
+    return size !== authored ? { ...fit, fontSize: size } : fit;
+  }, onlySizeKey, onlyGenerated);
   for (const c of containers.values()) c.remove();
   if (next !== store.state) store.replace(next);
 }

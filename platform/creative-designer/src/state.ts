@@ -361,6 +361,16 @@ export function fitReaderFieldBoxes(
 export interface SizedBoxFit {
   width: number;
   height?: number; // absent = leave the authored height alone
+  // Machine-corrected font size. STAMPED ONLY on `_generated` items —
+  // the guard lives in fitSizedFieldBoxes, not the measurer, so the
+  // authored-size rule ("item.fontSize is the author's number and
+  // nothing may write over it") is enforced structurally: any author
+  // touch strips _generated, and a fit can then never reach the font.
+  // Machine-set sizes are the machine's to correct: a headline fanned
+  // into a 970x250 at a cqmax tuned for another aspect renders glyphs
+  // taller than the banner, and box-packing at that size grows the box
+  // instead of containing the text (2026-08-18).
+  fontSize?: number;
 }
 
 export function fitSizedFieldBoxes(
@@ -372,6 +382,11 @@ export function fitSizedFieldBoxes(
   // packing passes the generated mode's sizeKey so re-generating one
   // bucket can never rewrite a box the author hand-tuned in another.
   onlySizeKey?: string,
+  // Restrict the fit to MACHINE items (`_generated`). The tab-open
+  // self-heal passes true so it can never move a box the author sized —
+  // including a deliberately narrowed wrap width. Edit-path fits pass
+  // nothing: a synced edit legitimately re-fits every box it re-rendered.
+  onlyGenerated?: boolean,
 ): DesignerState {
   if (!field) return state;
   let changed = false;
@@ -388,6 +403,8 @@ export function fitSizedFieldBoxes(
       let any = false;
       banners[sizeKey] = items.map((it) => {
         if (it.type !== "text" || (it as { field?: string }).field !== field) return it;
+        const generated = (it as { _generated?: boolean })._generated === true;
+        if (onlyGenerated && !generated) return it;
         // Effective text: a detached override keeps its own copy — measuring
         // it is a no-op when the master edit didn't touch it.
         const local = (it as { text?: string }).text;
@@ -399,12 +416,19 @@ export function fitSizedFieldBoxes(
         if (!m || !Number.isFinite(m.width) || m.width <= 0) return it;
         const t = it as unknown as {
           width?: number; height?: number; left?: number; writingMode?: string;
+          fontSize?: number;
         };
+        // Font correction: MACHINE items only, ever. See SizedBoxFit.fontSize.
+        const fitFont = generated && m.fontSize != null &&
+            Number.isFinite(m.fontSize) && m.fontSize > 0 &&
+            (t.fontSize == null || Math.abs(t.fontSize - m.fontSize) >= 0.05)
+          ? m.fontSize
+          : null;
         const curW = t.width ?? 0;
         const wSame = Math.abs(curW - m.width) < 0.1;
         const hSame = m.height == null
           || (t.height != null && Math.abs(t.height - m.height) < 0.1);
-        if (wSame && hSame) return it;
+        if (wSame && hSame && fitFont == null) return it;
         any = true;
         const left = t.writingMode === "vertical-rl"
           ? (t.left ?? 0) + (curW - m.width) // keep the right edge fixed
@@ -412,6 +436,7 @@ export function fitSizedFieldBoxes(
         return {
           ...it, width: m.width, left,
           ...(m.height != null ? { height: m.height } : {}),
+          ...(fitFont != null ? { fontSize: fitFont } : {}),
         } as LayoutItem;
       });
       if (any) bChanged = true;
