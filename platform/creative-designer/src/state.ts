@@ -367,6 +367,11 @@ export function fitSizedFieldBoxes(
   state: DesignerState,
   field: string,
   measure: (text: string, item: LayoutItem, sizeKey: string) => SizedBoxFit | null,
+  // Restrict the fit to ONE bucket. Synced edits pass nothing (the copy
+  // changed everywhere, every bucket re-fits — ab79563); generation-time
+  // packing passes the generated mode's sizeKey so re-generating one
+  // bucket can never rewrite a box the author hand-tuned in another.
+  onlySizeKey?: string,
 ): DesignerState {
   if (!field) return state;
   let changed = false;
@@ -379,6 +384,7 @@ export function fitSizedFieldBoxes(
       // owns it (and shares the current stage's geometry, which this
       // callback's per-bucket containers don't model).
       if (sizeKey === MOBILE_EXPANDED_KEY) { banners[sizeKey] = items; continue; }
+      if (onlySizeKey != null && sizeKey !== onlySizeKey) { banners[sizeKey] = items; continue; }
       let any = false;
       banners[sizeKey] = items.map((it) => {
         if (it.type !== "text" || (it as { field?: string }).field !== field) return it;

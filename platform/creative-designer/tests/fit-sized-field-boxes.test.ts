@@ -69,4 +69,21 @@ describe("fitSizedFieldBoxes", () => {
     expect(body.width).toBe(33);
     expect(body.height).toBe(40);
   });
+
+  // Generation-time packing (applyLayout) scopes the fit to the mode it
+  // just generated: re-generating one bucket must never rewrite a box the
+  // author hand-tuned in another. Synced edits keep the everywhere fit.
+  it("onlySizeKey restricts the fit to that bucket, leaving others untouched", () => {
+    const st = initialState(
+      mk({ "300x600": [text({ writingMode: "vertical-rl" })], "300x250": [text()] }), "mobile");
+    const seen: string[] = [];
+    const r = fitSizedFieldBoxes(st, "headline", (_t, _i, sizeKey) => {
+      seen.push(sizeKey);
+      return { width: 15, height: 20 };
+    }, "300x600");
+    expect(seen).toEqual(["300x600"]); // the other bucket was never measured
+    expect(bucketItem(r, "300x600").width).toBe(15);
+    // untouched bucket keeps its object identity, not just its values
+    expect(r.pages[0].banners!["300x250"]).toBe(st.pages[0].banners!["300x250"]);
+  });
 });

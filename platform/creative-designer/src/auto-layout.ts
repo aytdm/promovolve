@@ -16,6 +16,7 @@ import { masterColor } from "./state";
 import { enforceContrast } from "./color-contrast";
 import { TEMPLATES } from "./layout-templates";
 import { presetLayoutFor } from "./presets";
+import { packSizedFieldBoxes } from "./render/canvas";
 import type { Store } from "./store";
 import { applyTemplate as applyTemplateItems } from "./template-apply";
 import type { DesignerState, LayoutItem, Page } from "./types";
@@ -331,4 +332,45 @@ function applyLayout(store: Store, pageIdx: number, mode: Mode, items: Page["lay
     ...state,
     pages: state.pages.map((p, i) => (i === pageIdx ? nextPage : p)),
   });
+
+  // Pack generated boxes at the source. Template/preset geometry is sized
+  // for generic copy; real copy — especially vertical-rl Japanese, where
+  // the packing axis is WIDTH — can leave the text hugging one edge of a
+  // huge stale rectangle that the author then packs by hand, box by box
+  // (reported 2026-08-17, 300x600). Generation is authoring-by-machine, so
+  // machine output arrives packed; nothing here ever touches an authored
+  // box: the pack is scoped to THIS mode's sizeKey, and the items it fits
+  // were created two lines up. Collapsed buckets only — the strip above
+  // guarantees every generated text item is field-bound, so the per-field
+  // bucket packer (hidden container-type:size probes) measures this bucket
+  // whether or not its tab is on screen; the expanded/mobile readers keep
+  // template geometry designed for their aspect. Stage-ready retry covers
+  // the boot fan-out, which fires before the canvas has mounted.
+  if (isCollapsedBucket && mode.sizeKey) {
+    const fields = new Set<string>();
+    for (const it of tagged) {
+      if (it.type !== "text") continue;
+      const f = (it as { field?: string }).field;
+      if (f) fields.add(f);
+    }
+    if (fields.size > 0) {
+      const sizeKey = mode.sizeKey;
+      whenStageReady(() => {
+        fields.forEach((f) => packSizedFieldBoxes(store, f, sizeKey));
+      });
+    }
+  }
+}
+
+/** Run `fn` once the live canvas stage is mounted and measurable —
+  * immediately when it already is, else retrying across frames (the boot
+  * fan-out generates every bucket before first paint). Gives up quietly
+  * after ~20 frames: packing is an enhancement, an unmeasurable canvas
+  * must not queue work forever. */
+function whenStageReady(fn: () => void, tries = 20): void {
+  const stage = document.querySelector<HTMLElement>("#canvas-host expandable-magazine-banner")
+    ?.shadowRoot?.querySelector<HTMLElement>(".design-box");
+  if (stage && stage.clientWidth > 0) { fn(); return; }
+  if (tries <= 0) return;
+  requestAnimationFrame(() => whenStageReady(fn, tries - 1));
 }

@@ -275,7 +275,7 @@ export function packReaderFieldBoxes(store: Store, field: string): void {
  * live element for the field is the style template (typography is one
  * identity per role); per-bucket properties that legitimately differ
  * (fontSize, writingMode, geometry) are overridden per item. */
-export function packSizedFieldBoxes(store: Store, field: string): void {
+export function packSizedFieldBoxes(store: Store, field: string, onlySizeKey?: string): void {
   if (!field) return;
   const banner = document.querySelector<HTMLElement>("#canvas-host expandable-magazine-banner");
   const shadow = banner?.shadowRoot;
@@ -366,7 +366,7 @@ export function packSizedFieldBoxes(store: Store, field: string): void {
     return vertical
       ? { width: blockPct, height: inlinePct }
       : { width: inlinePct, height: blockPct };
-  });
+  }, onlySizeKey);
   for (const c of containers.values()) c.remove();
   if (next !== store.state) store.replace(next);
 }
