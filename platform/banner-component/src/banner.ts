@@ -2711,9 +2711,46 @@ export class ExpandableMagazineBanner extends HTMLElement {
       const isActive = i === current;
 
       if (isActive) {
-        el.querySelectorAll<HTMLElement>("[data-anim-item]").forEach((item) => {
-          this.playItemAnimation(item);
-        });
+        const playAll = (): void =>
+          el.querySelectorAll<HTMLElement>("[data-anim-item]").forEach((item) => {
+            this.playItemAnimation(item);
+          });
+        if (turnFrom !== null) {
+          // A clock turn (arrows/keys) is peeling the sheet above this
+          // page RIGHT NOW — playing here runs the choreography beneath
+          // the outgoing sheet, spent by the time the page is actually
+          // open. Pose the entrance start instead (invisible: the sheet
+          // still covers it, and the reveal then shows the START state,
+          // same design as the collapsed viewability gate) and play in
+          // animatePageTurn's onDone below, when the page IS open.
+          this.poseItemAnimationsAtStart(el);
+        } else if (
+          prevIdx === null && !this._reducedMotion &&
+          this.getAttribute("preview-frame") !== "1"
+        ) {
+          // First layout after expand: the open effect (deal/fade) is
+          // still playing over this cover. Hold at the entrance start
+          // until the enter settles so the motion greets the reader
+          // instead of playing into the effect. magazine-enter-settled
+          // bubbles from the expand wrapper with its own safety net
+          // (render-overlay), so this can never hold forever. Preview
+          // frames keep play-on-render (the designer owns its timing);
+          // reduced motion has no choreography to time.
+          this.poseItemAnimationsAtStart(el);
+          const playedFor = current;
+          overlay.addEventListener(
+            "magazine-enter-settled",
+            () => {
+              if (this._expanded && this._displayedPage === playedFor) playAll();
+            },
+            { once: true },
+          );
+        } else {
+          // Page already revealed — an interactive peel that finished
+          // (bookkeeping pass), reduced motion, or a preview frame. The
+          // open moment is now.
+          playAll();
+        }
       } else if (i !== turnFrom) {
         // The outgoing page of a turn keeps its items posed until the
         // sheet has rotated away (reset in onDone) — resetting now
@@ -2742,6 +2779,16 @@ export class ExpandableMagazineBanner extends HTMLElement {
             // slide while the page is still settling).
             this.applyStackLayout(overlay, pages.length, current, new Set());
             this.resetItemAnimations(outgoing);
+            // The page is open NOW — play its motion (posed at the
+            // entrance start when the turn began). Skipped when
+            // navigation already moved on (spamming next/prev settles
+            // this turn instantly and the newer updatePages pass owns
+            // the newer page's timing).
+            if (this._displayedPage === current) {
+              incoming.querySelectorAll<HTMLElement>("[data-anim-item]").forEach((item) => {
+                this.playItemAnimation(item);
+              });
+            }
           },
         });
       }
@@ -2839,6 +2886,26 @@ export class ExpandableMagazineBanner extends HTMLElement {
   // re-entering the page replays the motion. Used for every inactive
   // page on navigation, and for the outgoing page of a paper turn
   // once its sheet has rotated out of view.
+  /** Snap a page's motion items to their entrance START pose (no-op for
+    * items without animationFrom — they rest at base until their
+    * animationTo tween). Used while a page is being revealed (clock turn
+    * in flight, open effect still playing) so the reveal shows the start
+    * state, never resting items that jump backwards when the deferred
+    * playItemAnimation fires — the same design the collapsed canvas's
+    * viewability gate uses. */
+  private poseItemAnimationsAtStart(pageEl: HTMLElement): void {
+    pageEl.querySelectorAll<HTMLElement>("[data-anim-item]").forEach((item) => {
+      const from = parseJSON<import("./types").MotionFrom>(item.dataset.animationFrom);
+      if (!from) return;
+      applyEntranceStart(item, from, {
+        left: Number(item.dataset.baseLeft ?? "0"),
+        top: Number(item.dataset.baseTop ?? "0"),
+        rotation: Number(item.dataset.baseRotation ?? "0"),
+        opacity: Number(item.dataset.baseOpacity ?? "1"),
+      });
+    });
+  }
+
   private resetItemAnimations(pageEl: HTMLElement): void {
     pageEl.querySelectorAll<HTMLElement>("[data-anim-item]").forEach((item) => {
       const baseLeft = Number(item.dataset.baseLeft ?? "0");

@@ -80,14 +80,16 @@
         { bg: "linear-gradient(135deg,#2d132c,#801336)", layout: [
             { type: "text", text: "Page 2", left: 6, top: 42, width: 88, fontSize: 11, color: "#ffffff", fontWeight: 700 },
         ], banners: { "mobile-expanded": [
-            { type: "text", text: "Page 2",   left: 8, top: 30, width: 84, fontSize: 8,   color: "#ffffff", fontWeight: 700, textAlign: "center" },
-            { type: "text", text: "stacked copy reads naturally in portrait — headline up top, body below, whitespace vertical.", left: 12, top: 48, width: 76, fontSize: 3.4, color: "#e8c8d4", textAlign: "center" },
+            // animationFrom on expanded items: must start when the PAGE is
+            // opened (turn lands / enter settles), never under the sheet.
+            { type: "text", text: "Page 2",   left: 8, top: 30, width: 84, fontSize: 8,   color: "#ffffff", fontWeight: 700, textAlign: "center", animationFrom: { dy: -12, opacity: 0, duration: 0.5 } },
+            { type: "text", text: "stacked copy reads naturally in portrait — headline up top, body below, whitespace vertical.", left: 12, top: 48, width: 76, fontSize: 3.4, color: "#e8c8d4", textAlign: "center", animationFrom: { opacity: 0, duration: 0.7 } },
         ] } },
         { bg: "linear-gradient(135deg,#0b3d2e,#14746f)", layout: [
             { type: "text", text: "Page 3", left: 6, top: 42, width: 88, fontSize: 11, color: "#ffffff", fontWeight: 700 },
         ], banners: { "mobile-expanded": [
-            { type: "text", text: "Page 3",   left: 8, top: 30, width: 84, fontSize: 8,   color: "#ffffff", fontWeight: 700, textAlign: "center" },
-            { type: "text", text: "one portrait master could serve both devices.", left: 12, top: 48, width: 76, fontSize: 3.4, color: "#c2e8dd", textAlign: "center" },
+            { type: "text", text: "Page 3",   left: 8, top: 30, width: 84, fontSize: 8,   color: "#ffffff", fontWeight: 700, textAlign: "center", animationFrom: { dx: 20, opacity: 0, duration: 0.5 } },
+            { type: "text", text: "one portrait master could serve both devices.", left: 12, top: 48, width: 76, fontSize: 3.4, color: "#c2e8dd", textAlign: "center", animationFrom: { opacity: 0, duration: 0.7 } },
         ] } },
       ];
       // expandAnimation "fade" here is deliberate: it's the LEGACY value old
