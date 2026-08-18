@@ -52,6 +52,21 @@ export function hideGuides(): void {
 export function showGuides(lines: GuideLine[]): void {
   if (!layer) return;
   layer.innerHTML = "";
+  if (lines.length === 0) return;
+  // Guide positions are percentages of the BANNER CANVAS (the design-box,
+  // same space as item coordinates) — but the layer spans the whole canvas
+  // wrap. Mapping pos% straight onto the layer drew every guide displaced
+  // and full-bleed across the editor (observed on 160x600: lines streaking
+  // over the properties panel, nowhere near the edges they marked). Project
+  // the stage's rect into layer space per show — drags re-show every move,
+  // so scroll/zoom stay correct — and draw the lines WITHIN it.
+  const stage = document.querySelector<HTMLElement>("#canvas-host expandable-magazine-banner")
+    ?.shadowRoot?.querySelector<HTMLElement>(".design-box");
+  const lr = layer.getBoundingClientRect();
+  const sr = stage?.getBoundingClientRect();
+  if (!sr || sr.width <= 0 || sr.height <= 0 || lr.width <= 0) return;
+  const ox = sr.x - lr.x;
+  const oy = sr.y - lr.y;
   for (const line of lines) {
     const el = document.createElement("div");
     const shared = {
@@ -61,16 +76,16 @@ export function showGuides(lines: GuideLine[]): void {
     } as Partial<CSSStyleDeclaration>;
     if (line.orientation === "h") {
       Object.assign(el.style, shared, {
-        left: "0",
-        right: "0",
-        top: `${line.pos}%`,
+        left: `${ox}px`,
+        width: `${sr.width}px`,
+        top: `${oy + (line.pos / 100) * sr.height}px`,
         height: "1px",
       });
     } else {
       Object.assign(el.style, shared, {
-        top: "0",
-        bottom: "0",
-        left: `${line.pos}%`,
+        top: `${oy}px`,
+        height: `${sr.height}px`,
+        left: `${ox + (line.pos / 100) * sr.width}px`,
         width: "1px",
       });
     }
