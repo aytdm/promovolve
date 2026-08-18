@@ -56,6 +56,13 @@ export function layoutItemToNode(
       lineHeight: String(item.lineHeight ?? 1.2),
       writingMode: item.writingMode && item.writingMode !== "horizontal-tb" ? item.writingMode : "",
       textOrientation: item.writingMode === "vertical-rl" ? "mixed" : "",
+      // Balanced columns for vertical text: in vertical-rl, CSS "lines"
+      // ARE the columns, so text-wrap:balance turns the greedy
+      // full-height-first-column-plus-stub break (12/5 glyphs, observed
+      // as "doesn't feel natural" 2026-08-18) into the even split
+      // traditional tategaki display sets. Vertical only — horizontal
+      // wraps in published creatives keep their exact current breaks.
+      textWrap: item.writingMode === "vertical-rl" ? "balance" : "",
       direction: item.direction === "rtl" ? "rtl" : "",
     });
     if (item.border) {

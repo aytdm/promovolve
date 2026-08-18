@@ -167,8 +167,12 @@ try {
   });
 
   const nav = async (d) => {
-    await page.evaluate((x) => [...document.querySelectorAll("button")]
-      .find((b) => b.textContent?.trim() === x)?.click(), d);
+    // By ARIA label, not glyph: the size-strip's scroll chevrons reuse
+    // ‹ › and sit earlier in the DOM — glyph matching clicked THOSE
+    // (hidden, no-op), never changed pages, and cross-page assertions
+    // went vacuously green by reading the same page twice (2026-08-18).
+    const lab = d === "›" ? "Next page" : "Previous page";
+    await page.evaluate((x) => document.querySelector(`button[aria-label="${x}"]`)?.click(), lab);
     await page.waitForTimeout(1000);
   };
 

@@ -329,6 +329,9 @@ export function packSizedFieldBoxes(
       clone.style.lineHeight = String(t.lineHeight ?? 1.2);
       clone.style.writingMode = vertical ? "vertical-rl" : "horizontal-tb";
       clone.style.textOrientation = vertical ? "mixed" : "";
+      // Match the renderer (layout-item): vertical text balances its
+      // columns, so the fit must measure balanced breaks too.
+      clone.style.textWrap = vertical ? "balance" : "";
       clone.style.direction = t.direction === "rtl" ? "rtl" : "ltr";
       return clone;
     };
