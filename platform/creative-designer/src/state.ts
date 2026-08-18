@@ -787,6 +787,32 @@ export function updateItem(
   );
 }
 
+/** Flip a text item's writing mode WITHOUT claiming authorship of its
+  * sizing. Orientation is a per-dimension CHOICE (writingMode is
+  * deliberately unsynced), not an edit of the machine's layout: routing
+  * it through updateItem stripped `_generated`, which disarmed the
+  * machine font-fit — flip a still-bloated bucket headline to vertical
+  * and the giant glyphs were locked in, the packed "hug" spanning the
+  * canvas (reported 2026-08-18, "excessive space to the left"). Keeping
+  * the flag lets the follow-up pack walk the machine font for the new
+  * axis, and the item keeps reading "generated" in the fanout status —
+  * which is still true: the composition is the machine's. Geometry or
+  * typography edits keep going through updateItem and claim ownership
+  * as before. */
+export function setItemWritingMode(
+  state: DesignerState,
+  idx: number,
+  mode: "horizontal-tb" | "vertical-rl",
+): DesignerState {
+  const items = currentLayout(state);
+  if (idx < 0 || idx >= items.length) return state;
+  return updateCurrentLayout(state, (arr) =>
+    arr.map((it, i) =>
+      i === idx && it.type === "text" ? ({ ...it, writingMode: mode } as LayoutItem) : it,
+    ),
+  );
+}
+
 // Edit an item's CONTENT (text or image src). A field-bound item edited
 // in an EXPANDED reader (PC *or* mobile — see isMultiPage) writes the
 // shared page[field], so every view bound to that field re-renders the

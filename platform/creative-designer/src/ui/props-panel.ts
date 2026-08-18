@@ -16,7 +16,7 @@
 import { refitItemCropToBox } from "../auto-crop";
 import { packReaderFieldBoxes, packSizedFieldBoxes, packTextItemHeight } from "../render/canvas";
 import { isMultiPage } from "../modes";
-import { currentItem, currentLayout, currentPage, fieldColorSyncKey, hasLocalTextOverride, isFieldColorSynced, propagateTypography, setItemContent, setReaderFieldFontSize, setSyncFieldColor, TYPO_SYNC_KEYS, updateItem } from "../state";
+import { currentItem, currentLayout, currentPage, fieldColorSyncKey, hasLocalTextOverride, isFieldColorSynced, propagateTypography, setItemContent, setItemWritingMode, setReaderFieldFontSize, setSyncFieldColor, TYPO_SYNC_KEYS, updateItem } from "../state";
 import type { Store } from "../store";
 import type { DesignerState, ImageItem, LayoutItem, RectItem } from "../types";
 import { scrimGradient, SCRIM_EDGES, type ScrimEdge, type ScrimSpec } from "../scrim";
@@ -323,7 +323,14 @@ function build(panel: HTMLElement, idx: number, item: LayoutItem, store: Store):
     setters.writingMode = selectField(layoutGroup, "writing", item.writingMode ?? "horizontal-tb",
       ["horizontal-tb", "vertical-rl"],
       (v, c) => {
-        mutate(store, idx, (it) => ({ ...it, writingMode: v as "horizontal-tb" | "vertical-rl" }), c);
+        // NOT via mutate/updateItem: orientation is a per-dimension CHOICE
+        // (writingMode is deliberately unsynced), so it must not strip
+        // `_generated` — that disarmed the machine font-fit, and flipping
+        // a still-bloated bucket headline to vertical locked the giant
+        // glyphs in with a canvas-wide "hug". See setItemWritingMode.
+        const next = setItemWritingMode(store.state, idx, v as "horizontal-tb" | "vertical-rl");
+        if (c) store.commit(next);
+        else store.replace(next);
         // Re-pack the box for its NEW axis. The toggle changes which way
         // the text grows (horizontal wraps down; vertical-rl adds columns
         // leftward), so the old extent is always shaped for the wrong
@@ -336,9 +343,9 @@ function build(panel: HTMLElement, idx: number, item: LayoutItem, store: Store):
         // Field-bound items in a SIZED bucket use the field packer — it
         // fits BOTH axes (packTextItemHeight hugs only the pack axis, so
         // a toggle to vertical kept the horizontal-era height and wrapped
-        // the copy into stubby columns). Readers and free text keep the
-        // single-item pack. The toggle is an authored gesture (mutate
-        // stripped _generated above), so the font is never walked.
+        // the copy into stubby columns), and on a still-machine item it
+        // also walks a bloated font down to fit the new axis. Readers and
+        // free text keep the single-item pack.
         if (c) requestAnimationFrame(() => {
           const it = currentLayout(store.state)[idx];
           const field = it && it.type === "text" ? (it as { field?: string }).field : undefined;
