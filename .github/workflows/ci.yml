@@ -69,8 +69,13 @@ jobs:
     runs-on: ubuntu-latest
     # The browser suite spawns vite + Chromium; a wedge there must fail
     # the job in minutes (the suite's own watchdog is 180s), not idle
-    # into the runner's 6h default and stall the deploy gate.
-    timeout-minutes: 10
+    # into the runner's 6h default and stall the deploy gate. 20, not 10:
+    # the budget also covers a COLD `playwright install` (~150MB), which
+    # alone blew the 10-minute bound twice on slow runners (2026-08-18,
+    # both runs of 1b3d36d died mid-download and gated the deploy). The
+    # browser cache below makes warm runs fast; the timeout is the cold
+    # path's headroom.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: platform/creative-designer
@@ -90,6 +95,14 @@ jobs:
       # gate is an IntersectionObserver, so this needs real Chromium —
       # the fixture imports the banner component from source via the
       # @banner vite alias (see tests/ratchet/anim-viewability.mjs).
+      # Cache the browser download (~/.cache/ms-playwright) keyed on the
+      # lockfile — `playwright install` is a no-op download on a warm
+      # cache; --with-deps still apt-installs system libs each run.
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('platform/creative-designer/package-lock.json') }}
       - run: npx playwright install --with-deps chromium
       - run: npm run test:anim-viewability
 
