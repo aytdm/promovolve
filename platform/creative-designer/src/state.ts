@@ -778,10 +778,31 @@ export function updateItem(
   return updateCurrentLayout(state, (arr) =>
     arr.map((it, i) => {
       if (i !== idx) return it;
-      // Any user edit clears the _generated flag — the moment the
-      // author touches an auto-filled item, the whole size flips
+      const result = fn(it) as LayoutItem & { _generated?: boolean };
+      // A POSITION-ONLY edit (drag, arrow nudge, alignment — only
+      // left/top changed) keeps `_generated`: moving a machine box to a
+      // better spot expresses no opinion about its EXTENT or type, so
+      // it must not disarm the self-heal/font-fit automatics ("if it
+      // can be done automatically that's preferable", 2026-08-18). The
+      // fanout dot stays "generated", which remains true of the sizing.
+      // Nested objects compare by REFERENCE — an edit that replaces
+      // crop/animation objects claims ownership, a spread that carries
+      // them through does not.
+      if ((it as { _generated?: boolean })._generated === true) {
+        const b = it as unknown as Record<string, unknown>;
+        const a = result as unknown as Record<string, unknown>;
+        const keys = new Set([...Object.keys(b), ...Object.keys(a)]);
+        let positionOnly = true;
+        for (const k of keys) {
+          if (k === "left" || k === "top" || k === "_generated") continue;
+          if (b[k] !== a[k]) { positionOnly = false; break; }
+        }
+        if (positionOnly) return { ...result, _generated: true } as LayoutItem;
+      }
+      // Any OTHER edit clears the flag — the moment the author touches
+      // an auto-filled item's extent, type, or styling, the size flips
       // from "generated" to "authored" in the fanout status.
-      const { _generated: _g, ...rest } = fn(it) as LayoutItem & { _generated?: boolean };
+      const { _generated: _g, ...rest } = result;
       return rest as LayoutItem;
     }),
   );

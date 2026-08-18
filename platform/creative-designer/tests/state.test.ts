@@ -130,6 +130,30 @@ describe("updateItem", () => {
     const s = addItem(initialState([pageWith()]), txt("x"));
     expect(updateItem(s, 99, () => txt("y"))).toBe(s);
   });
+
+  // The _generated boundary: moving a machine box expresses no opinion
+  // about its extent, so position-only edits keep the flag (and keep the
+  // self-heal/font-fit automatics armed); any other change claims the
+  // item as authored.
+  it("keeps _generated on a position-only edit (drag/nudge/align)", () => {
+    const gen = { ...txt("hi"), width: 50, height: 20, _generated: true } as LayoutItem;
+    let s = addItem(initialState([pageWith()]), gen);
+    s = updateItem(s, 0, (it) => ({ ...it, left: 12, top: 34 } as LayoutItem));
+    expect((currentLayout(s)[0] as { _generated?: boolean })._generated).toBe(true);
+    expect(currentLayout(s)[0]).toMatchObject({ left: 12, top: 34 });
+  });
+
+  it("strips _generated when the edit changes anything beyond position", () => {
+    const gen = { ...txt("hi"), width: 50, height: 20, _generated: true } as LayoutItem;
+    const base = addItem(initialState([pageWith()]), gen);
+    const resized = updateItem(base, 0, (it) => ({ ...it, width: 30 } as LayoutItem));
+    expect((currentLayout(resized)[0] as { _generated?: boolean })._generated).toBeUndefined();
+    const styled = updateItem(base, 0, (it) => ({ ...it, text: "edited" } as LayoutItem));
+    expect((currentLayout(styled)[0] as { _generated?: boolean })._generated).toBeUndefined();
+    // Moved AND resized in one edit still claims ownership.
+    const both = updateItem(base, 0, (it) => ({ ...it, left: 5, width: 30 } as LayoutItem));
+    expect((currentLayout(both)[0] as { _generated?: boolean })._generated).toBeUndefined();
+  });
 });
 
 describe("deleteItem", () => {
