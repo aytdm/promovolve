@@ -399,6 +399,25 @@ function renderMotionGhost(
     `opacity: ${endOpacity}`,
   ].filter(Boolean).join(";");
 
+  // Self-explaining label: the ghost previews the LEGACY end-pose tween
+  // of the SELECTED item, which can sit far from the item itself and
+  // read as a mystery box parked over unrelated content. Non-interactive
+  // — clicks on it obey the ghost's click-through rule.
+  const tag = document.createElement("div");
+  tag.textContent = "END POSE";
+  tag.style.cssText = [
+    "position: absolute",
+    "left: 0",
+    "top: -16px",
+    "font-size: 9px",
+    "letter-spacing: 1px",
+    `color: ${SELECTION_COLOR}`,
+    "font-family: sans-serif",
+    "pointer-events: none",
+    "white-space: nowrap",
+  ].join(";");
+  ghost.appendChild(tag);
+
   // Rotation grip above the ghost — click+drag to set animationTo.rotation.
   const rot = document.createElement("div");
   rot.dataset.cdMotionRotateIdx = String(idx);
