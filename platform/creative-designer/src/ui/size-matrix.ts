@@ -44,7 +44,7 @@ export function mountSizeMatrix(host: HTMLElement, store: Store): SizeMatrixHand
     "flex: 1 1 auto",
     "display: flex",
     "flex-direction: row",
-    "height: 88px",
+    "height: 89px", // +1px border = 90 on the pre-zoom grid
     `background: ${tokens.ink800}`,
     `border-bottom: 1px solid ${tokens.ink500}`,
     "padding: 0 14px",

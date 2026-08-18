@@ -55,6 +55,12 @@ export function mountSidebar(host: HTMLElement): SidebarHandle {
   tabsBar.setAttribute("role", "tablist");
   tabsBar.style.cssText = [
     "display: flex",
+    // Fixed 35 + 1px border = 36 on the shared pre-zoom grid (see the
+    // makeSection header note): menu 40 + tabs 35 + 3 x 35 collapsed
+    // rows = 180 = menu 40 + size-strip 90 + canvas-header 50, so the
+    // sidebar's section boundary MEETS the canvas-header's bottom
+    // border across the vertical divider at every zoom rounding.
+    "height: 34px", // +1px border = 35 on the pre-zoom grid
     `border-bottom: 1px solid ${tokens.ink500}`,
     "flex: 0 0 auto",
   ].join(";");
@@ -67,7 +73,7 @@ export function mountSidebar(host: HTMLElement): SidebarHandle {
     btn.dataset.tab = tab.key;
     btn.style.cssText = [
       "flex: 1",
-      "padding: 10px 8px",
+      "padding: 8px",
       "background: transparent",
       "border: none",
       "border-bottom: 2px solid transparent",
@@ -116,7 +122,17 @@ export function mountSidebar(host: HTMLElement): SidebarHandle {
     const header = document.createElement("button");
     header.type = "button";
     header.className = "cd-group-header";
-    header.style.cssText = `width:100%;display:flex;align-items:center;justify-content:space-between;gap:6px;background:none;border:none;color:${tokens.ink300};font:inherit;font-size:10px;letter-spacing:2px;padding:10px 14px 8px;cursor:pointer;text-transform:uppercase;`;
+    // FIXED height, not font-derived padding: collapsed rows measured
+    // 36px vs 37px depending on line rounding, and the stack's bottom
+    // line drifted a pixel — visibly missing the canvas-header's bottom
+    // border across the vertical divider ("pixel off where the line
+    // between Properties and Layers meets the horizontal menu",
+    // 2026-08-18). 34px + the group's 1px border-bottom = 35px rows on
+    // the shared PRE-ZOOM grid: with UI_SCALE 1.2 every multiple-of-5
+    // height is integral post-zoom, and menu 40 + tab-bar 35 + 3 x 35 =
+    // 180 = menu 40 + size-strip 90 + canvas-header 50 — the section
+    // boundary and the canvas-header's bottom border are the SAME pixel.
+    header.style.cssText = `width:100%;height:34px;box-sizing:border-box;display:flex;align-items:center;justify-content:space-between;gap:6px;background:none;border:none;color:${tokens.ink300};font:inherit;font-size:10px;letter-spacing:2px;padding:0 14px;cursor:pointer;text-transform:uppercase;`;
     const labelSpan = document.createElement("span");
     labelSpan.textContent = label;
     const right = document.createElement("span");

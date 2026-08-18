@@ -38,7 +38,7 @@ export function mountMenuBar(
   const bar = document.createElement("header");
   bar.className = "cd-menu-bar";
   bar.style.cssText = [
-    "height: 38px",
+    "height: 39px", // +1px border = 40 on the pre-zoom grid
     "padding: 0 12px",
     "display: flex",
     "align-items: center",

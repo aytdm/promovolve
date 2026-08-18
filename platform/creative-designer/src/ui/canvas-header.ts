@@ -41,7 +41,23 @@ export function mountCanvasHeader(host: HTMLElement, store: Store, ctx: Designer
     // the sidebar (the pager/cover/CTA cluster ghosting through the
     // Properties panel). When tight, the right cluster drops to a
     // second row and the canvas yields the ~40px — never an overlap.
-    "min-height: 40px",
+    // FIXED 48 + 1px border = 49 on the shared pre-zoom grid: menu-bar
+    // 39 + size-strip 89 + 49 = 177 = menu-bar 39 + tab-bar 36 + 3 x 34
+    // collapsed sidebar rows — the bottom border MEETS the sidebar's
+    // section boundary across the vertical divider instead of missing
+    // it by a pixel (2026-08-18). Fixed height retires the wrap-to-a-
+    // second-row insurance; the 1024 size gate already floors the width.
+    // 48.6667 (146/3), not an integer — the compensation the zoom model
+    // demands. Measured behavior of zoom:1.2 chrome hosts: content
+    // heights scale exactly x1.2, but every 1px border SNAPS to exactly
+    // 1 rendered px. The junction that must meet (this bar's bottom
+    // border vs the sidebar's collapsed-section boundary) crosses THREE
+    // borders on this side (menu, strip, this bar) and FIVE on the
+    // sidebar side (menu, tab bar, 3 group rows) — so integer grids are
+    // unsolvable: (Lcontent - Rcontent) x 1.2 must equal the 2-border
+    // difference. Left content 39+89+48.6667 x 1.2 + 3 = 215 = right
+    // content (39+34+3x34) x 1.2 + 5. Verified at dpr 1 and 2.
+    "height: 48.6667px",
     // wrap kept as dormant insurance — with the cover/CTA cluster gone
     // and 6px gaps, the strip fits one row at the 1024 viewport gate
     // (single-row need ~760px vs 764 available), so the fold can't

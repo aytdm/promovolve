@@ -265,7 +265,13 @@ function boot(ctx: DesignerContext): void {
   // sizes (no central font token), so zoom is the proportional knob —
   // text AND spacing grow together. Applied to every chrome host EXCEPT
   // the canvas, which keeps its own scale (the user zooms it separately).
-  const UI_SCALE = "1.15";
+  // 1.2, not 1.15: chrome heights sit on a multiple-of-5 pre-zoom grid
+  // (menu 40, strip 90, canvas-header 50, tab-bar 35, collapsed rows 35)
+  // so every zoomed position lands on an exact integer CSS pixel — at
+  // 1.15 nothing is integral, each zoom-root rounded independently, and
+  // structural lines that must MEET across the canvas/sidebar divider
+  // missed by a pixel (2026-08-18).
+  const UI_SCALE = "1.2";
   for (const h of [shell.menuBarHost, shell.matrixHost, shell.canvasHeaderHost, shell.canvasFootHost, shell.sidebarHost]) {
     h.style.setProperty("zoom", UI_SCALE);
   }
