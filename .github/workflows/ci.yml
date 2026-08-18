@@ -127,6 +127,12 @@ jobs:
   datepicker:
     name: Dashboard date-picker (browser)
     runs-on: ubuntu-latest
+    # Same bound + browser cache as the designer job: a wedged
+    # `playwright install` sat 30+ minutes here with NO timeout
+    # (2026-08-18, the 6a8d5a5 run) and held the whole CI run
+    # in_progress past the deploy gate's 30-minute wait — green code,
+    # failed deploy, twice in one night across two jobs.
+    timeout-minutes: 20
     defaults:
       run:
         working-directory: platform/dashboard-tests
@@ -146,6 +152,11 @@ jobs:
           cache: npm
           cache-dependency-path: platform/dashboard-tests/package-lock.json
       - run: npm ci
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('platform/dashboard-tests/package-lock.json') }}
       - run: npx playwright install --with-deps chromium
       - run: npm test
 
