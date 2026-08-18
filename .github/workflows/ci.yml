@@ -61,7 +61,7 @@ jobs:
       # transformed ancestors, quirks mode, CSS bombs, SPA remounts,
       # z-index wars, vertical writing). Known gaps are pinned in
       # tests/hostile/run.mjs and fail the suite if their shape changes.
-      - run: npx playwright install --with-deps chromium
+      - run: npx playwright install chromium
       - run: npm run test:hostile
 
   designer:
@@ -96,14 +96,21 @@ jobs:
       # the fixture imports the banner component from source via the
       # @banner vite alias (see tests/ratchet/anim-viewability.mjs).
       # Cache the browser download (~/.cache/ms-playwright) keyed on the
-      # lockfile — `playwright install` is a no-op download on a warm
-      # cache; --with-deps still apt-installs system libs each run.
+      # lockfile (restore-keys falls back to any seeded playwright cache).
+      # NO --with-deps anywhere in this workflow: it apt-installs system
+      # libs the ubuntu-latest image already carries, and a wedged apt
+      # mirror hung that step for 20+ minutes THROUGH a warm browser
+      # cache (2026-08-18, three gate failures in one night). If a future
+      # runner image ever drops a shared lib, the suite fails naming the
+      # missing .so — reinstate deps then, deliberately.
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('platform/creative-designer/package-lock.json') }}
-      - run: npx playwright install --with-deps chromium
+          restore-keys: |
+            playwright-${{ runner.os }}-
+      - run: npx playwright install chromium
       - run: npm run test:anim-viewability
 
   bootstrap:
@@ -157,7 +164,9 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('platform/dashboard-tests/package-lock.json') }}
-      - run: npx playwright install --with-deps chromium
+          restore-keys: |
+            playwright-${{ runner.os }}-
+      - run: npx playwright install chromium
       - run: npm test
 
   go:
