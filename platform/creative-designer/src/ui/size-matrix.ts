@@ -131,8 +131,10 @@ export function mountSizeMatrix(host: HTMLElement, store: Store): SizeMatrixHand
     "gap: 6px",
     "padding: 10px 0",
     "scroll-behavior: smooth",
-    "scrollbar-width: thin",
-    `scrollbar-color: ${tokens.ink500} transparent`,
+    // No scrollbar — the edge chevrons below are the overflow
+    // affordance (user decision 2026-08-18); wheel/trackpad/drag and
+    // the arrows all still scroll.
+    "scrollbar-width: none",
   ].join(";");
   // Wheel-to-scroll-horizontally: trackpad two-finger + mouse wheel
   // both translate vertical deltas into horizontal scroll. Without
@@ -149,13 +151,72 @@ export function mountSizeMatrix(host: HTMLElement, store: Store): SizeMatrixHand
   // elements, so inject a one-off <style> keyed to this class name.
   const scrollbarStyle = document.createElement("style");
   scrollbarStyle.textContent = `
-.cd-size-matrix-scroller::-webkit-scrollbar { height: 6px; }
-.cd-size-matrix-scroller::-webkit-scrollbar-track { background: transparent; }
-.cd-size-matrix-scroller::-webkit-scrollbar-thumb { background: ${tokens.ink500}; border-radius: 3px; }
-.cd-size-matrix-scroller::-webkit-scrollbar-thumb:hover { background: ${tokens.ink400}; }
+.cd-size-matrix-scroller::-webkit-scrollbar { display: none; }
 `;
   scroller.appendChild(scrollbarStyle);
-  strip.appendChild(scroller);
+
+  // Chevron overflow affordance: ‹ › float over the row's edges, each
+  // visible ONLY while there is content to scroll toward on its side —
+  // both hidden when everything fits. Same 24px ghost-button language
+  // as the canvas-header pager arrows. A click glides most of a
+  // viewport; wheel/trackpad/drag scrolling still works underneath.
+  const scrollWrap = document.createElement("div");
+  scrollWrap.style.cssText = [
+    "flex: 1",
+    "position: relative",
+    "display: flex",
+    "min-width: 0",
+  ].join(";");
+  const edgeArrow = (label: string, side: "left" | "right"): HTMLButtonElement => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.textContent = label;
+    b.title = side === "left" ? "Scroll sizes left" : "Scroll sizes right";
+    b.setAttribute("aria-label", b.title);
+    b.style.cssText = [
+      "position: absolute",
+      `${side}: 0`,
+      "top: 50%",
+      "transform: translateY(-50%)",
+      "z-index: 2",
+      "width: 24px",
+      "height: 24px",
+      "display: none", // shown by updateArrows when scrollable that way
+      "align-items: center",
+      "justify-content: center",
+      `background: ${tokens.ink800}`,
+      `color: ${tokens.ink300}`,
+      `border: 1px solid ${tokens.ink500}`,
+      "border-radius: 4px",
+      "font: inherit",
+      "font-size: 14px",
+      "cursor: pointer",
+      "padding: 0",
+      `box-shadow: 0 0 8px 6px ${tokens.ink800}`, // soft fade over the chips beneath
+      "transition: color .12s, border-color .12s",
+    ].join(";");
+    b.addEventListener("mouseenter", () => { b.style.color = tokens.ink100; });
+    b.addEventListener("mouseleave", () => { b.style.color = tokens.ink300; });
+    b.addEventListener("click", () => {
+      const dx = Math.max(120, Math.round(scroller.clientWidth * 0.7));
+      scroller.scrollBy({ left: side === "left" ? -dx : dx, behavior: "smooth" });
+    });
+    return b;
+  };
+  const leftArrow = edgeArrow("\u2039", "left");
+  const rightArrow = edgeArrow("\u203a", "right");
+  const updateArrows = (): void => {
+    const max = scroller.scrollWidth - scroller.clientWidth;
+    leftArrow.style.display = scroller.scrollLeft > 1 ? "flex" : "none";
+    rightArrow.style.display = scroller.scrollLeft < max - 1 ? "flex" : "none";
+  };
+  scroller.addEventListener("scroll", updateArrows, { passive: true });
+  new ResizeObserver(updateArrows).observe(scroller);
+  // Content lands after mount (cells append below) — settle once painted.
+  requestAnimationFrame(updateArrows);
+
+  scrollWrap.append(scroller, leftArrow, rightArrow);
+  strip.appendChild(scrollWrap);
 
   interface CellHandle {
     root: HTMLButtonElement;

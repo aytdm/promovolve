@@ -146,7 +146,17 @@ export function mountCanvasHeader(host: HTMLElement, store: Store, ctx: Designer
       // Short mode name (aspect parenthetical lives on the chips).
       const modeName = state.mode.label.replace(/\s*\(.*\)$/, "");
       modeTag.textContent = modeName;
-      regenBtn.title = `Regenerate ${modeName}`;
+      // Regenerate is an EXPANDED-mode action (the two-step Gemini copy
+      // rewrite + layout). For IAB banner sizes it only ever re-applied
+      // the deterministic preset — a reset in regenerate's clothing that
+      // wiped any author layout in the bucket, and since generation-time
+      // packing + tab-open self-heal (cc8b115) there is nothing left for
+      // it to fix there. Disabled on sized tabs (user decision 2026-08-18).
+      const regenEnabled = isMultiPage(state.mode);
+      setEnabled(regenBtn, regenEnabled);
+      regenBtn.title = regenEnabled
+        ? `Regenerate ${modeName}`
+        : "Regenerate works on the expanded pages — banner sizes follow them automatically";
 
       const total = state.pages.length;
       const current = state.pageIdx + 1;
