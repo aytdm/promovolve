@@ -58,12 +58,12 @@ export function mountCanvasHeader(host: HTMLElement, store: Store, ctx: Designer
     // difference. Left content 39+89+48.6667 x 1.2 + 3 = 215 = right
     // content (39+34+3x34) x 1.2 + 5. Verified at dpr 1 and 2.
     "height: 48.6667px",
-    // wrap kept as dormant insurance — with the cover/CTA cluster gone
-    // and 6px gaps, the strip fits one row at the 1024 viewport gate
-    // (single-row need ~760px vs 764 available), so the fold can't
-    // trigger at any supported width unless someone adds chrome.
-    "flex-wrap: wrap",
-    "row-gap: 0",
+    // NOWRAP: the fixed height (pixel-grid junction below) clips a
+    // wrapped second row — at 911px it bled over the canvas
+    // (2026-08-18). Overflow is handled by the priority demotion into
+    // the ⋯ popover instead: clusters leave the bar for the popover
+    // narrowest-first, so the row NEVER exceeds its width.
+    "flex-wrap: nowrap",
     "padding: 0 12px",
     "display: flex",
     "align-items: center",
@@ -74,27 +74,49 @@ export function mountCanvasHeader(host: HTMLElement, store: Store, ctx: Designer
     "position: relative",
   ].join(";");
 
+  // Responsive priority-overflow (the size gate admits widths down to
+  // 760px, far below the bar's natural ~760px of chrome): every cluster
+  // after the tool group lives in a WRAPPER that can demote into the ⋯
+  // popover when the row would overflow, narrowest-priority first —
+  // align/pack, then undo/redo, then Regenerate, then Save draft. The
+  // tool group and the pager never leave the bar.
+  const cluster = (): HTMLElement => {
+    const c = document.createElement("div");
+    c.style.cssText = "display:flex;align-items:center;gap:6px;flex:0 0 auto;";
+    return c;
+  };
+
   // Tool group (select / text / image / rect / circle / trash) —
   // lives at the far left of the header, followed by a divider
-  // separating it from the banner identity cluster.
-  mountToolbar(bar, store);
-  bar.appendChild(verticalDivider());
+  // separating it from the banner identity cluster. Wrapped so it can
+  // demote LAST: at the 760px gate floor even a fully-demoted bar
+  // overflowed by ~96px — the icons themselves are the final tier.
+  const wTools = cluster();
+  mountToolbar(wTools, store);
+  wTools.appendChild(verticalDivider());
+  bar.appendChild(wTools);
 
   // Save draft lives HERE with the editing tools — deliberately far from
   // Publish (menu bar): the two were adjacent icon buttons once and a
   // mis-tap published a creative with no confirmation.
-  mountDraftButton(bar, store, ctx);
-  bar.appendChild(verticalDivider());
+  const wSave = cluster();
+  mountDraftButton(wSave, store, ctx);
+  wSave.appendChild(verticalDivider());
+  bar.appendChild(wSave);
 
   // Undo / redo — editing actions live with the tools (moved here
   // from the menu bar, which keeps identity + preview/save/publish).
-  mountHistoryButtons(bar, store);
-  bar.appendChild(verticalDivider());
+  const wHistory = cluster();
+  mountHistoryButtons(wHistory, store);
+  wHistory.appendChild(verticalDivider());
+  bar.appendChild(wHistory);
 
   // Alignment + distribution group. Always visible; buttons disable
   // themselves when the selection isn't large enough to act on.
-  mountAlignToolbar(bar, store);
-  bar.appendChild(verticalDivider());
+  const wAlign = cluster();
+  mountAlignToolbar(wAlign, store);
+  wAlign.appendChild(verticalDivider());
+  bar.appendChild(wAlign);
 
   // (No mode label or status pill here: the active size-matrix chip
   // already names the mode and carries the SAME fanoutStatus dot —
@@ -119,12 +141,91 @@ export function mountCanvasHeader(host: HTMLElement, store: Store, ctx: Designer
   const regenBtn = ghostBtn(ICON_SPARKLE, "Regenerate", "Regenerate this size", () => {
     void regenerateCurrentMode(store).catch((e) => console.error("[canvas-header] regenerate failed", e));
   });
-  bar.append(regenBtn, modeTag);
+  const wRegen = cluster();
+  wRegen.append(regenBtn, modeTag);
+  bar.appendChild(wRegen);
 
   // Spacer pushes pager to the right.
   const spacer = document.createElement("div");
   spacer.style.flex = "1";
+  spacer.style.minWidth = "0";
   bar.appendChild(spacer);
+
+  // ⋯ overflow button + popover hosting demoted clusters. Hidden while
+  // everything fits. The popover stacks clusters vertically in demotion
+  // order; each keeps its own horizontal layout (trailing divider hidden
+  // there via the wrapper class).
+  const moreBtn = ghostBtn(ICON_MORE, "", "More tools", () => {
+    popover.style.display = popover.style.display === "none" ? "flex" : "none";
+  });
+  moreBtn.style.display = "none";
+  const popover = document.createElement("div");
+  popover.style.cssText = [
+    "position: absolute",
+    "top: 100%",
+    "right: 8px",
+    "z-index: 60",
+    "display: none",
+    "flex-direction: column",
+    "gap: 8px",
+    "padding: 10px",
+    `background: ${tokens.ink800}`,
+    `border: 1px solid ${tokens.ink500}`,
+    "border-radius: 6px",
+    "box-shadow: 0 8px 24px rgba(0,0,0,0.35)",
+  ].join(";");
+  document.addEventListener("pointerdown", (e) => {
+    if (popover.style.display === "none") return;
+    const t = e.target as Node;
+    if (!popover.contains(t) && !moreBtn.contains(t)) popover.style.display = "none";
+  });
+  bar.append(moreBtn, popover);
+
+  // Demotion engine: narrowest-priority-first list; measure, demote until
+  // the row fits, promote back when space returns. rAF-batched so resize
+  // streams settle in one pass; a settle-guard stops promote/demote
+  // thrash at the boundary.
+  const demotable = [wAlign, wHistory, wRegen, wSave, wTools];
+  const demoted = new Set<HTMLElement>();
+  const barSlots = new Map<HTMLElement, HTMLElement>(); // wrapper -> marker
+  for (const w of demotable) {
+    const marker = document.createElement("span");
+    marker.style.display = "none";
+    w.before(marker);
+    barSlots.set(w, marker);
+  }
+  const fits = (): boolean => bar.scrollWidth <= bar.clientWidth + 1;
+  let reflowQueued = false;
+  const reflow = (): void => {
+    if (reflowQueued) return;
+    reflowQueued = true;
+    requestAnimationFrame(() => {
+      reflowQueued = false;
+      // Promote everything back, then demote until it fits — one
+      // deterministic pass, no oscillation.
+      for (const w of [...demotable].reverse()) {
+        if (demoted.has(w)) { barSlots.get(w)!.after(w); demoted.delete(w); }
+      }
+      for (const w of demotable) {
+        if (fits()) break;
+        popover.appendChild(w);
+        demoted.add(w);
+      }
+      const any = demoted.size > 0;
+      moreBtn.style.display = any ? "inline-flex" : "none";
+      if (!any) popover.style.display = "none";
+      // Hide each demoted cluster's trailing divider (last child) —
+      // vertical stacking has no use for it; restore when promoted.
+      for (const w of demotable) {
+        const last = w.lastElementChild as HTMLElement | null;
+        if (last && last.getAttribute("data-cd-divider") === "1") {
+          last.style.display = demoted.has(w) ? "none" : "";
+        }
+      }
+    });
+  };
+  new ResizeObserver(reflow).observe(bar);
+  reflow();
 
   // Right cluster — pager
   const pager = document.createElement("div");
@@ -230,7 +331,10 @@ function ghostBtn(iconSvg: string, label: string, title: string, onClick: () => 
 }
 
 function verticalDivider(): HTMLElement {
+  // (data-cd-divider lets the overflow engine hide a cluster's trailing
+  // divider while the cluster is stacked in the popover.)
   const el = document.createElement("div");
+  el.setAttribute("data-cd-divider", "1");
   el.style.cssText = `width: 1px; height: 20px; background: ${tokens.ink500}; margin: 0 2px;`;
   return el;
 }
@@ -270,4 +374,5 @@ function setEnabled(btn: HTMLButtonElement, enabled: boolean): void {
 
 // ─── Icon SVGs ────────────────────────────────────────────────────
 
+const ICON_MORE = `<svg viewBox="0 0 14 14" width="12" height="12" fill="currentColor" aria-hidden="true"><circle cx="2.5" cy="7" r="1.3"/><circle cx="7" cy="7" r="1.3"/><circle cx="11.5" cy="7" r="1.3"/></svg>`;
 const ICON_SPARKLE = `<svg viewBox="0 0 14 14" width="12" height="12" fill="currentColor" aria-hidden="true"><path d="M7 1l1.2 3.3L11.5 5.5 8.2 6.7 7 10 5.8 6.7 2.5 5.5l3.3-1.2L7 1z"/><path d="M11 9l.5 1.4L13 11l-1.5.5L11 13l-.5-1.5L9 11l1.5-.5L11 9z"/></svg>`;
