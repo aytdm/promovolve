@@ -1119,6 +1119,12 @@ private[delivery] class AdServer(
   // freshness token / needText. Bounded like pageCategoriesCache. Transient
   // (lost on restart; repopulated by RestoreClassifications -> re-auction).
   private var classifiedAtMsByUrl: Map[String, Long] = Map.empty
+  // The site's classification-freshness window as last seen on a
+  // BatchSelect. A per-site setting, so the latest value is the value; kept
+  // here because the winner-path replies are built in later handlers
+  // (pacing gate, reservations) that do not carry it, and they need it to
+  // attach the freshness token too — see `freshnessTokenFor`.
+  private var lastClassificationFreshnessWindowMs: Long = 0L
   // Serve-miss self-heal throttle: url → last re-auction request time (ms).
   // When a serve finds a slot's ServeView missing/empty, we ask the
   // auctioneer to repopulate the index for that URL — but throttle per-URL so
@@ -1189,6 +1195,16 @@ private[delivery] class AdServer(
   // is the classification-freshness window when set, else a 48h default.
   private def reclassifyInMsFor(urlValue: String, freshnessWindowMs: Long): Long =
     AdServer.reclassifyInMs(classifiedAtMsByUrl.get(urlValue), freshnessWindowMs, System.currentTimeMillis())
+  // The token for a reply that SERVES. Until 2026-08-22 only the miss /
+  // too-old branches carried it, so a page with live winners was never told
+  // to re-classify — it could only refresh by first going dark (candidates
+  // aging past the window → empty reply → token). That made every "expire
+  // but keep serving" path (ExpireClassification, and the plain window
+  // lapse) inert on exactly the pages that matter: the ones with demand.
+  // The tag posts page text off the critical path, the page keeps serving
+  // what it has, and the new classification re-auctions it.
+  private def freshnessTokenFor(url: URL): Long =
+    reclassifyInMsFor(url.value, lastClassificationFreshnessWindowMs)
   // Track pending creative IDs per (url|slot) to suppress duplicate SSE events on re-auction
   private var lastPendingCreativeIds: Map[String, Set[String]] = Map.empty
   // Site floor CPM for clearing price floor (synced via DData PacingConfig)
@@ -2740,6 +2756,7 @@ private[delivery] class AdServer(
       // recordRequestArrival above.
 
       case BatchSelect(url, slots, classificationFreshnessWindowMs, replyTo, excludedCreatives, excludedCampaigns) =>
+        lastClassificationFreshnessWindowMs = classificationFreshnessWindowMs
         if (siteSuspended) {
           // Operator suspension: refuse before ANY classification/auction/
           // lifecycle work — no serve means no impressions, so earnings
@@ -3189,7 +3206,9 @@ private[delivery] class AdServer(
                 )
             }
           }
-          replyTo ! BatchSelected(pinHonoredOutcomes, view.pageCategories)
+          val token = freshnessTokenFor(url)
+          replyTo !
+          BatchSelected(pinHonoredOutcomes, view.pageCategories, reclassifyInMs = token, needText = token <= 0)
           behavior(state.copy(
             serveStats = serveStats.recordPacingSkipped,
             lastCampaignSet = newCampaignSet
@@ -3211,7 +3230,9 @@ private[delivery] class AdServer(
                   slotId = s.slotId, winner = None,
                   dogear = AdServer.dogearFallthrough(s, persistedApprovedIds.contains)
                 )),
-              view.pageCategories
+              view.pageCategories,
+              reclassifyInMs = freshnessTokenFor(url),
+              needText = freshnessTokenFor(url) <= 0
             )
             behavior(state.copy(
               serveStats = serveStats.recordNoCandidates,
@@ -3284,7 +3305,8 @@ private[delivery] class AdServer(
         val emptyCount = outcomes.size - servedCount
         log.info("BATCH SERVED: {} slots filled, {} unfilled",
           servedCount: java.lang.Integer, emptyCount: java.lang.Integer)
-        replyTo ! BatchSelected(outcomes, pageCats)
+        val token = freshnessTokenFor(url)
+        replyTo ! BatchSelected(outcomes, pageCats, reclassifyInMs = token, needText = token <= 0)
         val updatedServeStats: ServeStats =
           AdServer.recordBatchServeStats(
             serveStats,
