@@ -61,8 +61,8 @@ class StaleClassificationSpec extends AnyWordSpec with Matchers {
     "flag entries classified at or before the publisher's last settings change" in {
       val s = state(
         "https://before" -> entry(100L),
-        "https://at"     -> entry(500L),
-        "https://after"  -> entry(501L)
+        "https://at" -> entry(500L),
+        "https://after" -> entry(501L)
       ).copy(reclassifyBefore = 500L)
       s.staleClassifications.map(_._1).toSet shouldBe Set("https://before", "https://at")
     }
