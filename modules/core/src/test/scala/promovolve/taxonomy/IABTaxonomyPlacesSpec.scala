@@ -103,6 +103,16 @@ class IABTaxonomyPlacesSpec extends AnyWordSpec with Matchers {
       prompt should include("never omit it")
     }
 
+    // Live 2026-08-22: an article about Kinosaki Onsen (a district of
+    // Toyooka, absent from cities5000) came back places=[] — the model had no
+    // way to say it and took the "empty is correct" exit. A small spot must
+    // fall back to its enclosing city or subdivision, not to nothing.
+    "tell the model to name the enclosing place for somewhere smaller than a city" in {
+      val prompt = promptWith(None)
+      prompt should include("\"Toyooka, JP-28\"")
+      prompt should include("not an\nempty list")
+    }
+
     // The place hint is publisher-controlled text entering a prompt and the
     // publisher is paid by the answer — the same hazard as the topic hint,
     // so it gets the same framing rather than being trusted.

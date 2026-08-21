@@ -601,7 +601,11 @@ a first-level subdivision ("JP-13" for Tokyo, "US-CA" for California). When the
 page is specifically about one city or town, name it as its English name, a
 comma, and the ISO code of the subdivision it is in ("Kanazawa, JP-17",
 "Springfield, US-IL") — the code after the comma is what makes the name
-unambiguous, so never omit it. At most 3, and only places the page is genuinely
+unambiguous, so never omit it. A place smaller than a city — a district, an
+onsen town, a village, a landmark — is named by the city or subdivision that
+contains it ("Toyooka, JP-28" for Kinosaki Onsen, or simply "JP-28"): a small
+spot is still somewhere, and the enclosing place is the right answer, not an
+empty list. At most 3, and only places the page is genuinely
 ABOUT — not every place it mentions. An article about Tokyo that name-drops
 Paris once is about Tokyo. A page that is not about anywhere in particular must
 return an empty list; that is the common case and it is a correct answer, not a
