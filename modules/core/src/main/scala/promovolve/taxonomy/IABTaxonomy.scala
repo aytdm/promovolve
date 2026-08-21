@@ -136,9 +136,17 @@ class IABTaxonomy(
               // knowledge (the table is far too large to list in the prompt),
               // so the shipped table — not the prompt — is the guarantee.
               // Anything unrecognised is dropped, never coerced.
+              //
+              // A city arrives as "Name, CODE" and is resolved IN SCOPE by
+              // Places.resolveEmitted — the disambiguation lives in the
+              // table lookup, not in the model's answer. An unresolvable
+              // city degrades to its stated subdivision/country.
               val rawPlaces = parsePlaces(responseBody, provider)
-              val places = promovolve.taxonomy.Places.validate(rawPlaces).toList.sorted
-              val droppedPlaces = rawPlaces.filterNot(places.contains)
+              val resolvedPlaces = rawPlaces.map(r => r -> promovolve.taxonomy.Places.resolveEmitted(r))
+              val places = promovolve.taxonomy.Places.validate(resolvedPlaces.flatMap(_._2)).toList.sorted
+              val droppedPlaces = resolvedPlaces.collect {
+                case (raw, resolved) if !resolved.exists(places.contains) => raw
+              }
               if (droppedPlaces.nonEmpty) {
                 logger.warn(
                   s"${provider.name} returned unknown place codes for $url: ${droppedPlaces.mkString(", ")} — filtered out")
@@ -297,7 +305,8 @@ class IABTaxonomy(
           "places" -> JsObject(
             "type" -> JsString("array"),
             "items" -> JsObject("type" -> JsString("string"),
-              "description" -> JsString("ISO 3166-1 or 3166-2 code the page is about"))
+              "description" -> JsString(
+                "ISO 3166-1 or 3166-2 code the page is about, or \"City, ISO-code\" for a city"))
           )
         ),
         // NOT required: an empty list and an absent key mean the same thing
@@ -588,18 +597,21 @@ $hintBlock
 Also: which real-world PLACES is this page about?
 $placeHintBlock
 Answer with ISO codes — ISO 3166-1 alpha-2 for a country ("JP"), ISO 3166-2 for
-a first-level subdivision ("JP-13" for Tokyo, "US-CA" for California). At most
-3, and only places the page is genuinely ABOUT — not every place it mentions.
-An article about Tokyo that name-drops Paris once is about Tokyo. A page that
-is not about anywhere in particular must return an empty list; that is the
-common case and it is a correct answer, not a failure. Never guess a place
-from the language the page is written in.
+a first-level subdivision ("JP-13" for Tokyo, "US-CA" for California). When the
+page is specifically about one city or town, name it as its English name, a
+comma, and the ISO code of the subdivision it is in ("Kanazawa, JP-17",
+"Springfield, US-IL") — the code after the comma is what makes the name
+unambiguous, so never omit it. At most 3, and only places the page is genuinely
+ABOUT — not every place it mentions. An article about Tokyo that name-drops
+Paris once is about Tokyo. A page that is not about anywhere in particular must
+return an empty list; that is the common case and it is a correct answer, not a
+failure. Never guess a place from the language the page is written in.
 
 ### Page ($url):
 $truncatedText
 
 ### Respond with a single JSON object in this exact shape:
-{"selected_taxonomy_ids": [{"id": "545", "confidence": 0.92}], "places": ["JP-13"]}
+{"selected_taxonomy_ids": [{"id": "545", "confidence": 0.92}], "places": ["Kanazawa, JP-17"]}
 
 If nothing matches:
 {"selected_taxonomy_ids": [], "places": []}"""
@@ -613,7 +625,8 @@ object IABTaxonomy extends DefaultJsonProtocol {
   /**
    * One classification: what the page is about, and where it is about.
    *
-   * `places` are `Places` codes (country or first-level subdivision),
+   * `places` are `Places` codes (country, first-level subdivision, or a
+   * city the text named — resolved in scope by `Places.resolveEmitted`),
    * already validated against the shipped table. Empty is the common and
    * correct answer — most pages are not about anywhere.
    */

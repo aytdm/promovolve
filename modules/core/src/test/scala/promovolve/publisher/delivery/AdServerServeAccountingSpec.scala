@@ -75,6 +75,30 @@ class AdServerServeAccountingSpec extends AnyWordSpec with Matchers {
     }
   }
 
+  // The ExpireClassification guard: once SiteEntity has expired the
+  // classification stamped T, re-recordings of T (every re-auction's
+  // CandidatesCollected, a restart's restore → MarkClassified) are the SAME
+  // stale classification coming back round and must not revive the token.
+  // Without this a bare MarkClassified(EPOCH) was undone by the next periodic
+  // re-auction on any page nobody visited in between.
+  "AdServer.acceptsClassifiedAt" should {
+    val t = 1_000_000_000_000L
+
+    "accept anything when nothing was expired" in {
+      AdServer.acceptsClassifiedAt(expiredAtMs = None, ts = t) shouldBe true
+      AdServer.acceptsClassifiedAt(expiredAtMs = None, ts = 0L) shouldBe true
+    }
+
+    "reject the expired timestamp itself and anything older" in {
+      AdServer.acceptsClassifiedAt(expiredAtMs = Some(t), ts = t) shouldBe false
+      AdServer.acceptsClassifiedAt(expiredAtMs = Some(t), ts = t - 1) shouldBe false
+    }
+
+    "accept only a strictly newer classification" in {
+      AdServer.acceptsClassifiedAt(expiredAtMs = Some(t), ts = t + 1) shouldBe true
+    }
+  }
+
   "AdServer.reclassifyInMs" should {
     val now = 1_000_000_000_000L
     val oneHour = 3600000L

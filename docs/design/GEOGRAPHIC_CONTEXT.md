@@ -1,6 +1,6 @@
 # Geographic Context
 
-> Status: **plan**. Nothing here is implemented yet.
+> Status: **shipped** (tiers 1–3 live since 2026-08-21; content places reach a named city, stale classifications expire — see "Re-classification when the classifier or the settings move").
 
 ## Decision
 
@@ -24,7 +24,7 @@ coordinates, no radius.
 
 | | Scope | Source | Granularity | Verified | Answers |
 |---|---|---|---|---|---|
-| **1. Content location** | page | LLM classification | subdivision | n/a | *what is this page about?* |
+| **1. Content location** | page | LLM classification | subdivision, **city when the text names one** | n/a | *what is this page about?* |
 | **2. Declared audience** | site | publisher declares | **city** | no — labelled a claim | *who does this publisher say reads it?* |
 | **3. Observed audience** | site | aggregate beacon geo | **country** | **yes** | *who actually reads it?* |
 
@@ -91,6 +91,62 @@ which is why it inherits the caching and freshness properties the classification
 layer already relies on: one value per canonical URL
 (`UrlNormalizer.stripTrackingParams`), cached in `SiteEntity.pageClassifications`,
 freshness-windowed, demand-gated.
+
+## Granularity: subdivision, and a named city
+
+The classifier answers in ISO codes (`JP`, `JP-17`) and, when the page is
+specifically about one city or town, in the form **`"Kanazawa, JP-17"`** — the
+English name, a comma, and the ISO code of the subdivision it sits in. The code
+after the comma is the whole point: the disambiguation that made the first cut
+of this design stop at subdivision ("Springfield, MA or IL?") is done by scope,
+in `Places.resolveCity`, never trusted to the model's memory of GeoNames ids.
+
+Resolution rules (`Places.resolveEmitted`):
+
+- the city must have the stated code as an ancestor, matched by normalized
+  name in English or any localized name (`金沢市` is tolerated for `金沢`);
+- inside a **subdivision**, several same-named places are small townships and
+  the most populous wins;
+- inside a **country** the same rule would guess, so it resolves only when the
+  name is unique there or the largest is dominant (≥ 5× the runner-up — `Paris,
+  FR`, `Kyoto, JP`); otherwise
+- it **degrades to the stated code** — `"Nowhere, JP-17"` becomes `JP-17`.
+  Coarser, never wrong. A pair with an unknown code is dropped.
+
+A city place carries its ancestors at match time like every other code, so the
+Kamakura example below holds end to end: a campaign targeting `{JP}` runs on a
+Kamakura article at 2 hops, one targeting `{JP-14}` at 1, one targeting
+Kamakura itself at 0 — and the advertiser's picker, which has always offered
+cities, now offers nothing that cannot match.
+
+## Re-classification when the classifier or the settings move
+
+A cached classification is only as good as the classifier and the settings that
+produced it. Two things put a page **behind** without making it wrong enough to
+stop serving:
+
+- **`ClassificationEntry.classifierVersion`** below
+  `CurrentClassifierVersion` — the entry was produced before the classifier
+  emitted something demand now depends on. Pre-geo entries carry `places = ∅`,
+  which place-targeted demand must read as "about nowhere" (see "Empty means
+  unknown"), so the Kanazawa article ran no Kanazawa campaign until its 48h
+  window lapsed. Bump the version only when the *output* gains a field old
+  entries cannot serve without.
+- **`State.reclassifyBefore`** — stamped by `UpdateConfig` when the publisher
+  changes a setting that feeds the prompt or the geometry it measures (declared
+  topics, audience/place declaration, domain, target elements, slots). Every
+  entry classified at or before it was made under the old settings.
+
+`SiteEntity.expireStaleClassifications` sends `AdServer.ExpireClassification(url,
+classifiedAt)` for each such entry at recovery, on its periodic tick, and on the
+settings change itself. The AdServer drops the page's freshness token and **pins
+the expiry to that timestamp** so the routine re-recordings of the same stamp
+(every re-auction's `CandidatesCollected`, a restart's restore) cannot revive it;
+only a strictly newer classification clears it. Serving is untouched throughout —
+the page keeps its winners and re-classifies on its next view, one single-flighted
+LLM call per page, paced by traffic. A whole corpus re-classifies this way after
+a version bump; that is the intended cost, and it is bounded by page views, not
+by page count.
 
 ## What WordPress can supply
 
@@ -554,10 +610,12 @@ per-region traffic model.
 
 Three different reasons, and only one is about privacy.
 
-- **Tier 1 stops at subdivision — cost, not principle.** ISO 3166-2 is the last
-  level with a small, stable, standardised code set. Shipping `cities5000`
-  removes the *vocabulary* objection but not the *disambiguation* one. Revisit
-  when demand justifies it; the door is now cheap to open.
+- **Tier 1 reaches a named city — and stops there.** ISO 3166-2 is the last
+  level with a small, stable, standardised code set; `cities5000` supplies the
+  vocabulary below it, and the *disambiguation* objection is answered by scope
+  (`"Kanazawa, JP-17"`, resolved in `Places.resolveCity`; see "Granularity:
+  subdivision, and a named city"). Nothing finer: no neighbourhood, no address,
+  no coordinates — a page is "about Kanazawa", never "about 35.56, 136.65".
 - **Tier 2 reaches city — because it is declared, not inferred.** See above.
 - **Tier 3 stops at country — data.** iptoasn has no subdivision. Going finer
   means MaxMind City: licence, monthly updates, and a refresh cron.

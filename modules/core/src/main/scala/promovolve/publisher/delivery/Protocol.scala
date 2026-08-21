@@ -99,6 +99,23 @@ object Protocol {
    */
   final case class InvalidateClassification(url: URL) extends Command
 
+  /**
+   * Expire the freshness token for a url WITHOUT touching what is
+   * serving: the page keeps its auction winners and the NEXT visitor's ad
+   * tag re-classifies it. Sent by SiteEntity when a classification is
+   * known to be behind — produced by an older classifier (no place data)
+   * or before the publisher changed a setting that feeds the prompt.
+   *
+   * `classifiedAt` is the timestamp of the classification being expired.
+   * AdServer remembers it so the routine re-recordings of that SAME
+   * timestamp (every re-auction's `CandidatesCollected`, a restart's
+   * `RestoreClassifications` → `MarkClassified`) cannot revive the token;
+   * only a classification NEWER than it clears the expiry. Without the
+   * guard a bare `MarkClassified(EPOCH)` is undone by the next periodic
+   * re-auction on any page nobody visits in between.
+   */
+  final case class ExpireClassification(url: URL, classifiedAt: Instant) extends Command
+
   /** Approve a pending creative (from publisher dashboard) */
   final case class Approve(
       url: String,

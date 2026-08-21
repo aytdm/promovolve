@@ -62,6 +62,7 @@ object AdServer {
     Done,
     EvictCampaignFromSite,
     EvictCampaignFromSlots,
+    ExpireClassification,
     Flag,
     FlagResult,
     FlaggedItem,
@@ -170,6 +171,16 @@ object AdServer {
       case None     => 0L
     }
   }
+
+  /**
+   * The `ExpireClassification` guard (see Protocol): once SiteEntity has
+   * expired a classification stamped `expiredAtMs`, a recording of that
+   * stamp or anything older is the SAME stale classification arriving by
+   * another road (re-auction, restore) and must not revive the token. Only
+   * a strictly newer classification is accepted. No expiry → accept all.
+   */
+  private[delivery] def acceptsClassifiedAt(expiredAtMs: Option[Long], ts: Long): Boolean =
+    expiredAtMs.forall(ts > _)
 
   /**
    * Partition candidates by the advertiser-side site-domain blocklist.
@@ -1154,12 +1165,23 @@ private[delivery] class AdServer(
     }
   }
 
+  // url → classifiedAt (epoch-ms) of a classification SiteEntity expired
+  // (ExpireClassification). While present, recordings of that timestamp or
+  // older are ignored — they are the same stale classification coming back
+  // round through re-auction / restore — so the freshness token stays at
+  // "re-classify now" until a genuinely newer classification lands. Bounded
+  // like the other per-url maps; transient (a restart loses it, and
+  // SiteEntity's periodic resend re-expires what is still behind).
+  private var expiredClassifiedAtMsByUrl: Map[String, Long] = Map.empty
+
   // Record that a url was classified at `ts` (epoch-ms). Bounded.
-  private def recordClassified(urlValue: String, ts: Long): Unit = {
-    classifiedAtMsByUrl = classifiedAtMsByUrl + (urlValue -> ts)
-    if (classifiedAtMsByUrl.size > AdServer.MaxPageCategoriesCache)
-      classifiedAtMsByUrl = classifiedAtMsByUrl.drop(classifiedAtMsByUrl.size - AdServer.MaxPageCategoriesCache)
-  }
+  private def recordClassified(urlValue: String, ts: Long): Unit =
+    if (AdServer.acceptsClassifiedAt(expiredClassifiedAtMsByUrl.get(urlValue), ts)) {
+      expiredClassifiedAtMsByUrl = expiredClassifiedAtMsByUrl - urlValue
+      classifiedAtMsByUrl = classifiedAtMsByUrl + (urlValue -> ts)
+      if (classifiedAtMsByUrl.size > AdServer.MaxPageCategoriesCache)
+        classifiedAtMsByUrl = classifiedAtMsByUrl.drop(classifiedAtMsByUrl.size - AdServer.MaxPageCategoriesCache)
+    }
 
   // Freshness token: ms until this page's classification should be refreshed.
   // <= 0 means "(re)classify now" — covers both never-classified (no record →
@@ -2048,6 +2070,26 @@ private[delivery] class AdServer(
         log.info(
           "Classification invalidated for url={} (auctioneer recovery found no persisted copy) — next visit re-classifies",
           url.value)
+        Behaviors.same
+
+      case ExpireClassification(url, classifiedAt) =>
+        // SiteEntity says this classification is behind (older classifier,
+        // or a publisher setting changed under it). Drop the token so the
+        // next visit re-classifies, and pin the expiry to the expired
+        // timestamp so the routine re-recordings of that same timestamp
+        // cannot revive it (see Protocol note). Serving is untouched: the
+        // page keeps its winners until the new classification re-auctions.
+        // Idempotent on the periodic resend — a later expiry never lowers
+        // the pin.
+        val ts = classifiedAt.toEpochMilli
+        val pinned = math.max(ts, expiredClassifiedAtMsByUrl.getOrElse(url.value, Long.MinValue))
+        if (classifiedAtMsByUrl.get(url.value).forall(_ <= pinned)) {
+          classifiedAtMsByUrl = classifiedAtMsByUrl - url.value
+          expiredClassifiedAtMsByUrl = expiredClassifiedAtMsByUrl + (url.value -> pinned)
+          if (expiredClassifiedAtMsByUrl.size > AdServer.MaxPageCategoriesCache)
+            expiredClassifiedAtMsByUrl =
+              expiredClassifiedAtMsByUrl.drop(expiredClassifiedAtMsByUrl.size - AdServer.MaxPageCategoriesCache)
+        }
         Behaviors.same
 
       case CandidatesCollected(url, slotId, candidates, classifiedAt, ttl, pageCategories, floorCpm, categoryFloors,

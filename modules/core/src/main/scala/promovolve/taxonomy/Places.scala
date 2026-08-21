@@ -81,9 +81,104 @@ object Places {
     (fromEn ++ fromLocal).distinct
   }
 
+  /**
+   * Cities by normalized name (English and every localized name), for
+   * resolving a classifier-emitted "City, CODE" pair. Built from the
+   * search index so the two agree on what a name is.
+   */
+  private lazy val citiesByName: Map[String, Vector[Place]] =
+    searchIndex.iterator
+      .collect { case (name, p) if p.kind == PlaceKind.City => name -> p }
+      .toVector
+      .groupMap(_._1)(_._2)
+      .view
+      .mapValues(_.distinctBy(_.code).sortBy(p => (-p.population, p.code)))
+      .toMap
+
   def get(code: String): Option[Place] = byCode.get(code)
 
   def contains(code: String): Boolean = byCode.contains(code)
+
+  /**
+   * Resolve a city NAME to a city code, scoped to the place it sits in.
+   *
+   * This is the door the design doc left "cheap to open": the classifier
+   * can name a town, but the disambiguation that made tier 1 stop at
+   * subdivision is done HERE, by scope, not trusted to the model —
+   * "Springfield" means nothing, "Springfield, US-IL" means one thing.
+   *
+   *   - `within` must be a known country or subdivision; the city must
+   *     have it as an ancestor.
+   *   - Inside a SUBDIVISION several same-named cities are small
+   *     townships; the most populous is the one an article is about.
+   *   - Inside a COUNTRY the same rule would guess — "Springfield, US" —
+   *     so it resolves only when the name is unique there or the largest
+   *     is dominant (≥ 5× the runner-up: "Paris, FR", "Kyoto, JP").
+   *
+   * Localized names count, and a Japanese municipality suffix (市/町/村/区)
+   * is tolerated because the tables carry "金沢", not "金沢市". Returns
+   * None rather than guessing; the caller falls back to `within`.
+   */
+  def resolveCity(name: String, within: String): Option[Place] = {
+    val scope = byCode.get(within).filter(_.kind != PlaceKind.City)
+    val key = normalize(name)
+    if (scope.isEmpty || key.isEmpty) None
+    else {
+      def candidatesFor(k: String): Vector[Place] =
+        citiesByName.getOrElse(k, Vector.empty).filter(c => ancestors(c.code).exists(_.code == within))
+      // The tables are not consistent about the suffix themselves (鎌倉 but
+      // 京都市), so try the name as given, then without a suffix, then with
+      // each one — whichever the table happens to carry.
+      val candidates = {
+        val exact = candidatesFor(key)
+        if (exact.nonEmpty) exact
+        else {
+          val stripped = JapaneseMunicipalitySuffixes.iterator
+            .filter(s => key.endsWith(s) && key.length > s.length)
+            .map(s => candidatesFor(key.dropRight(s.length)))
+          val suffixed = JapaneseMunicipalitySuffixes.iterator.map(s => candidatesFor(key + s))
+          (stripped ++ suffixed).find(_.nonEmpty).getOrElse(Vector.empty)
+        }
+      }
+      candidates match {
+        case Vector()                                              => None
+        case Vector(single)                                        => Some(single)
+        case many if scope.exists(_.kind == PlaceKind.Subdivision) => many.headOption
+        case many                                                  =>
+          // Country scope: the largest wins only when it clearly dominates.
+          many.headOption.filter(top => top.population >= 5L * many(1).population && top.population > 0L)
+      }
+    }
+  }
+
+  private val JapaneseMunicipalitySuffixes = List("市", "町", "村", "区")
+
+  /**
+   * One classifier-emitted place → a code, or None when it cannot be
+   * read at all.
+   *
+   *   - `"JP-17"`          → `Some("JP-17")` (a plain code; `validate` is
+   *                          still the gate downstream)
+   *   - `"Kanazawa, JP-17"` → `Some("GN1860243")` — the city, resolved in
+   *                          scope by [[resolveCity]]
+   *   - `"Nowhere, JP-17"`  → `Some("JP-17")` — an unresolvable city
+   *                          degrades to the place it was said to be in,
+   *                          which is coarser, never wrong
+   *   - `"Kanazawa, XX-99"` → `None` — no scope to stand on
+   *
+   * The split is on the LAST comma so a name containing one still reads.
+   */
+  def resolveEmitted(raw: String): Option[String] = {
+    val s = raw.trim
+    val cut = s.lastIndexOf(',')
+    if (cut < 0) Option(s).filter(_.nonEmpty)
+    else {
+      val name = s.substring(0, cut).trim
+      val within = s.substring(cut + 1).trim.toUpperCase
+      if (!contains(within)) None
+      else resolveCity(name, within).map(_.code).orElse(Some(within))
+    }
+  }
 
   /** Keep only codes this vocabulary knows. The validation gate. */
   def validate(codes: Iterable[String]): Set[String] = codes.filter(contains).toSet

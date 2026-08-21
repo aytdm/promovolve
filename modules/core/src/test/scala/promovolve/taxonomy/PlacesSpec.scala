@@ -97,6 +97,87 @@ class PlacesSpec extends AnyWordSpec with Matchers with OptionValues {
     }
   }
 
+  // The door the first cut left "cheap to open": a classifier-named city,
+  // resolved IN SCOPE. Kanazawa is the live case — a Kanazawa article
+  // classified as JP-17 matched no campaign targeting Kanazawa, because the
+  // targeting side never expands and the content side could not name the
+  // city.
+  "resolveCity" should {
+    val Kanazawa = "GN1860243"
+
+    "resolve a city inside its subdivision" in {
+      Places.resolveCity("Kanazawa", "JP-17").value.code shouldBe Kanazawa
+      Places.resolveCity("Kamakura", "JP-14").value.code shouldBe Kamakura
+    }
+
+    "resolve inside the country when the name is unique there" in {
+      Places.resolveCity("Kamakura", "JP").value.code shouldBe Kamakura
+    }
+
+    "refuse to guess between same-named cities in one country" in {
+      // Springfield, US: a dozen of them, none dominant.
+      Places.resolveCity("Springfield", "US") shouldBe None
+    }
+
+    "resolve the dominant one when the largest clearly outweighs the rest" in {
+      // Portland, US: Oregon's 650k against Maine's 67k and four townships.
+      Places.resolveCity("Portland", "US").value.code shouldBe "GN5746545"
+    }
+
+    "pick the most populous inside a subdivision" in {
+      Places.resolveCity("Springfield", "US-IL").value.code shouldBe "GN4250542"
+    }
+
+    "ignore case, diacritics and accept localized names" in {
+      Places.resolveCity("KANAZAWA", "JP-17").value.code shouldBe Kanazawa
+      Places.resolveCity("金沢", "JP-17").value.code shouldBe Kanazawa
+    }
+
+    // The tables themselves disagree (鎌倉 but 京都市), so both directions
+    // must work: a suffix the table lacks is stripped, one it carries is added.
+    "tolerate a Japanese municipality suffix either way" in {
+      Places.resolveCity("金沢市", "JP-17").value.code shouldBe Kanazawa
+      Places.resolveCity("鎌倉市", "JP").value.code shouldBe Kamakura
+      Places.resolveCity("京都", "JP").value.code shouldBe "GN1857910"
+    }
+
+    "refuse a city outside the stated scope" in {
+      Places.resolveCity("Kanazawa", "JP-13") shouldBe None
+      Places.resolveCity("Kanazawa", "US") shouldBe None
+    }
+
+    "refuse an unknown scope, a city as scope, or a blank name" in {
+      Places.resolveCity("Kanazawa", "XX-99") shouldBe None
+      Places.resolveCity("Kanazawa", Kamakura) shouldBe None
+      Places.resolveCity("   ", "JP-17") shouldBe None
+    }
+  }
+
+  "resolveEmitted" should {
+
+    "pass a plain code through untouched" in {
+      Places.resolveEmitted("JP-17") shouldBe Some("JP-17")
+      Places.resolveEmitted(" JP ") shouldBe Some("JP")
+    }
+
+    "resolve a 'City, CODE' pair to the city" in {
+      Places.resolveEmitted("Kanazawa, JP-17") shouldBe Some("GN1860243")
+      Places.resolveEmitted("kanazawa,jp-17") shouldBe Some("GN1860243")
+    }
+
+    // Coarser, never wrong: a name the table does not know inside a scope
+    // it does keeps the scope.
+    "degrade an unresolvable city to its stated scope" in {
+      Places.resolveEmitted("Nowhere, JP-17") shouldBe Some("JP-17")
+      Places.resolveEmitted("Springfield, US") shouldBe Some("US")
+    }
+
+    "drop a pair whose scope is unknown, and blank input" in {
+      Places.resolveEmitted("Kanazawa, XX-99") shouldBe None
+      Places.resolveEmitted("") shouldBe None
+    }
+  }
+
   "search" should {
 
     "find a city by its English name" in {

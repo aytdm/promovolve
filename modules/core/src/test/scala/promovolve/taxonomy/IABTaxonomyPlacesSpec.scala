@@ -63,6 +63,15 @@ class IABTaxonomyPlacesSpec extends AnyWordSpec with Matchers {
     "resolve a validated subdivision to the expected place" in {
       Places.get("JP-13").map(_.name) shouldBe Some("Tokyo")
     }
+
+    // The analyze() pairing for a named city: parse the "City, CODE" string
+    // as-is, resolve it in scope, then validate. The Kanazawa article
+    // classifies to the city, and a made-up town degrades to its prefecture.
+    "resolve a 'City, CODE' answer to the city and degrade the unknown town" in {
+      val parsed = IABTaxonomy.placesFrom("""{"places": ["Kanazawa, JP-17", "Nowhere, JP-20", "JP"]}""")
+      parsed shouldBe List("Kanazawa, JP-17", "Nowhere, JP-20", "JP")
+      Places.validate(parsed.flatMap(Places.resolveEmitted)) shouldBe Set("GN1860243", "JP-20", "JP")
+    }
   }
 
   "the prompt" should {
@@ -84,6 +93,14 @@ class IABTaxonomyPlacesSpec extends AnyWordSpec with Matchers {
       prompt should include("ISO 3166-1")
       prompt should include("\"places\"")
       prompt should include("empty list")
+    }
+
+    // A city is asked for as "Name, CODE" — the code is what makes it
+    // resolvable in scope, so the prompt must show the form and insist on it.
+    "ask for a city as 'Name, CODE' with the code never omitted" in {
+      val prompt = promptWith(None)
+      prompt should include("\"Kanazawa, JP-17\"")
+      prompt should include("never omit it")
     }
 
     // The place hint is publisher-controlled text entering a prompt and the

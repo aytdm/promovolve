@@ -650,6 +650,38 @@ object SiteEntity {
             }
           }
 
+          /**
+           * Expire every persisted classification that is BEHIND — made by
+           * an older classifier (`classifierVersion` below current, e.g.
+           * pre-geo entries with no place data) or before the publisher
+           * last changed a setting that feeds the prompt
+           * (`state.reclassifyBefore`). The AdServer drops each page's
+           * freshness token, pinned to the expired timestamp, so the next
+           * visitor's ad tag re-classifies it while the page keeps serving
+           * what it has. Idempotent: called at recovery and on the
+           * periodic tick, it re-sends only what is still stale, and a
+           * page leaves the set the moment its new classification persists.
+           */
+          def expireStaleClassifications(state: State, reason: String): Unit = {
+            val stale = state.staleClassifications.toVector
+            if (stale.nonEmpty) {
+              val adServerRef = sharding.entityRefFor(delivery.AdServer.TypeKey, siteId.value)
+              stale.foreach { case (url, entry) =>
+                adServerRef ! delivery.AdServer.ExpireClassification(URL(url), Instant.ofEpochMilli(entry.classifiedAt))
+              }
+              // The periodic re-send is housekeeping; only the first expiry
+              // of a batch is news.
+              val line =
+                "SiteEntity {} expired {} of {} page classifications ({}) — each re-classifies on its next view"
+              if (reason == "periodic")
+                ctx.log.debug(line, siteId.value, stale.size: java.lang.Integer,
+                  state.pageClassifications.size: java.lang.Integer, reason)
+              else
+                ctx.log.info(line, siteId.value, stale.size: java.lang.Integer,
+                  state.pageClassifications.size: java.lang.Integer, reason)
+            }
+          }
+
           def publishVerifiedHost(host: Option[String]): Unit = {
             host match {
               case Some(h) =>
@@ -887,6 +919,12 @@ object SiteEntity {
                 "SiteEntity {} replayed {} page classifications to auctioneer",
                 siteId.value, state.pageClassifications.size: java.lang.Integer
               )
+              // Replayed, AND expired where behind: the restore above hands
+              // the auctioneer old timestamps the AdServer would otherwise
+              // read as fresh (its token is rebuilt from them), so a page
+              // classified by an older classifier or under old settings
+              // would sit stale for the whole freshness window.
+              expireStaleClassifications(state, "recovery")
             }
             // Restore the floor CPM sweep optimizer. Restored from the
             // persisted `state.floorSweepSnapshot` if present, else starts
@@ -1014,10 +1052,24 @@ object SiteEntity {
 
               case UpdateConfig(config, replyTo) =>
                 ctx.log.info("SiteEntity {} updating configuration", siteId.value)
-                val newState = state.withConfig(config)
+                // A changed config changes the prompt (declared topics,
+                // audience/place hint, domain, target elements) or the
+                // geometry it measures (slots): every classification made
+                // under the old one is behind. Stamp the change and expire
+                // them — pages keep serving, each re-classifies on its next
+                // view. An unchanged resubmit (the dashboard posts whole
+                // forms) stamps nothing, or every save would re-classify
+                // the whole site.
+                val changed = !state.config.contains(config)
+                val newState =
+                  if (changed) state.withConfig(config).copy(reclassifyBefore = Instant.now.toEpochMilli)
+                  else state.withConfig(config)
                 Effect
                   .persist(newState)
-                  .thenRun(_ => setupFromConfig(config))
+                  .thenRun { s =>
+                    setupFromConfig(config)
+                    if (changed) expireStaleClassifications(s, "publisher settings changed")
+                  }
                   .thenReply(replyTo)(_ => ConfigUpdated(siteId))
 
               case ActivateServeSlots(url, discovered) =>
@@ -1788,7 +1840,8 @@ object SiteEntity {
                   categories = categoryScores,
                   slots = slots.iterator.map(PersistedSlot.from).toVector,
                   classifiedAt = classifiedAt.toEpochMilli,
-                  places = places.toSet
+                  places = places.toSet,
+                  classifierVersion = ClassificationEntry.CurrentClassifierVersion
                 )
                 // Activate request-detected slots into the site inventory so the
                 // dashboard's Slots table + per-slot floor overrides populate from
@@ -1893,8 +1946,15 @@ object SiteEntity {
                 // auctioneer skips entries it already has and kicks a
                 // re-auction only when something was actually restored, so
                 // the steady-state resend is a no-op.
-                if (state.pageClassifications.nonEmpty)
+                if (state.pageClassifications.nonEmpty) {
                   auctioneerRef ! AuctioneerEntity.RestoreClassifications(state.pageClassifications)
+                  // Same tick re-expires what is still behind: the AdServer's
+                  // expiry pins are in-memory and an AdServer incarnation
+                  // spawned since recovery would otherwise rebuild a fresh
+                  // token from the auctioneer's restore. No-op once every
+                  // stale page has re-classified.
+                  expireStaleClassifications(state, "periodic")
+                }
                 Effect.none
 
               case DemandCategoriesRefreshed(categories) =>
@@ -2162,8 +2222,31 @@ object SiteEntity {
       // survives full-page caching untouched. Empty is the common answer —
       // most pages are not about anywhere. Default-empty is Jackson-safe:
       // pre-geo snapshots recover with no migration.
-      places: Set[String] = Set.empty
+      places: Set[String] = Set.empty,
+      // Which classifier produced this entry. Entries below
+      // `ClassificationEntry.CurrentClassifierVersion` are expired on
+      // recovery (see `State.staleClassifications`) so they re-classify on
+      // their next view instead of waiting out the freshness window.
+      // Default 0 = pre-versioning (no place data), Jackson-safe.
+      classifierVersion: Int = 0
   ) extends CborSerializable
+
+  object ClassificationEntry {
+
+    /**
+     * Bump when the classifier's OUTPUT gains something old entries lack
+     * and cannot serve without — not for prompt tweaks that only improve
+     * the same fields. Every entry below it re-classifies on its next
+     * view, one LLM call per page, paced by traffic and single-flighted.
+     *
+     *   1 — 2026-08: places (tier 1 of docs/design/GEOGRAPHIC_CONTEXT.md).
+     *       A pre-geo entry carries `places = ∅`, which place-targeted
+     *       demand reads as "about nowhere" and refuses — the Kanazawa
+     *       article that no Kanazawa campaign could run on until its 48h
+     *       window lapsed.
+     */
+    val CurrentClassifierVersion: Int = 1
+  }
 
   /**
    * Persistent shape of an AdSlotSpec. Keeps width/height as separate
@@ -2626,13 +2709,32 @@ object SiteEntity {
       // The in-memory `recentFloorObservations` var is the working
       // cache: hydrated from this on recovery, folded back in on each
       // tick's persist. Default empty for pre-fix states.
-      recentFloorObservations: Vector[FloorObservation] = Vector.empty
+      recentFloorObservations: Vector[FloorObservation] = Vector.empty,
+      // Epoch-ms of the publisher's last settings change that feeds the
+      // classifier (UpdateConfig: declared topics, audience/place,
+      // domain, target elements). A classification made at or before it
+      // was made under the OLD settings and is expired on the next
+      // recovery/tick, re-classifying on its next view. 0 = never changed
+      // (pre-feature states deserialize with no migration).
+      reclassifyBefore: Long = 0L
   ) extends CborSerializable {
     def isRegistered: Boolean = publisherId.isDefined
     def isInitialized: Boolean = config.isDefined
     def isVerified: Boolean = verifiedHost.isDefined
     def withPublisherId(p: PublisherId): State = copy(publisherId = Some(p))
     def withConfig(c: SiteConfig): State = copy(config = Some(c))
+
+    /**
+     * Persisted classifications that are behind and should re-classify on
+     * their next view: produced by an older classifier, or before the
+     * publisher's last classifier-relevant settings change. Pure, so the
+     * predicate is unit-testable; the send lives in the behavior.
+     */
+    def staleClassifications: Iterator[(String, ClassificationEntry)] =
+      pageClassifications.iterator.filter { case (_, e) =>
+        e.classifierVersion < ClassificationEntry.CurrentClassifierVersion ||
+        (reclassifyBefore > 0L && e.classifiedAt <= reclassifyBefore)
+      }
 
     /**
      * After a clean full crawl, mirror `config.slots` to exactly what was
