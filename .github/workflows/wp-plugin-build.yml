@@ -1,0 +1,74 @@
+# Package the WordPress publisher plugin as a workflow ARTIFACT — nothing
+# public, nothing tagged, no Release row.
+#
+# Why this exists next to wp-plugin-release.yml: the repo is public, so the
+# release workflow's zip is a public download the moment it runs. Wanting the
+# zip and wanting to publish it are different intentions, and until now there
+# was no way to express the first — the only CI path went straight to a
+# GitHub Release. This one stops at the artifact: it goes to whoever has
+# access to the Actions run, which for a private install is exactly right.
+#
+# Same build script as the release path (version skew and packaging layout
+# are gated in build-zip.sh), so an artifact built here is byte-for-byte what
+# a release would have shipped. Publishing stays a separate, deliberate act.
+name: WP plugin build (artifact only)
+
+on:
+  # Manual only. This never fires on a push: an artifact nobody asked for on
+  # every commit is noise, and the plugin changes rarely.
+  workflow_dispatch:
+
+# Read-only by design. The release workflow needs contents:write to create a
+# release; this one must not be able to, so a mistaken run cannot publish.
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build zip → artifact
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      # Refuses to package when the plugin header Version, PROMOVOLVE_VERSION
+      # and readme.txt's Stable tag disagree, and runs php -l + the topic-hint
+      # behaviour tests. A skewed or fatal build fails here.
+      - name: Build the plugin zip
+        run: integrations/wordpress/build-zip.sh
+
+      - name: Resolve version
+        id: v
+        run: |
+          set -euo pipefail
+          main=integrations/wordpress/promovolve/promovolve.php
+          version=$(sed -n 's/^ \* Version:[[:space:]]*\([0-9][^[:space:]]*\).*/\1/p' "$main" | head -1)
+          [ -n "$version" ] || { echo "could not read Version from $main" >&2; exit 1; }
+          zip="integrations/wordpress/dist/promovolve-${version}.zip"
+          [ -f "$zip" ] || { echo "expected $zip, not found — did build-zip.sh change its output name?" >&2; exit 1; }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "zip=$zip"         >> "$GITHUB_OUTPUT"
+
+      # The zip is uploaded AS IS rather than by directory: upload-artifact
+      # re-zips whatever it is given, and pointing it at dist/ would produce
+      # an archive containing the archive. Download it, unzip once, and the
+      # plugin zip is what falls out.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: promovolve-plugin-${{ steps.v.outputs.version }}
+          path: ${{ steps.v.outputs.zip }}
+          if-no-files-found: error
+          # Long enough to install at leisure, short enough that stale builds
+          # do not accumulate as near-identical downloads.
+          retention-days: 30
+
+      - name: Summary
+        run: |
+          {
+            echo "### Promovolve Publisher ${{ steps.v.outputs.version }}"
+            echo
+            echo "Artifact: \`promovolve-plugin-${{ steps.v.outputs.version }}\` (download, unzip once, upload the inner zip)."
+            echo
+            echo "Install: WordPress → Plugins → Add New → Upload Plugin."
+            echo
+            echo "_Not published. Use **WP plugin release** to cut a public GitHub Release._"
+          } >> "$GITHUB_STEP_SUMMARY"

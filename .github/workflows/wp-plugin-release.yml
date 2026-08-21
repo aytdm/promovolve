@@ -6,6 +6,12 @@
 # asset is the ONLY distribution channel until/unless the plugin is listed on
 # WordPress.org. Nothing else publishes it.
 #
+# PUBLISHES PUBLICLY. This repo is public, so every run of this workflow puts
+# the zip on the internet under a permanent tag. To get the zip WITHOUT
+# publishing — testing an install, handing it to one publisher — run
+# `wp-plugin-build.yml` instead: same build script, artifact only, and it
+# holds `contents: read` so it cannot create a release even by mistake.
+#
 # Independent of deploy.yml on purpose: this fires on a tag, never on an
 # ordinary push, so releasing the plugin cannot roll the cluster and a
 # platform deploy cannot publish a plugin.
