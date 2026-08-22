@@ -20,7 +20,7 @@ class PlaceForPageSpec extends AnyWordSpec with Matchers {
 
   private val Kanazawa = "GN1860243" // city, JP-17
   private val Ishikawa = "JP-17"
-  private val Tainan   = "TW-TNN"
+  private val Tainan = "TW-TNN"
 
   private def view(id: String, targeting: Set[String], score: Double = 0.5): CandidateView =
     CandidateView(
@@ -38,9 +38,9 @@ class PlaceForPageSpec extends AnyWordSpec with Matchers {
       placeTargeting = targeting
     )
 
-  private val fourSeasons = view("fs", Set(Kanazawa))     // targets the city
-  private val japanWide   = view("jp", Set("JP"))         // targets the country
-  private val untargeted  = view("any", Set.empty)        // no place constraint
+  private val fourSeasons = view("fs", Set(Kanazawa)) // targets the city
+  private val japanWide = view("jp", Set("JP")) // targets the country
+  private val untargeted = view("any", Set.empty) // no place constraint
 
   "CandidateLogic.forPage" should {
 
