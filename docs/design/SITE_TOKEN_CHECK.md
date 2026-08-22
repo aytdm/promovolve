@@ -141,8 +141,54 @@ static files and other integrations that cannot ask.
    the endpoint gets 404 → treated as unreachable → serves the file, i.e.
    today's behaviour. Safe in either order; api first is cleaner.
 
+## Why `unknown` never deletes the row
+
+The obvious follow-up — "if Promovolve says the site does not exist, the
+plugin can remove its own data" — is rejected, and the reason is what
+`unknown` actually covers. The server cannot distinguish:
+
+- the site was genuinely removed on Promovolve (the case the idea is for);
+- the publisher mistyped the Site ID and has not noticed yet;
+- the site request is still awaiting operator approval — no `SiteEntity`
+  exists yet, so the answer is `unknown` throughout setup;
+- a transient during a rollout, before the entity has recovered.
+
+In three of the four, deleting the row destroys the API base, script URL and
+a token the publisher typed moments ago — the "plugin ate my integration"
+failure 0.5.0 closed, re-opened through a new door. And removal buys only a
+tidy row: the visible outcome (the file is gone) is already delivered by the
+404. The publisher who is genuinely finished has an unambiguous, one-click
+path — *Also delete these settings* + delete the plugin — that states the
+intent rather than inferring it.
+
+So the plugin acts on `unknown` in exactly two ways: it stops answering the
+`.well-known` URL, and it **tells the publisher**.
+
+## Persistent `unknown`: an admin notice, not a deletion
+
+When `unknown` has been the answer continuously for **7 days** (tracked as a
+`first_unknown_at` timestamp in the option, cleared by any other answer), the
+plugin shows a dismissible WordPress admin notice on every admin page, not
+just Settings → Promovolve:
+
+> Promovolve no longer knows a site with this ID. If you have left
+> Promovolve, delete this plugin with *Also delete these settings* ticked
+> and nothing will be left behind. If you have not, check the Site ID under
+> Settings → Promovolve, or re-add the site on the dashboard.
+
+Seven days, not five minutes, because every benign cause above resolves well
+inside a week (approval lands, the typo is fixed, the rollout finishes) and a
+notice that fires during setup teaches publishers to dismiss it. Dismissal is
+remembered per state change: it returns only if the answer flips to something
+else and back to `unknown` again.
+
+`stale` gets the same treatment with a shorter fuse — notice after **24
+hours** — because its benign cause (a re-added site whose new token has not
+been pasted yet) is something the publisher is actively in the middle of, and
+a day is long enough to have forgotten.
+
 ## Open
 
-- Whether the plugin should also show `stale`/`unknown` as a WordPress
-  admin notice (outside the settings page) so it is seen without visiting
-  Settings → Promovolve. Leaning yes, dismissible, once per state change.
+- Nothing blocking. Whether the notices should also link straight to the
+  dashboard Sites page (deep link needs the dashboard URL, which the plugin
+  does not currently store — it knows only the ads API base).
