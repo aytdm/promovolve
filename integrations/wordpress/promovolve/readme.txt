@@ -4,7 +4,7 @@ Tags: ads, advertising, publisher
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.5.1
+Stable tag: 0.5.2
 License: Apache-2.0
 License URI: https://www.apache.org/licenses/LICENSE-2.0
 
@@ -87,6 +87,17 @@ reader "dog-ear" bookmarks in the browser's IndexedDB (7-day expiry). It sets
 no cookies. Visitors sending the Global Privacy Control signal receive no ads.
 
 == Changelog ==
+
+= 0.5.2 =
+* **The verification token field stays visible on a verified site.** 0.5.0
+  and 0.5.1 hid it once the ad server reported the site verified, as "no
+  longer needed" — which left a publisher restoring a lost token with
+  nowhere to paste it, on exactly the day that became the thing to do. It
+  is now shown on verified sites too, marked optional: verification is
+  one-time and held by the ad server, but keeping the token filled is what
+  makes the plugin answer the verification URL, which the dashboard
+  re-checks when you open the site's details. The field says whether it is
+  empty, current, or stale, and how to fetch the current token.
 
 = 0.5.1 =
 * **The plugin now asks the ad server whether its token is still the site's
@@ -290,6 +301,11 @@ no cookies. Visitors sending the Global Privacy Control signal receive no ads.
   identity scope (shared / per category / per post).
 
 == Upgrade Notice ==
+
+= 0.5.2 =
+If your site is verified but its verification URL returns nothing, this
+version gives you the field to fix it: Settings → Promovolve → paste the
+token from the dashboard (Sites → the site → "Verification token") → save.
 
 = 0.5.1 =
 Upload with "Replace current with uploaded"; settings are kept. After

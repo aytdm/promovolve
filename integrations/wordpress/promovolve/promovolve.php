@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Promovolve Publisher
  * Description:       Connects this site to a Promovolve ad server: prints the ad tag, serves the site-verification file, and places ad slots via editor block or shortcode.
- * Version:           0.5.1
+ * Version:           0.5.2
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Promovolve
@@ -16,7 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 const PROMOVOLVE_OPTION  = 'promovolve_settings';
-const PROMOVOLVE_VERSION = '0.5.1';
+const PROMOVOLVE_VERSION = '0.5.2';
 
 /**
  * Settings with defaults applied.
@@ -1266,17 +1266,44 @@ function promovolve_render_settings_page() {
 			<?php
 			$verification = promovolve_verification_status( $s );
 			if ( 'verified' === $verification ) :
-				// Verified: the token has no remaining purpose, so the field is
-				// not rendered at all rather than left as a puzzle. Omitting the
-				// input is safe — the sanitizer keeps any saved value when the
-				// key is absent from the submission. If verification is ever
-				// lost (a deleted-and-re-added site starts unverified), the probe
-				// returns 403 and the field comes back on its own.
+				// Verified: nothing here is REQUIRED any more — verification is
+				// one-time and held by the ad server — but the token field stays,
+				// because keeping it filled is what keeps this plugin serving the
+				// verification file, and the dashboard re-checks for that file
+				// when the site's details are opened. 0.5.0/0.5.1 hid the field
+				// on verified sites as "no longer needed", which left a publisher
+				// restoring a lost token with nowhere to paste it. Optional, and
+				// said so.
 				?>
 				<p style="padding:8px 10px;border-left:4px solid #00a32a;background:#fff;max-width:46em;">
 					<strong><?php esc_html_e( 'This site is verified.', 'promovolve' ); ?></strong>
-					<?php esc_html_e( 'Verification is one-time and held by the ad server, so there is nothing to configure here. The token field is hidden because it is no longer needed; it reappears automatically if this site ever needs verifying again.', 'promovolve' ); ?>
+					<?php esc_html_e( 'Verification is one-time and held by the ad server; nothing below is required for ads to serve. Keeping the token here is still worth it: it is what makes this plugin answer the verification URL, which the dashboard re-checks whenever you open the site’s details.', 'promovolve' ); ?>
 				</p>
+				<table class="form-table" role="presentation">
+					<tr>
+						<th scope="row"><label for="promovolve-token"><?php esc_html_e( 'Verification token', 'promovolve' ); ?></label></th>
+						<td>
+							<input name="<?php echo esc_attr( PROMOVOLVE_OPTION ); ?>[verification_token]" id="promovolve-token" type="text" class="regular-text code" value="<?php echo esc_attr( $s['verification_token'] ); ?>">
+							<?php
+							$token_state = promovolve_token_status( $s );
+							if ( '' === $s['verification_token'] ) :
+								?>
+								<p class="description" style="padding:8px 10px;border-left:4px solid #dba617;background:#fff;">
+									<?php esc_html_e( 'Empty — the verification URL currently answers nothing, and the dashboard will say so when you open this site’s details. Optional to fix. To restore it: dashboard → Sites → expand this site → “Verification token” → Copy, paste here, save.', 'promovolve' ); ?>
+								</p>
+							<?php elseif ( 'stale' === $token_state ) : ?>
+								<p class="description" style="padding:8px 10px;border-left:4px solid #dba617;background:#fff;">
+									<?php esc_html_e( 'This token is no longer the site’s current one, so the plugin answers 404 at the verification URL. Copy the current one from the dashboard Sites page (“Verification token” under the site’s details) and paste it here.', 'promovolve' ); ?>
+								</p>
+							<?php elseif ( 'valid' === $token_state ) : ?>
+								<p class="description" style="padding:8px 10px;border-left:4px solid #00a32a;background:#fff;">
+									<?php esc_html_e( 'Token current — the plugin is answering the verification URL with it.', 'promovolve' ); ?>
+								</p>
+							<?php endif; ?>
+							<p class="description"><?php esc_html_e( 'Optional on a verified site. Leave it filled so the verification file stays up; clear it only if you want the URL to stop answering.', 'promovolve' ); ?></p>
+						</td>
+					</tr>
+				</table>
 			<?php else : ?>
 			<table class="form-table" role="presentation">
 				<tr>
