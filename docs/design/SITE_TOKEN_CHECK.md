@@ -1,0 +1,148 @@
+# Site token check
+
+> Status: **spec**, 2026-08-22. Not implemented. Ships as an api change first,
+> then WordPress plugin 0.5.1; either half is inert without the other.
+
+## Decision
+
+Add one public, unauthenticated, rate-limited endpoint that lets a CMS
+integration ask: *"is the token I am holding still the current token for this
+site?"* — and let the WordPress plugin use the answer to **stop serving** the
+verification file when the answer is no. Nothing is ever deleted by it.
+
+## Why
+
+The plugin answers `/.well-known/promovolve.txt` from a token stored in
+`wp_options`. Since 0.5.0 that row survives plugin deletion (it is the last
+copy of the token once a site is verified — see `project_wp_plugin_0_5_0`),
+which closed the "reinstall wiped my integration" hole. It opened a small
+one: a site **removed and re-added on Promovolve gets a new token**, and the
+plugin has no way to learn that. It keeps serving the old one forever. The
+dashboard's ownership re-check reports that as `foreign` — correct, but it
+is the publisher reading a symptom, not the plugin knowing the fact.
+
+The plugin already asks the server something once per admin page load
+(`promovolve_verification_status`, via the serve endpoint's 403). That
+answer cannot carry this: 403 means "unverified OR host mismatch OR no such
+site", and acting on it would hit people mid-setup. A dedicated question
+gets a dedicated answer.
+
+## Non-goals
+
+- **Deleting anything on the WordPress side.** The row holds values a human
+  typed; the server never reaches into it. The only effect is whether the
+  `.well-known` URL answers.
+- **Gating serving.** Same rule as the dashboard re-check: taking a proof
+  down after verification is legitimate. This changes what the plugin
+  serves, never what the ad server serves.
+- **A token oracle.** No endpoint answers "does token X exist?" for an
+  arbitrary X. The question is always scoped to one site and the token is
+  the thing being proven, not looked up.
+
+## The endpoint
+
+```
+POST /v1/sites/{siteId}/token-check
+Content-Type: application/json
+{"token": "<the token the caller holds>"}
+
+200 {"state": "valid"}      site exists and this IS its current token
+200 {"state": "stale"}      site exists; this is NOT its current token
+200 {"state": "unknown"}    no such site (or not initialised)
+429                         rate cap — treat as unreachable
+5xx / timeout               treat as unreachable
+```
+
+Always 200 for the three answers, so a caller cannot tell `stale` from
+`unknown` by status code alone — deliberately: the two differ only in what
+the plugin's settings screen says, and a caller probing for *existence*
+gets no cheap signal.
+
+Shape notes:
+
+- **Token in the body, never the query string.** It is a credential; query
+  strings land in access logs, proxies and Referers.
+- **Keyed by `siteId`.** A site ID is not secret (it is in every page's
+  `data-pub`), so the URL carries nothing new. Holding the token is the
+  authentication, exactly as it is for the verification file itself.
+- **Constant-time comparison** (`MessageDigest.isEqual`) of the token bytes.
+- **Rate-limited** per client IP through the existing
+  `promovolve.fraud.RequestRateGate` (bucket key `token-check:<ip>`), on top
+  of the per-site natural limit (one call per plugin per 5 minutes).
+- **No logging of the token.** Log `siteId` and `state` at debug only.
+- Lives next to `getVerificationToken` / `verifySite` in `Endpoints.scala`
+  (`sitesBase / path[String]("siteId") / "token-check"`) but is NOT under
+  the publisher-authenticated `/publishers/me/` prefix — the caller is a
+  site, not a logged-in user.
+
+## Core
+
+`SiteEntity` gains one read-only command:
+
+```scala
+final case class CheckVerificationToken(token: String, replyTo: ActorRef[TokenCheckResult]) extends Command
+sealed trait TokenCheckResult extends CborSerializable
+case object TokenValid   extends TokenCheckResult
+case object TokenStale   extends TokenCheckResult
+case object TokenUnknown extends TokenCheckResult
+```
+
+Handler: `state.verificationToken` absent or site uninitialised → `Unknown`;
+present and equal (constant-time) → `Valid`; present and different →
+`Stale`. `Effect.none`, no persistence, no side effects, no log above debug.
+A deleted site (tombstone) answers `Unknown`.
+
+`EndpointRoutes`: `tokenCheckLogic` asks the entity with the normal short
+timeout; an ask failure maps to a 503 so the caller fails open.
+
+## WordPress plugin (0.5.1)
+
+`promovolve_token_status( $s )` — alongside the existing
+`promovolve_verification_status`, same 5-minute transient, called from the
+same places (settings screen render; and, new, from the `.well-known`
+handler on a cache miss so a long-unvisited admin still converges):
+
+| answer | `.well-known` | settings screen |
+|---|---|---|
+| `valid` | serve the file | "Token current." |
+| `stale` | **404** | "This token is no longer the site's current one — usually the site was removed and re-added on Promovolve, which issues a new token. Paste the new one from the dashboard Sites page." |
+| `unknown` | **404** | "Promovolve does not know a site with this ID — check the Site ID, or re-add the site on the dashboard." |
+| unreachable / 429 / no transient yet | **serve the file** (fail open) | "Could not reach the ad server — serving the file as configured." |
+
+Fail-open is load-bearing: the file is also how a *new* site gets verified,
+so a server hiccup must never hide it. Suspension is computed, not stored:
+the row is untouched, and the moment the server says `valid` again (new
+token pasted, site re-added with the same token) the file is back with no
+action on the WordPress side.
+
+`promovolve_purge_page_caches()` clears the new transient too, so pasting a
+new token takes effect immediately rather than after five minutes.
+
+## Dashboard interplay
+
+The ownership re-check (`CheckVerificationFile`) is unchanged. With this in
+place its `foreign` state becomes rare — the plugin stops serving a stale
+token instead of the dashboard reporting it — but the state stays, for
+static files and other integrations that cannot ask.
+
+## Tests
+
+- `SiteEntity`: the three answers; tombstoned site → `Unknown`; comparison
+  is byte-exact (case-sensitive, no trim).
+- Route: token in body only (a `?token=` query is ignored, not honoured);
+  429 under the gate; 503 on ask failure.
+- Plugin (`topic-test.php` style, stubbing `wp_remote_post`): the four rows
+  of the table above, fail-open on `WP_Error`, transient invalidated on save.
+
+## Rollout
+
+1. api: endpoint + entity command (additive; nothing calls it yet).
+2. Plugin 0.5.1: probe + suspension. A 0.5.1 plugin against an api without
+   the endpoint gets 404 → treated as unreachable → serves the file, i.e.
+   today's behaviour. Safe in either order; api first is cleaner.
+
+## Open
+
+- Whether the plugin should also show `stale`/`unknown` as a WordPress
+  admin notice (outside the settings page) so it is seen without visiting
+  Settings → Promovolve. Leaning yes, dismissible, once per state change.

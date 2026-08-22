@@ -26,7 +26,7 @@ Deep dives into why the system works the way it does, in `design/`:
 | Auction | [PERIODIC_AUCTION_DESIGN](design/PERIODIC_AUCTION_DESIGN.md), [REAUCTION_MATRIX](design/REAUCTION_MATRIX.md), [DELIVERY_ALGORITHMS](design/DELIVERY_ALGORITHMS.md), [MAB_INTEGRATION](design/MAB_INTEGRATION.md) |
 | Pricing & pacing | [BUDGET_PACING](design/BUDGET_PACING.md), [floor-cpm-optimization](design/floor-cpm-optimization.md) |
 | Classification | [CONTENT_CLASSIFICATION](design/CONTENT_CLASSIFICATION.md), [ON_DEMAND_CLASSIFICATION](design/ON_DEMAND_CLASSIFICATION.md) |
-| Publisher identity | [SITE_VERIFICATION](design/SITE_VERIFICATION.md) |
+| Publisher identity | [SITE_VERIFICATION](design/SITE_VERIFICATION.md) · [SITE_TOKEN_CHECK](design/SITE_TOKEN_CHECK.md) (spec) |
 | Creatives | [TEXT_COLOR_PIPELINE](design/TEXT_COLOR_PIPELINE.md) |
 | Billing | [BILLING](design/BILLING.md) |
 | Time & timezones | [TIME_AND_TIMEZONES](design/TIME_AND_TIMEZONES.md) |

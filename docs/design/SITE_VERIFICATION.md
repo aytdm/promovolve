@@ -80,10 +80,16 @@ host IS the site identity.
 ## Tradeoffs and follow-up items
 
 ### Current limitations
-- **No automatic re-verification**: once verified, stays verified. A periodic re-check could be added
+- **No automatic re-verification**: once verified, stays verified. Since 2026-08-22 the
+  publisher dashboard re-checks ownership (file OR DNS TXT) when a site's details are
+  opened, but ADVISORY only — it reports, it never revokes. Taking the proof down after
+  verification is legitimate and must not stop serving.
 - **No verification expiry**: a host that changes hands keeps serving until manually revoked
 
 ### Future work
+- [Site token check](SITE_TOKEN_CHECK.md) — a public, rate-limited `POST /v1/sites/{siteId}/token-check`
+  so the WordPress plugin can stop serving a token that is no longer the site's (removed and
+  re-added site). Spec'd, not built.
 - Periodic re-verification (e.g., monthly)
 - Verification expiry / revocation
 - Admin override for verification
