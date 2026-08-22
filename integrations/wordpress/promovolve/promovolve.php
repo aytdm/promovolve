@@ -300,21 +300,10 @@ const PROMOVOLVE_PLACE_TAXONOMIES = array(
 );
 
 /**
- * The built-in place taxonomy, for a site that has none.
- *
- * Telling a publisher to paste register_taxonomy() into functions.php is the
- * plugin failing at its job. When the option is on, this registers a plain
- * non-hierarchical "Destination" taxonomy on posts under the slug
- * `destination` — the first slug in PROMOVOLVE_PLACE_TAXONOMIES and the one
- * the Context panel recommends — so filing a post under 金沢 is one box in
- * the editor, and the page then sends data-place="金沢".
- *
- * Registered only when asked (default off): a site that already keeps places
- * in its own taxonomy must not grow a second one. show_in_rest is what makes
- * the box appear in the block editor; without it the taxonomy exists but is
- * invisible there. Turning the option off unregisters the taxonomy — the box
- * disappears — but WordPress keeps the terms and relationships, so turning
- * it back on restores everything.
+ * Built-in place taxonomy (`destination`), for a site that has none.
+ * Opt-in so a site with its own place taxonomy does not grow a second one;
+ * show_in_rest is what puts the box in the block editor; switching it off
+ * hides the box but WordPress keeps the terms.
  */
 add_action( 'init', function () {
 	$s = promovolve_settings();
