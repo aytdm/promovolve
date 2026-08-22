@@ -48,14 +48,34 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "zip=$zip"         >> "$GITHUB_OUTPUT"
 
-      # The zip is uploaded AS IS rather than by directory: upload-artifact
-      # re-zips whatever it is given, and pointing it at dist/ would produce
-      # an archive containing the archive. Download it, unzip once, and the
-      # plugin zip is what falls out.
+      # GitHub re-zips whatever it is handed, so uploading the built zip gave a
+      # download containing a zip — WordPress rejects that with "No valid
+      # plugins were found", and the publisher has to know to unzip once
+      # first. Nobody should have to know that.
+      #
+      # Instead: unpack the built zip into a staging directory and upload the
+      # DIRECTORY. GitHub's archive root is the common ancestor of the files
+      # it matched, so staging/promovolve/** arrives as promovolve/** — the
+      # single-top-level-folder layout the uploader requires. The download is
+      # then installable as-is.
+      #
+      # Unpacking the built zip rather than copying the source tree keeps the
+      # gates meaningful: what ships is what build-zip.sh actually produced,
+      # exclusions and all.
+      - name: Stage the zip's contents for a directly-installable download
+        run: |
+          set -euo pipefail
+          mkdir -p staging
+          unzip -q "${{ steps.v.outputs.zip }}" -d staging
+          [ -f staging/promovolve/promovolve.php ] || {
+            echo "staging/promovolve/promovolve.php missing — the built zip's layout changed" >&2
+            exit 1
+          }
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: promovolve-plugin-${{ steps.v.outputs.version }}
-          path: ${{ steps.v.outputs.zip }}
+          path: staging
           if-no-files-found: error
           # Long enough to install at leisure, short enough that stale builds
           # do not accumulate as near-identical downloads.
@@ -66,9 +86,8 @@ jobs:
           {
             echo "### Promovolve Publisher ${{ steps.v.outputs.version }}"
             echo
-            echo "Artifact: \`promovolve-plugin-${{ steps.v.outputs.version }}\` (download, unzip once, upload the inner zip)."
-            echo
-            echo "Install: WordPress → Plugins → Add New → Upload Plugin."
+            echo "Download the \`promovolve-plugin-${{ steps.v.outputs.version }}\` artifact below and upload it as-is:"
+            echo "WordPress → Plugins → Add New → Upload Plugin. If it says the folder already exists, choose **Replace current with uploaded**."
             echo
             echo "_Not published. Use **WP plugin release** to cut a public GitHub Release._"
           } >> "$GITHUB_STEP_SUMMARY"
