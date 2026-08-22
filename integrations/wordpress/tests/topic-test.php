@@ -12,6 +12,9 @@
  */
 
 define( 'ABSPATH', __DIR__ );
+// WordPress time constants the plugin reads at load (admin-notice fuses).
+define( 'MINUTE_IN_SECONDS', 60 );
+define( 'DAY_IN_SECONDS', 86400 );
 
 // ── the fixture the stubs read ───────────────────────────────────────────
 $GLOBALS['pv'] = array(

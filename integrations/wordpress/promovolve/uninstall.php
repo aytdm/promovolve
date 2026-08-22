@@ -29,7 +29,10 @@ if ( is_array( $promovolve_settings ) && ! empty( $promovolve_settings['delete_o
 	delete_option( 'promovolve_settings' );
 }
 
-// Transients are pure cache — the live verification/well-known probes refill
-// them on the next admin page load — so they go regardless.
+// Bookkeeping and cache go regardless: the token-state option only times the
+// admin notices, and the transients are refilled by the live probes on the
+// next admin page load. Neither holds anything a publisher typed.
+delete_option( 'promovolve_token_state' );
 delete_transient( 'promovolve_wellknown_status' );
 delete_transient( 'promovolve_verification_status' );
+delete_transient( 'promovolve_token_status' );

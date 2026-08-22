@@ -4,7 +4,7 @@ Tags: ads, advertising, publisher
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.5.0
+Stable tag: 0.5.1
 License: Apache-2.0
 License URI: https://www.apache.org/licenses/LICENSE-2.0
 
@@ -87,6 +87,28 @@ reader "dog-ear" bookmarks in the browser's IndexedDB (7-day expiry). It sets
 no cookies. Visitors sending the Global Privacy Control signal receive no ads.
 
 == Changelog ==
+
+= 0.5.1 =
+* **The plugin now asks the ad server whether its token is still the site's
+  current one**, and stops serving the verification file when it is not.
+  A site removed and added again on Promovolve gets a new token; until now
+  the plugin kept serving the old one forever, with no way to know. It now
+  answers 404 at `/.well-known/promovolve.txt` when the ad server says the
+  token is stale (site re-added — paste the new token) or unknown (no such
+  site — check the Site ID, or the request is still awaiting approval), and
+  the settings screen says which. Nothing is deleted: the settings are kept
+  either way, and the file is back the moment a current token is pasted.
+* Fails open. If the ad server cannot be reached — network error, rate cap,
+  an older server without the endpoint — the file is served as before,
+  because it is also how a brand-new site gets verified.
+* A dismissible admin notice after the token has been unknown for seven
+  days, or stale for one, pointing at what to do — including, for a
+  publisher who has left Promovolve, deleting the plugin with “Also delete
+  these settings” ticked. Seven days, not five minutes: every benign cause
+  (approval pending, a typo, a re-add in progress) resolves well inside it,
+  and a notice that fires during setup teaches people to dismiss notices.
+* Requires an ad server from 2026-08-22 or later for the check; against an
+  older one the plugin behaves exactly as 0.5.0.
 
 = 0.5.0 =
 * **Your settings now survive deleting the plugin.** Deactivate → delete →
@@ -268,6 +290,12 @@ no cookies. Visitors sending the Global Privacy Control signal receive no ads.
   identity scope (shared / per category / per post).
 
 == Upgrade Notice ==
+
+= 0.5.1 =
+Upload with "Replace current with uploaded"; settings are kept. After
+upgrading, the plugin will stop serving the verification file if the ad
+server says the saved token is no longer this site's — the settings screen
+tells you why and what to paste.
 
 = 0.5.0 =
 Upgrade with Plugins → Add New → Upload Plugin → "Replace current with

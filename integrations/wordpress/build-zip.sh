@@ -79,6 +79,9 @@ if require_tool php "the PHP syntax check and topic-test.php"; then
 	# fail silently (a hint that is merely thinner than it should be still
 	# looks fine).
 	php tests/topic-test.php
+	# ── and the token-check rules: which server answers suspend the
+	# verification file, and that everything else fails OPEN.
+	php tests/token-test.php
 fi
 
 if require_tool node "the JS syntax check and block.json parse"; then

@@ -1,8 +1,11 @@
 # Site token check
 
-> Status: **api half built** (2026-08-22): `POST /v1/sites/{siteId}/token-check`,
-> `SiteEntity.CheckVerificationToken`, `SiteTokenCheckSpec`. Plugin 0.5.1 half
-> not yet built; until then the endpoint has no caller and is inert.
+> Status: **built and live-verified, both halves** (2026-08-22). api: `POST
+> /v1/sites/{siteId}/token-check` (`dbf744b`). Plugin 0.5.1:
+> `promovolve_token_status`, the `.well-known` suspension (a real 404), the
+> settings messages, the 7-day/24-hour notices, `tests/token-test.php`.
+> Verified in the Docker WordPress against the production api: stale → 404,
+> unknown → 404, unreachable → file served.
 
 ## Decision
 
@@ -110,7 +113,7 @@ handler on a cache miss so a long-unvisited admin still converges):
 | answer | `.well-known` | settings screen |
 |---|---|---|
 | `valid` | serve the file | "Token current." |
-| `stale` | **404** | "This token is no longer the site's current one — usually the site was removed and re-added on Promovolve, which issues a new token. Paste the new one from the dashboard Sites page." |
+| `stale` | **404** (a real one — `status_header(404)`, not a fall-through to WordPress, which 301s to a trailing-slash page) | "This token is no longer the site's current one — usually the site was removed and re-added on Promovolve, which issues a new token. Paste the new one from the dashboard Sites page." |
 | `unknown` | **404** | "Promovolve does not know a site with this ID — check the Site ID, or re-add the site on the dashboard." |
 | unreachable / 429 / no transient yet | **serve the file** (fail open) | "Could not reach the ad server — serving the file as configured." |
 

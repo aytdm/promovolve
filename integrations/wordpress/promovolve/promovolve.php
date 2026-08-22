@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Promovolve Publisher
  * Description:       Connects this site to a Promovolve ad server: prints the ad tag, serves the site-verification file, and places ad slots via editor block or shortcode.
- * Version:           0.5.0
+ * Version:           0.5.1
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Promovolve
@@ -16,7 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 const PROMOVOLVE_OPTION  = 'promovolve_settings';
-const PROMOVOLVE_VERSION = '0.5.0';
+const PROMOVOLVE_VERSION = '0.5.1';
 
 /**
  * Settings with defaults applied.
@@ -541,6 +541,25 @@ add_action( 'init', function () {
 	if ( '' === $s['verification_token'] ) {
 		return; // No token configured — let WordPress 404 normally.
 	}
+	// Stop claiming a token that is no longer this site's. The ad server
+	// is asked (and the answer cached) whether the stored token is still
+	// current; "stale" (the site was removed and re-added on Promovolve and
+	// has a new token) and "unknown" (no such site) both mean the honest
+	// answer at this URL is nothing. The stored value is NOT touched — the
+	// 404 is computed from the cached answer, so pasting a new token brings
+	// the file back on the next request. "unreachable" serves the file:
+	// this URL is also how a NEW site gets verified, and a hiccup at the ad
+	// server must never hide it. See docs/design/SITE_TOKEN_CHECK.md.
+	if ( in_array( promovolve_token_status( $s ), array( 'stale', 'unknown' ), true ) ) {
+		// A real 404, not a fall-through: letting WordPress handle the URL
+		// yields a 301 to a trailing-slash page, which is technically "no
+		// record" but reads as a broken redirect to anyone who looks. The
+		// plugin has claimed this URL and is declining to answer — say so.
+		status_header( 404 );
+		nocache_headers();
+		header( 'Content-Type: text/plain; charset=utf-8' );
+		exit;
+	}
 	nocache_headers();
 	header( 'Content-Type: text/plain; charset=utf-8' );
 	echo 'promovolve-site-verification=' . $s['verification_token']; // phpcs:ignore WordPress.Security.EscapeOutput -- token is sanitized to [A-Za-z0-9-] on save, text/plain response.
@@ -793,6 +812,96 @@ function promovolve_render_slot_block( $attributes ) {
 
 const PROMOVOLVE_WELLKNOWN_TRANSIENT = 'promovolve_wellknown_status';
 const PROMOVOLVE_VERIFIED_TRANSIENT  = 'promovolve_verification_status';
+const PROMOVOLVE_TOKEN_TRANSIENT     = 'promovolve_token_status';
+// Separate option, not a key in promovolve_settings: writing the settings
+// option fires promovolve_purge_page_caches (it is hooked on update_option),
+// and this is bookkeeping the plugin writes on its own schedule. It must not
+// purge a publisher's page cache every five minutes.
+const PROMOVOLVE_TOKEN_STATE_OPTION  = 'promovolve_token_state';
+
+/**
+ * Is the token we hold still this site's current token, according to the
+ * ad server? docs/design/SITE_TOKEN_CHECK.md.
+ *
+ *   valid        it is — serve the verification file as ever
+ *   stale        the site exists but has a different token now: it was
+ *                removed and re-added on Promovolve, which issues a new one
+ *   unknown      the ad server knows no site with this ID (never created,
+ *                still awaiting approval, or removed)
+ *   unreachable  no answer we can act on — network error, 429, 5xx, or an
+ *                older ad server without the endpoint (404)
+ *
+ * What the answer drives: whether /.well-known/promovolve.txt is served
+ * (stale/unknown → 404) and what the settings screen says. What it never
+ * drives: deleting anything. "unknown" also covers a mistyped Site ID and a
+ * site still in the approval queue, and destroying the stored settings on
+ * either would re-open the hole 0.5.0 closed.
+ *
+ * Fail OPEN on unreachable — the file is also how a NEW site gets verified.
+ * Cached five minutes; the cache is dropped whenever settings are saved, so
+ * a freshly pasted token takes effect on the next request.
+ *
+ * @return string valid | stale | unknown | unreachable
+ */
+function promovolve_token_status( $s ) {
+	if ( '' === $s['site_id'] || '' === $s['api_base'] || '' === $s['verification_token'] ) {
+		return 'unreachable'; // Nothing to ask with; behave as before.
+	}
+	$cached = get_transient( PROMOVOLVE_TOKEN_TRANSIENT );
+	if ( is_string( $cached ) && '' !== $cached ) {
+		return $cached;
+	}
+
+	$response = wp_remote_post(
+		untrailingslashit( $s['api_base'] ) . '/v1/sites/' . rawurlencode( $s['site_id'] ) . '/token-check',
+		array(
+			'timeout' => 5,
+			'headers' => array( 'Content-Type' => 'application/json' ),
+			// Body, never query string: the token is a credential.
+			'body'    => wp_json_encode( array( 'token' => $s['verification_token'] ) ),
+		)
+	);
+
+	$state = 'unreachable';
+	if ( ! is_wp_error( $response ) && 200 === (int) wp_remote_retrieve_response_code( $response ) ) {
+		$decoded = json_decode( (string) wp_remote_retrieve_body( $response ), true );
+		if ( is_array( $decoded ) && isset( $decoded['state'] )
+			&& in_array( $decoded['state'], array( 'valid', 'stale', 'unknown' ), true ) ) {
+			$state = $decoded['state'];
+		}
+	}
+
+	promovolve_record_token_state( $state );
+	set_transient( PROMOVOLVE_TOKEN_TRANSIENT, $state, 5 * MINUTE_IN_SECONDS );
+	return $state;
+}
+
+/**
+ * Track how long the current answer has stood, for the slow-burn admin
+ * notices. `since` is the first time the CURRENT state was seen; it resets
+ * on any change, and "unreachable" resets it too — a server hiccup must not
+ * keep a countdown running.
+ *
+ * @param string $state The answer just received.
+ */
+function promovolve_record_token_state( $state ) {
+	$prev = get_option( PROMOVOLVE_TOKEN_STATE_OPTION, array() );
+	$prev = is_array( $prev ) ? $prev : array();
+	if ( ( $prev['state'] ?? '' ) === $state ) {
+		return; // Unchanged — leave `since` and the dismissal alone.
+	}
+	update_option(
+		PROMOVOLVE_TOKEN_STATE_OPTION,
+		array(
+			'state'     => $state,
+			'since'     => time(),
+			// A dismissal is remembered per state change: the notice returns
+			// only if the answer flips to something else and back.
+			'dismissed' => false,
+		),
+		false // no autoload
+	);
+}
 
 /**
  * Ask the ad server whether this site is verified.
@@ -985,6 +1094,9 @@ function promovolve_purge_page_caches() {
 	// site_id / api_base are what the verification probe asks WITH, so a
 	// settings change can invalidate its answer too.
 	delete_transient( PROMOVOLVE_VERIFIED_TRANSIENT );
+	// And the token check asks with the token itself: a freshly pasted token
+	// must be re-checked on the next request, not in five minutes.
+	delete_transient( PROMOVOLVE_TOKEN_TRANSIENT );
 	do_action( 'litespeed_purge_all' );
 	if ( function_exists( 'wp_cache_clear_cache' ) ) {
 		wp_cache_clear_cache(); // WP Super Cache
@@ -1019,6 +1131,74 @@ function promovolve_purge_page_caches() {
 // very first configuration is served from cache and "doesn't apply".
 add_action( 'add_option_' . PROMOVOLVE_OPTION, 'promovolve_purge_page_caches' );
 add_action( 'update_option_' . PROMOVOLVE_OPTION, 'promovolve_purge_page_caches' );
+
+/**
+ * The slow-burn notices: "unknown" for 7 days, "stale" for 24 hours.
+ *
+ * Not on first sight, because every benign cause resolves well inside the
+ * fuse — approval lands, the typo is fixed, the new token is pasted — and a
+ * notice that fires during setup teaches publishers to dismiss notices.
+ * Dismissal is remembered per state change (promovolve_record_token_state
+ * resets it), so it returns only if the answer flips away and back.
+ *
+ * Nothing here deletes anything. The notice POINTS AT the explicit path for
+ * a publisher who has genuinely left — delete the plugin with "Also delete
+ * these settings" ticked — rather than inferring their intent.
+ */
+const PROMOVOLVE_NOTICE_FUSE = array(
+	'unknown' => 7 * DAY_IN_SECONDS,
+	'stale'   => DAY_IN_SECONDS,
+);
+
+add_action( 'admin_notices', function () {
+	if ( ! current_user_can( 'manage_options' ) ) {
+		return;
+	}
+	$ts = get_option( PROMOVOLVE_TOKEN_STATE_OPTION, array() );
+	if ( ! is_array( $ts ) || empty( $ts['state'] ) || ! empty( $ts['dismissed'] ) ) {
+		return;
+	}
+	$state = $ts['state'];
+	if ( ! isset( PROMOVOLVE_NOTICE_FUSE[ $state ] ) ) {
+		return;
+	}
+	if ( time() - (int) ( $ts['since'] ?? time() ) < PROMOVOLVE_NOTICE_FUSE[ $state ] ) {
+		return;
+	}
+	$settings_url = admin_url( 'options-general.php?page=promovolve' );
+	$dismiss_url  = wp_nonce_url( add_query_arg( 'promovolve_dismiss_token_notice', '1' ), 'promovolve_dismiss_token_notice' );
+	?>
+	<div class="notice notice-warning">
+		<p>
+			<strong><?php esc_html_e( 'Promovolve:', 'promovolve' ); ?></strong>
+			<?php
+			if ( 'unknown' === $state ) {
+				esc_html_e( 'the ad server has not recognised this site’s ID for a week. If you have left Promovolve, delete this plugin with “Also delete these settings” ticked and nothing will be left behind. If you have not, check the Site ID in the plugin settings, or add the site again on the dashboard.', 'promovolve' );
+			} else {
+				esc_html_e( 'the verification token saved here has not been this site’s current one for a day — usually because the site was removed and added again on Promovolve. Paste the new token from the dashboard Sites page into the plugin settings.', 'promovolve' );
+			}
+			?>
+			<a href="<?php echo esc_url( $settings_url ); ?>"><?php esc_html_e( 'Open settings', 'promovolve' ); ?></a>
+			&nbsp;·&nbsp;
+			<a href="<?php echo esc_url( $dismiss_url ); ?>"><?php esc_html_e( 'Dismiss', 'promovolve' ); ?></a>
+		</p>
+	</div>
+	<?php
+} );
+
+add_action( 'admin_init', function () {
+	if ( empty( $_GET['promovolve_dismiss_token_notice'] ) || ! current_user_can( 'manage_options' ) ) {
+		return;
+	}
+	check_admin_referer( 'promovolve_dismiss_token_notice' );
+	$ts = get_option( PROMOVOLVE_TOKEN_STATE_OPTION, array() );
+	if ( is_array( $ts ) && ! empty( $ts['state'] ) ) {
+		$ts['dismissed'] = true;
+		update_option( PROMOVOLVE_TOKEN_STATE_OPTION, $ts, false );
+	}
+	wp_safe_redirect( remove_query_arg( array( 'promovolve_dismiss_token_notice', '_wpnonce' ) ) );
+	exit;
+} );
 
 add_action( 'admin_menu', function () {
 	add_options_page(
@@ -1103,7 +1283,22 @@ function promovolve_render_settings_page() {
 					<th scope="row"><label for="promovolve-token"><?php esc_html_e( 'Verification token', 'promovolve' ); ?></label></th>
 					<td>
 						<input name="<?php echo esc_attr( PROMOVOLVE_OPTION ); ?>[verification_token]" id="promovolve-token" type="text" class="regular-text code" value="<?php echo esc_attr( $s['verification_token'] ); ?>">
-						<?php if ( 'unverified' === $verification ) : ?>
+						<?php
+						// The token check says WHY the site is not verified with this
+						// token, where the serve probe can only say that it is not.
+						// Both "stale" and "unknown" stop the plugin serving the file;
+						// the difference is what the publisher should do about it.
+						$token_state = promovolve_token_status( $s );
+						if ( 'stale' === $token_state ) :
+							?>
+							<p class="description" style="padding:8px 10px;border-left:4px solid #dba617;background:#fff;">
+								<?php esc_html_e( 'This token is no longer the site’s current one — usually because the site was removed and added again on Promovolve, which issues a new token. Until a current token is pasted here, the plugin answers 404 at the verification URL rather than serve a token that is not this site’s. Copy the new one from the dashboard Sites page.', 'promovolve' ); ?>
+							</p>
+						<?php elseif ( 'unknown' === $token_state ) : ?>
+							<p class="description" style="padding:8px 10px;border-left:4px solid #dba617;background:#fff;">
+								<?php esc_html_e( 'The ad server knows no site with this Site ID. If the site request is still waiting for approval, nothing is wrong — this resolves when it is approved. Otherwise check the Site ID above, or add the site again on the dashboard. The verification URL answers 404 meanwhile. Your settings are kept either way.', 'promovolve' ); ?>
+							</p>
+						<?php elseif ( 'unverified' === $verification ) : ?>
 							<p class="description" style="padding:8px 10px;border-left:4px solid #dba617;background:#fff;">
 								<?php esc_html_e( 'The ad server does not recognise this site as verified yet. Paste the token below, then click Verify on the dashboard Sites page.', 'promovolve' ); ?>
 							</p>
