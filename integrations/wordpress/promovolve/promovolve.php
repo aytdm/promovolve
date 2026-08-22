@@ -165,6 +165,46 @@ function promovolve_declared_topic() {
  * while a place taxonomy nobody recognised means a travel post about one town
  * competes as generic travel inventory. So the list leans inclusive.
  */
+/**
+ * The one slug to recommend when a site has no place taxonomy at all.
+ *
+ * Fifty-two slugs is a vocabulary, not an instruction. An author who needs
+ * this feature needs to be told what to DO once; the rest of the list only
+ * matters to the minority who already have a taxonomy and want to know
+ * whether it counts.
+ */
+const PROMOVOLVE_PLACE_TAXONOMY_RECOMMENDED = 'destination';
+
+/**
+ * The same slugs, grouped for display only. Matching reads the flat list
+ * below; this exists so the settings screen can explain the list instead of
+ * dumping it. `place-taxonomy-groups-cover-the-list` in tests/topic-test.php
+ * fails if the two ever drift — PHP 7.4 has no spread in constant arrays, so
+ * a test is the only thing that can hold them together.
+ */
+const PROMOVOLVE_PLACE_TAXONOMY_GROUPS = array(
+	'admin'   => array(
+		'country', 'countries', 'state', 'states', 'province', 'provinces',
+		'prefecture', 'prefectures', 'region', 'regions', 'county', 'counties',
+		'municipality', 'municipalities', 'city', 'cities', 'town', 'towns',
+		'village', 'villages',
+	),
+	'generic' => array(
+		'destination', 'destinations', 'location', 'locations',
+		'place', 'places', 'area', 'areas', 'locality', 'localities',
+	),
+	'sub'     => array(
+		'district', 'districts', 'neighborhood', 'neighborhoods',
+		'neighbourhood', 'neighbourhoods', 'borough', 'boroughs',
+		'suburb', 'suburbs', 'island', 'islands',
+	),
+	'plugin'  => array(
+		'job_listing_region', 'travel_locations', 'tour_location',
+		'listing_city', 'listing_region', 'listing_location',
+		'property_city', 'property_state', 'property_country', 'property_area',
+	),
+);
+
 const PROMOVOLVE_PLACE_TAXONOMIES = array(
 	// Administrative units — matched by the server's vocabulary directly.
 	'country',
@@ -1188,21 +1228,59 @@ function promovolve_render_settings_page() {
 						<p class="description">
 							<?php
 							printf(
-								/* translators: %s: comma-separated list of taxonomy slugs, each in <code> */
-								esc_html__( 'None. A taxonomy registered under one of these slugs is read as a place: %s.', 'promovolve' ),
-								wp_kses_post( '<code>' . implode( '</code>, <code>', array_map( 'esc_html', apply_filters( 'promovolve_place_taxonomies', PROMOVOLVE_PLACE_TAXONOMIES, 0 ) ) ) . '</code>' )
+								/* translators: %s: the recommended taxonomy slug, in <code> */
+								esc_html__( 'None yet. If your posts are about somewhere, register a taxonomy with the slug %s and file each post under the town or region it covers — that is the whole setup.', 'promovolve' ),
+								'<code>' . esc_html( PROMOVOLVE_PLACE_TAXONOMY_RECOMMENDED ) . '</code>'
 							);
 							?>
 						</p>
-						<p class="description"><?php esc_html_e( 'Worth having if your posts are about somewhere: a travel or local site whose destinations are only prose gets matched on topic alone, while one that files them under a place taxonomy can be bought by advertisers targeting that exact town. The label is yours — only the slug is matched — and the geo_address post meta is read as a fallback where no place taxonomy exists.', 'promovolve' ); ?></p>
+						<p class="description"><?php esc_html_e( 'It is worth doing: a travel or local site whose destinations exist only in prose competes as generic inventory, while one that files them can be bought by an advertiser targeting that exact town. The label is yours — 行き先, Reiseziel, anything — only the slug is matched. Where no place taxonomy exists, the geo_address post meta is read instead.', 'promovolve' ); ?></p>
 					<?php endif; ?>
-					<p class="description">
-						<?php esc_html_e( 'Already keep places in a taxonomy under a different slug? Point the plugin at it instead of renaming anything:', 'promovolve' ); ?>
-					</p>
-					<pre style="background:#fff;border:1px solid #c3c4c7;padding:8px;overflow-x:auto;margin:4px 0 0;"><code>add_filter( 'promovolve_place_taxonomies', function ( $slugs ) {
+
+					<?php
+					// The full vocabulary, folded away. It answers one
+					// question — "does the taxonomy I already have count?" —
+					// and printing all of it inline buried the single
+					// instruction most authors need under fifty-two slugs.
+					$groups = array(
+						'admin'   => __( 'Administrative units', 'promovolve' ),
+						'generic' => __( 'Everyday wording for the same thing', 'promovolve' ),
+						'sub'     => __( 'Smaller than a city — resolved up to the city or region around it', 'promovolve' ),
+						'plugin'  => __( 'Shipped by common plugins and themes', 'promovolve' ),
+					);
+					$extra = array_values( array_diff(
+						apply_filters( 'promovolve_place_taxonomies', PROMOVOLVE_PLACE_TAXONOMIES, 0 ),
+						PROMOVOLVE_PLACE_TAXONOMIES
+					) );
+					$code_list = static function ( $slugs ) {
+						return '<code>' . implode( '</code> <code>', array_map( 'esc_html', $slugs ) ) . '</code>';
+					};
+					?>
+					<details style="margin-top:10px;">
+						<summary style="cursor:pointer;"><?php esc_html_e( 'All slugs read as places', 'promovolve' ); ?></summary>
+						<table class="widefat striped" style="margin-top:8px;max-width:46em;">
+							<tbody>
+								<?php foreach ( $groups as $key => $label ) : ?>
+									<tr>
+										<td style="width:16em;"><?php echo esc_html( $label ); ?></td>
+										<td><?php echo wp_kses_post( $code_list( PROMOVOLVE_PLACE_TAXONOMY_GROUPS[ $key ] ) ); ?></td>
+									</tr>
+								<?php endforeach; ?>
+								<?php if ( ! empty( $extra ) ) : ?>
+									<tr>
+										<td><?php esc_html_e( 'Added on this site by a filter', 'promovolve' ); ?></td>
+										<td><?php echo wp_kses_post( $code_list( $extra ) ); ?></td>
+									</tr>
+								<?php endif; ?>
+							</tbody>
+						</table>
+						<p class="description"><?php esc_html_e( 'Store-locator and local-SEO taxonomies are deliberately not read: they hold your own business address, not what the article is about.', 'promovolve' ); ?></p>
+						<p class="description"><?php esc_html_e( 'Keep places under a slug that is not listed? Point the plugin at it instead of renaming anything:', 'promovolve' ); ?></p>
+						<pre style="background:#fff;border:1px solid #c3c4c7;padding:8px;overflow-x:auto;margin:4px 0 0;"><code>add_filter( 'promovolve_place_taxonomies', function ( $slugs ) {
 	$slugs[] = 'your-taxonomy-slug';
 	return $slugs;
 } );</code></pre>
+					</details>
 				</td>
 			</tr>
 		</table>

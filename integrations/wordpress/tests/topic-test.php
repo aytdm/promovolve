@@ -233,5 +233,22 @@ $GLOBALS['pv']['is_singular'] = false;
 t( 'archives declare no place', '', promovolve_declared_place() );
 $GLOBALS['pv']['is_singular'] = true;
 
+// The settings screen explains the place list group by group instead of
+// printing fifty-two slugs in a row. Matching still reads the flat list, so
+// the two can drift — a slug added for matching but not for display simply
+// never gets explained, and one displayed but not matched is a lie on the
+// screen. PHP 7.4 has no spread in constant arrays, so nothing but this test
+// can hold them together.
+$grouped = array();
+foreach ( PROMOVOLVE_PLACE_TAXONOMY_GROUPS as $slugs ) {
+	$grouped = array_merge( $grouped, $slugs );
+}
+sort( $grouped );
+$flat = PROMOVOLVE_PLACE_TAXONOMIES;
+sort( $flat );
+t( 'place-taxonomy-groups-cover-the-list', $flat, $grouped );
+t( 'no slug is listed in two groups', count( $grouped ), count( array_unique( $grouped ) ) );
+t( 'the recommended slug is one we actually read', true, in_array( PROMOVOLVE_PLACE_TAXONOMY_RECOMMENDED, PROMOVOLVE_PLACE_TAXONOMIES, true ) );
+
 echo $failures ? "\n$failures failure(s)\n" : "\nall passed\n";
 exit( $failures ? 1 : 0 );
