@@ -226,6 +226,26 @@ fixture(
 add_filter( 'promovolve_place_taxonomies', fn( $slugs ) => array() );
 t( 'the filter can disable place reading', '', promovolve_declared_place() );
 
+// The two hints answer different questions and have a filter each. Places
+// used to be enumerated THROUGH the topic list, so removing a taxonomy from
+// the topic hint — "my destinations are not the subject", entirely
+// reasonable — silently took the place hint with it, with nothing saying so.
+fixture(
+	array( 'category', 'destination' ),
+	array( 'category' => array( 'Travel' ), 'destination' => array( 'Kyoto' ) )
+);
+add_filter( 'promovolve_topic_taxonomies', fn( $taxonomies ) => array_values( array_diff( $taxonomies, array( 'destination' ) ) ) );
+t( 'a topic filter does not disable place reading', 'Kyoto', promovolve_declared_place() );
+t( 'and it still removes the taxonomy from the topic', 'Travel', promovolve_declared_topic() );
+
+// The mirror of it: narrowing places must not touch topics.
+fixture(
+	array( 'category', 'destination' ),
+	array( 'category' => array( 'Travel' ), 'destination' => array( 'Kyoto' ) )
+);
+add_filter( 'promovolve_place_taxonomies', fn( $slugs ) => array() );
+t( 'a place filter does not disable topic reading', 'Travel, Kyoto', promovolve_declared_topic() );
+
 // Archives are handled by the topic hint already; repeating the term as a
 // place would double-count it.
 fixture( array( 'category' ), array() );

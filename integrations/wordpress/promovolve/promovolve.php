@@ -34,6 +34,15 @@ function promovolve_settings() {
 		'auto_slot_scope'    => 'site',
 		'auto_slot_w'        => 728,
 		'auto_slot_h'        => 90,
+		// Whether deleting the plugin also deletes this option. FALSE by
+		// default, against the usual "clean up after yourself" instinct,
+		// because of what the option holds: the verification token, which
+		// the dashboard stops showing once the site is verified. Deleting
+		// the plugin would destroy the last copy, and the only way back is
+		// removing the site from Promovolve and re-adding it — a full
+		// cascade purge, to undo a plugin upgrade. Leftover rows in
+		// wp_options are the cheaper mistake by a wide margin.
+		'delete_on_uninstall' => false,
 	);
 	$saved = get_option( PROMOVOLVE_OPTION, array() );
 	return array_merge( $defaults, is_array( $saved ) ? $saved : array() );
@@ -79,7 +88,20 @@ add_filter( 'script_loader_tag', function ( $tag, $handle ) {
 		'' === $section ? '' : sprintf( ' data-section="%s"', esc_attr( $section ) ),
 		'' === $place ? '' : sprintf( ' data-place="%s"', esc_attr( $place ) )
 	);
-	return str_replace( ' src=', $attrs, $tag );
+	// Replace the FIRST ` src=` only: str_replace rewrites every occurrence,
+	// so a tag carrying a second one (a filter appending an attribute, a
+	// fallback src) would get the data-* attributes twice. The replacement
+	// goes through a callback rather than preg_replace's replacement string
+	// because that string interprets `$1` and `\1` — and $attrs carries a
+	// publisher-set URL, which esc_attr does not strip `$` or `\` from.
+	return preg_replace_callback(
+		'/ src=/',
+		static function () use ( $attrs ) {
+			return $attrs;
+		},
+		$tag,
+		1
+	);
 }, 10, 2 );
 
 /**
@@ -304,8 +326,14 @@ function promovolve_declared_place() {
 	 */
 	$slugs = apply_filters( 'promovolve_place_taxonomies', PROMOVOLVE_PLACE_TAXONOMIES, $post_id );
 
+	// Enumerated independently of the topic hint. Reading the topic list here
+	// meant the `promovolve_topic_taxonomies` filter silently governed places
+	// too: a site that removed `destination` from its TOPICS — a reasonable
+	// "my destinations are not the subject" — also lost every place it had,
+	// with nothing saying so. The two hints answer different questions and
+	// have a filter each; only `promovolve_place_taxonomies` decides places.
 	$by_taxonomy = array();
-	foreach ( promovolve_topic_taxonomies( $post_id ) as $taxonomy ) {
+	foreach ( promovolve_readable_taxonomies( $post_id ) as $taxonomy ) {
 		if ( ! in_array( $taxonomy, $slugs, true ) ) {
 			continue;
 		}
@@ -366,16 +394,7 @@ const PROMOVOLVE_TOPIC_TAXONOMY_DENY = array( 'post_format' );
  * @return string[] Taxonomy names, in the order they should be read.
  */
 function promovolve_topic_taxonomies( $post_id ) {
-	$found = array();
-	foreach ( get_object_taxonomies( get_post_type( $post_id ), 'objects' ) as $taxonomy ) {
-		if ( empty( $taxonomy->public ) || empty( $taxonomy->show_ui ) ) {
-			continue;
-		}
-		if ( in_array( $taxonomy->name, PROMOVOLVE_TOPIC_TAXONOMY_DENY, true ) ) {
-			continue;
-		}
-		$found[] = $taxonomy->name;
-	}
+	$found = promovolve_readable_taxonomies( $post_id );
 
 	$leading = array_values( array_intersect( array( 'category', 'post_tag' ), $found ) );
 	$rest    = array_diff( $found, $leading );
@@ -388,6 +407,36 @@ function promovolve_topic_taxonomies( $post_id ) {
 	 * @param int      $post_id    Post being rendered.
 	 */
 	return apply_filters( 'promovolve_topic_taxonomies', array_merge( $leading, $rest ), $post_id );
+}
+
+/**
+ * Every taxonomy on this post's type that describes CONTENT at all.
+ *
+ * The structural test both hints share, and nothing more: public and
+ * UI-visible, minus the deny list. What fails it is plumbing —
+ * product_visibility, wp_theme, nav menus — which never describes anything a
+ * reader would recognise as a subject or a location.
+ *
+ * Deliberately unfiltered. The topic and place hints each narrow this in
+ * their own way and each expose their own filter; a filter here would be a
+ * third lever with authority over both, which is exactly the coupling that
+ * made a topic filter silently disable place reading.
+ *
+ * @param int $post_id Post being rendered.
+ * @return string[] Taxonomy names, registration order.
+ */
+function promovolve_readable_taxonomies( $post_id ) {
+	$found = array();
+	foreach ( get_object_taxonomies( get_post_type( $post_id ), 'objects' ) as $taxonomy ) {
+		if ( empty( $taxonomy->public ) || empty( $taxonomy->show_ui ) ) {
+			continue;
+		}
+		if ( in_array( $taxonomy->name, PROMOVOLVE_TOPIC_TAXONOMY_DENY, true ) ) {
+			continue;
+		}
+		$found[] = $taxonomy->name;
+	}
+	return $found;
 }
 
 /**
@@ -903,6 +952,10 @@ function promovolve_sanitize_settings( $input ) {
 	}
 
 	$clean['auto_slot_enabled'] = ! empty( $input['auto_slot_enabled'] );
+	// Unchecked checkboxes are absent from the POST, so this reads the
+	// submitted form rather than falling through to the old value — that is
+	// what lets the box be UNticked again.
+	$clean['delete_on_uninstall'] = ! empty( $input['delete_on_uninstall'] );
 	if ( isset( $input['auto_slot_id'] ) ) {
 		$clean['auto_slot_id'] = sanitize_text_field( (string) $input['auto_slot_id'] );
 	}
@@ -1178,6 +1231,20 @@ function promovolve_render_settings_page() {
 				</tr>
 			</table>
 
+			<h2><?php esc_html_e( 'If you delete this plugin', 'promovolve' ); ?></h2>
+			<table class="form-table" role="presentation">
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Settings on delete', 'promovolve' ); ?></th>
+					<td>
+						<label>
+							<input name="<?php echo esc_attr( PROMOVOLVE_OPTION ); ?>[delete_on_uninstall]" type="checkbox" value="1" <?php checked( $s['delete_on_uninstall'] ); ?>>
+							<?php esc_html_e( 'Also delete these settings when the plugin is deleted', 'promovolve' ); ?>
+						</label>
+						<p class="description"><?php esc_html_e( 'Off by default, and worth leaving off. Deleting a plugin is how many upgrades are done — deactivate, delete, upload the new zip — and it would take the verification token with it. Promovolve stops showing that token once your site is verified, so the copy above is the only one left; without it, re-integrating means removing the site from Promovolve and adding it again. Left off, the settings simply wait here for the new version. Tick it only when you are finished with Promovolve and want nothing left behind.', 'promovolve' ); ?></p>
+					</td>
+				</tr>
+			</table>
+
 			<?php submit_button(); ?>
 			<p class="description"><?php esc_html_e( 'Saving purges the page caches of known caching plugins automatically. If this site also sits behind an external cache or CDN (e.g. Cloudflare page caching, a host-level cache), purge that one too — otherwise visitors keep the old markup until it expires.', 'promovolve' ); ?></p>
 		</form>
@@ -1212,7 +1279,7 @@ function promovolve_render_settings_page() {
 				<td>
 					<?php if ( ! empty( $context['topic'] ) ) : ?>
 						<p><?php echo wp_kses_post( $labels( $context['topic'] ) ); ?></p>
-						<p class="description"><?php esc_html_e( 'Terms from these taxonomies are sent as the topic hint. Every public taxonomy counts, not only categories and tags.', 'promovolve' ); ?></p>
+						<p class="description"><?php esc_html_e( 'Terms from these taxonomies are sent as the topic hint. Every public taxonomy counts, not only categories and tags — the place taxonomies below included, whose terms go out both ways: a destination archive is a page about that place as a subject too.', 'promovolve' ); ?></p>
 					<?php else : ?>
 						<p class="description"><?php esc_html_e( 'None — pages are classified from their text alone, which works.', 'promovolve' ); ?></p>
 					<?php endif; ?>
