@@ -131,7 +131,11 @@ object CategoryBidderEntity {
       // this page is about (0 = direct hit, or no place targeting at all).
       // Computed at the gate on both paths and carried onto Candidate so
       // serve-time selection can decay a broader match.
-      placeHops: Int = 0
+      placeHops: Int = 0,
+      // The targeting itself, so the AdServer can re-check it against the
+      // page actually being served (ServeIndex keys are per site|slot and
+      // shared across pages). See Candidate.placeTargeting.
+      placeTargeting: Set[String] = Set.empty
   )
 
   final case class CategoryBidResponse(
@@ -220,7 +224,7 @@ object CategoryBidderEntity {
   // (campaignId, advertiserId, creatives, cpm, maxCpm, adProductCategory,
   //  landingDomain, hasApprovedCreative, placeHops)
   private type Collected = Vector[(CampaignId, AdvertiserId, Set[AdvertiserEntity.Creative], CPM, CPM,
-      Option[AdProductCategoryId], String, Boolean, Int)]
+      Option[AdProductCategoryId], String, Boolean, Int, Set[String])]
 
   extension (collected: Collected) {
 
@@ -241,14 +245,14 @@ object CategoryBidderEntity {
         val threshold = topCpm * (1.0 - cpmThresholdPct)
 
         collected
-          .filter { case (_, _, creatives, cpm, _, _, _, _, _) => cpm.value >= threshold && creatives.nonEmpty }
-          .sortBy { case (_, _, _, cpm, _, _, _, _, _) => -cpm.value }
+          .filter { case (_, _, creatives, cpm, _, _, _, _, _, _) => cpm.value >= threshold && creatives.nonEmpty }
+          .sortBy { case (_, _, _, cpm, _, _, _, _, _, _) => -cpm.value }
           .take(maxCampaigns)
           .map {
             case (campaignId, advertiserId, creatives, cpm, maxCpm, adProductCat, landingDomain, hasApproved,
-                  placeHops) =>
+                  placeHops, placeTargeting) =>
               CampaignBid(campaignId, advertiserId, creatives, cpm, maxCpm, adProductCat, landingDomain, hasApproved,
-                placeHops)
+                placeHops, placeTargeting)
           }
       }
   }
@@ -358,7 +362,8 @@ private final class CategoryBidderEntity(
           e.adProductCategory, e.landingDomain, hasApproved(e),
           // Admissibility was already checked above, so a direct hit is the
           // only way to be here without a match — 0 is the safe read.
-          CampaignEntity.placeAdmits(e.placeTargeting, pagePlaces).getOrElse(0)))
+          CampaignEntity.placeAdmits(e.placeTargeting, pagePlaces).getOrElse(0),
+          e.placeTargeting))
     }
     val qualifying = collected.selectCampaigns(cpmThresholdPct, maxCampaignsPerCategory)
 
@@ -616,7 +621,7 @@ private final class CategoryBidderEntity(
                   results.collect {
                     case r: CampaignEntity.CampaignBidResponse if r.eligible =>
                       (r.campaignId, r.advertiserId, r.creatives, r.cpm, r.maxCpm, r.adProductCategory,
-                        r.landingDomain, r.hasApprovedCreative, r.placeHops)
+                        r.landingDomain, r.hasApprovedCreative, r.placeHops, r.placeTargeting)
                   }.toVector
 
                 val qualifying =

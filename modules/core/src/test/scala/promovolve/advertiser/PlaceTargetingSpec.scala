@@ -118,7 +118,13 @@ class PlaceTargetingSpec extends AnyWordSpec with Matchers {
 
   "serve-time scoring" should {
 
-    def score(placeHops: Int, ancestorHops: Int = 0): Double = {
+    // Since 2026-08-22 the place decay is applied at SERVE, per page
+    // (CandidateLogic.forPage), not baked into the view at auction: the
+    // ServeIndex key is per site|slot and shared across pages, so a score
+    // carrying one page's distance was served on every other. Build-time
+    // scoring now carries the TARGETING and only the taxonomy decay; the
+    // distance is computed where the page is known.
+    def built(placeHops: Int, ancestorHops: Int = 0, targeting: Set[String] = Set.empty) = {
       val candidate = Candidate(
         creativeId = CreativeId("cr1"),
         campaignId = CampaignId("c1"),
@@ -126,37 +132,44 @@ class PlaceTargetingSpec extends AnyWordSpec with Matchers {
         cpm = CPM(1.0),
         category = cat,
         ancestorHops = ancestorHops,
-        placeHops = placeHops
+        placeHops = placeHops,
+        placeTargeting = targeting
       )
       val creative = promovolve.publisher.Creative(
         creativeId = "cr1", imageHash = "h", advertiserId = "a1", campaignId = "c1",
         name = "n", landingUrl = "https://x", landingDomain = "x", createdAt = Instant.now(),
         s3Key = "k", mime = "image/png", width = 300, height = 250
       )
-      CandidateLogic.buildCandidateView(
-        candidate, creative, Map(cat -> 0.8), Instant.now()).categoryScore
+      CandidateLogic.buildCandidateView(candidate, creative, Map(cat -> 0.8), Instant.now())
+    }
+    def servedOn(places: Set[String], targeting: Set[String], ancestorHops: Int = 0): Double =
+      CandidateLogic.forPage(Vector(built(0, ancestorHops, targeting)), places).head.categoryScore
+
+    "carry the targeting onto the view and NOT decay by the auction page's hops at build" in {
+      built(placeHops = 2, targeting = Set("JP")).placeTargeting shouldBe Set("JP")
+      built(placeHops = 2, targeting = Set("JP")).categoryScore shouldBe 0.8 +- 1e-9
     }
 
     // The point of the decay: both bids are eligible, and the nearer one
     // wins the slot. Reach stays intact; only the prior moves.
-    "rank a direct place match above a broader one" in {
-      score(placeHops = 0) should be > score(placeHops = 1)
-      score(placeHops = 1) should be > score(placeHops = 2)
+    "rank a direct place match above a broader one, on the page being served" in {
+      servedOn(Set(Kamakura), Set(Kamakura)) should be > servedOn(Set(Kamakura), Set("JP-14"))
+      servedOn(Set(Kamakura), Set("JP-14")) should be > servedOn(Set(Kamakura), Set("JP"))
     }
 
     "leave an untargeted campaign undecayed" in {
-      score(placeHops = 0) shouldBe 0.8 +- 1e-9
+      servedOn(Set(Kamakura), Set.empty) shouldBe 0.8 +- 1e-9
     }
 
     "decay by 0.7 per hop" in {
-      score(placeHops = 1) shouldBe (0.8 * 0.7) +- 1e-9
-      score(placeHops = 2) shouldBe (0.8 * 0.49) +- 1e-9
+      servedOn(Set(Kamakura), Set("JP-14")) shouldBe (0.8 * 0.7) +- 1e-9
+      servedOn(Set(Kamakura), Set("JP")) shouldBe (0.8 * 0.49) +- 1e-9
     }
 
     // A bid distant on BOTH axes is discounted on both — the two decays are
     // independent signals and multiply.
     "compound with the taxonomy decay" in {
-      score(placeHops = 1, ancestorHops = 1) shouldBe (0.8 * 0.7 * 0.7) +- 1e-9
+      servedOn(Set(Kamakura), Set("JP-14"), ancestorHops = 1) shouldBe (0.8 * 0.7 * 0.7) +- 1e-9
     }
   }
 }

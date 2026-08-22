@@ -122,13 +122,14 @@ object CandidateLogic {
     // grandparent 0.49× — strong enough to reorder, gentle enough that
     // an ancestor bid still fills an otherwise-empty slot.
     val distanceDecayed = rawScore * math.pow(AncestorAffinityDecay, candidate.ancestorHops)
-    // PLACE DECAY: the same argument one axis over. A campaign targeting
-    // {JP} still bids on an article about Kamakura — that reach is
-    // deliberate — but it should lose the slot to one targeting Kamakura
-    // itself. Multiplicative with the taxonomy decay, so a bid that is
-    // distant on BOTH axes is discounted on both.
-    val placeDecayed = distanceDecayed * math.pow(PlaceAffinityDecay, candidate.placeHops)
-    val score = if (geminiMatch) math.min(1.0, placeDecayed * GeminiCategoryBoost) else placeDecayed
+    // PLACE DECAY is NOT applied here any more. It used to be
+    // (0.7^candidate.placeHops), but placeHops is the distance for the page
+    // whose auction produced this candidate, and the ServeIndex key
+    // (site|slot) is shared by every page using that slot — so the stored
+    // score carried one page's distance onto every other. The decay now
+    // happens at serve, per page, in `forPage`, together with the
+    // eligibility check it belongs with.
+    val score = if (geminiMatch) math.min(1.0, distanceDecayed * GeminiCategoryBoost) else distanceDecayed
     if (geminiMatch && log.isDebugEnabled) {
       log.debug(
         "Gemini category boost: creative={} page-cat={} raw={} → boosted={} (suggested={})",
@@ -154,9 +155,47 @@ object CandidateLogic {
       categoryScore = score,
       adProductCategory = candidate.adProductCategory,
       landingDomain = candidate.landingDomain,
-      landingUrl = creative.landingUrl
+      landingUrl = creative.landingUrl,
+      placeTargeting = candidate.placeTargeting
     )
   }
+
+  /**
+   * The page-side half of place targeting, applied at SERVE.
+   *
+   * The auction is per URL and applies `placeAdmits` correctly, but the
+   * ServeIndex is keyed by site|slot and a slot id is shared by every page
+   * that uses it (the WordPress plugin's per-category slots, by design). So
+   * the candidates a page reads were not necessarily won on THAT page: a
+   * campaign targeting Kanazawa wins the Kanazawa article, lands in the
+   * `…-travel` slot's pool, and is then served — and billed — on the Tainan
+   * article that shares the slot (live, 2026-08-22). Place targeting was
+   * enforced at auction and leaked at serve.
+   *
+   * This re-applies it against the page actually being served:
+   *
+   *   - a candidate whose targeting does not admit `pagePlaces` is dropped;
+   *     untargeted candidates (empty set) pass, as they bid everywhere;
+   *   - the surviving ones get the relevance decay for THIS page's distance
+   *     (0.7^hops) — the same constant as before, now computed where the
+   *     page is known rather than baked in at auction for a different page.
+   *
+   * `pagePlaces` empty means "this page is about nowhere we know" — classified
+   * that way, or never auctioned on this AdServer incarnation — and a
+   * targeted candidate is dropped for it, exactly as the campaign would have
+   * declined to bid. Advertiser-protective by construction: the cost of a
+   * wrong "drop" is one missed impression; the cost of a wrong "keep" is a
+   * billed impression the advertiser never asked for.
+   */
+  def forPage(candidates: Vector[CandidateView], pagePlaces: Set[String]): Vector[CandidateView] =
+    candidates.flatMap { c =>
+      if (c.placeTargeting.isEmpty) Some(c)
+      else
+        promovolve.taxonomy.Places.matchHops(c.placeTargeting, pagePlaces).map { hops =>
+          if (hops == 0) c
+          else c.copy(categoryScore = c.categoryScore * math.pow(PlaceAffinityDecay, hops))
+        }
+    }
 
   /** Create a ServeView from candidate views. */
   def buildServeView(

@@ -75,7 +75,14 @@ object Protocol {
       // Reader-pinned creatives still survive (same product decision as
       // EvictCampaignFromSlots). Empty = every absence is ambiguous, keep
       // legacy orphan preservation for all.
-      authoritativeAbsent: Set[CampaignId] = Set.empty
+      authoritativeAbsent: Set[CampaignId] = Set.empty,
+      // The places this page is about, as the auctioneer knows them. Cached
+      // per URL on the AdServer and used at serve to re-apply place
+      // targeting against the page actually being served — the ServeIndex
+      // key is per site|slot and its candidates may have been won on another
+      // page sharing the slot (CandidateLogic.forPage). Empty = about
+      // nowhere we know: place-targeted candidates are dropped for it.
+      pagePlaces: Set[String] = Set.empty
   ) extends Command
 
   /**

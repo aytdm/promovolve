@@ -1632,7 +1632,8 @@ private final class AuctioneerEntity private (
                 landingDomain = campaignBid.landingDomain,
                 maxCpm = campaignBid.maxCpm,
                 ancestorHops = hopsByCategory.getOrElse(r.categoryId.value, 0),
-                placeHops = campaignBid.placeHops
+                placeHops = campaignBid.placeHops,
+                placeTargeting = campaignBid.placeTargeting
               )
               val totalFloorRejects = responses.collect {
                 case r: CategoryBidResponse => r.rejectedByFloor
@@ -2054,7 +2055,8 @@ private final class AuctioneerEntity private (
       // Marks ride ONLY on evidence-bearing emptiness (below-floor rejects
       // collected). Silent emptiness attaches no marks → AdServer evicts
       // nothing → transport failures can't purge the index.
-      authoritativeAbsent = if (hadFloorRejects) currentAuthoritativeAbsent() else Set.empty)
+      authoritativeAbsent = if (hadFloorRejects) currentAuthoritativeAbsent() else Set.empty,
+      pagePlaces = placesFor(url))
   }
 
   private def completeAuction(url: URL, slotId: SlotId, ordered: Vector[Candidate]): Unit = {
@@ -2098,7 +2100,12 @@ private final class AuctioneerEntity private (
     val slotAdminFloor = adminSlotFloorOverrides.get(slotId).orElse(slotSpecAdminFloors.get(slotId))
     adServer ! AdServer.CandidatesCollected(url, slotId, ordered, classifiedAt, cfg.ttl, pageCategories,
       currentFloorCpm, currentCategoryFloors, slotAdminFloor,
-      authoritativeAbsent = currentAuthoritativeAbsent())
+      authoritativeAbsent = currentAuthoritativeAbsent(),
+      // What THIS page is about, so the AdServer can re-check place
+      // targeting at serve: the ServeIndex key is per site|slot and shared
+      // across pages, and the candidates it holds were not necessarily won
+      // here. Empty = about nowhere we know.
+      pagePlaces = placesFor(url))
   }
 
   // AdServer entity for this publisher - receives candidates

@@ -592,6 +592,7 @@ object CampaignEntity {
               landingDomain = landingDomain,
               rejectReason = reason,
               placeHops = placeAdmits(state.placeTargeting, pagePlaces).getOrElse(0),
+              placeTargeting = state.placeTargeting,
               // Computed from the full fetched set (not `eligible`) so
               // below-floor rejects still carry it — an approved bidder
               // priced out by the current floor must keep teaching the
@@ -1871,7 +1872,12 @@ object CampaignEntity {
       // approval queue but are invisible to floor pricing. Set on rejects
       // too (a below-floor APPROVED bidder must still widen the sweep
       // range; a below-floor pending one must not).
-      hasApprovedCreative: Boolean = false
+      hasApprovedCreative: Boolean = false,
+      // The campaign's content-place targeting, carried onto the Candidate
+      // so the AdServer can re-check it against the page actually being
+      // served (ServeIndex keys are per site|slot and shared across pages).
+      // Default-empty keeps in-flight messages from an older node readable.
+      placeTargeting: Set[String] = Set.empty
   ) extends promovolve.CborSerializable {
     def eligible: Boolean = creatives.nonEmpty
   }

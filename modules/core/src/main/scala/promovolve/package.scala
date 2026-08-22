@@ -66,7 +66,16 @@ final case class Candidate(
     // the same reason — reaching a page through a broader place is reach,
     // not relevance, so serve-time selection decays it. 0 for untargeted
     // campaigns: no constraint is a perfect fit, not a distant one.
-    placeHops: Int = 0
+    placeHops: Int = 0,
+    // The campaign's content-place targeting itself, carried to serve time.
+    // `placeHops` above is the distance for the page whose AUCTION produced
+    // this candidate — but the ServeIndex is keyed by site|slot, and a slot
+    // id is shared by every page that uses it (per-category slots, by
+    // design), so a candidate can be served on a page other than the one
+    // it won. Place targeting is enforced at auction and must be re-checked
+    // at serve against the page actually being served; this is what it is
+    // re-checked with. Empty = untargeted = eligible everywhere.
+    placeTargeting: Set[String] = Set.empty
 )
 
 final case class Selection(

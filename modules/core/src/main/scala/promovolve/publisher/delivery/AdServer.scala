@@ -1112,6 +1112,15 @@ private[delivery] class AdServer(
 
   // Page categories cache: url → all content categories (for affinity learning)
   private var pageCategoriesCache: Map[String, Set[String]] = Map.empty
+  // url → places the page is about, from the auctioneer's classification of
+  // THAT url (CandidatesCollected.pagePlaces). Read at serve to re-apply
+  // place targeting against the page actually being served: the ServeIndex
+  // key is per site|slot and shared across pages, so its candidates may have
+  // been won elsewhere (CandidateLogic.forPage). Absent = about nowhere we
+  // know — place-targeted candidates are dropped for it, the same choice the
+  // campaign makes at bid time. Bounded like pageCategoriesCache; transient,
+  // and repopulated by the restart re-auction like everything else here.
+  private var pagePlacesCache: Map[String, Set[String]] = Map.empty
   // url → classifiedAt epoch-ms. Recorded the MOMENT a page is classified
   // (via MarkClassified from the auctioneer + via CandidatesCollected),
   // INDEPENDENT of whether the auction drew a bid — so a classified-but-no-
@@ -2109,7 +2118,7 @@ private[delivery] class AdServer(
         Behaviors.same
 
       case CandidatesCollected(url, slotId, candidates, classifiedAt, ttl, pageCategories, floorCpm, categoryFloors,
-            slotAdminFloor, authoritativeAbsent) =>
+            slotAdminFloor, authoritativeAbsent, pagePlaces) =>
         // Update site floor CPM + per-category floors from latest auction
         siteFloorCpm = floorCpm
         siteCategoryFloors = categoryFloors
@@ -2130,6 +2139,9 @@ private[delivery] class AdServer(
         pageCategoriesCache = pageCategoriesCache + (url.value -> pageCategories)
         if (pageCategoriesCache.size > AdServer.MaxPageCategoriesCache)
           pageCategoriesCache = pageCategoriesCache.drop(pageCategoriesCache.size - AdServer.MaxPageCategoriesCache)
+        pagePlacesCache = pagePlacesCache + (url.value -> pagePlaces)
+        if (pagePlacesCache.size > AdServer.MaxPageCategoriesCache)
+          pagePlacesCache = pagePlacesCache.drop(pagePlacesCache.size - AdServer.MaxPageCategoriesCache)
         // Record classifiedAt for the freshness token (also set directly via
         // MarkClassified, but this covers the restart-reauction repopulation).
         recordClassified(url.value, classifiedAt.toEpochMilli)
@@ -2929,7 +2941,17 @@ private[delivery] class AdServer(
               behavior(state.copy(serveStats = serveStats.recordContentTooOld))
             } else {
               val currentMsSinceLast = if (lastRequestTimeMs > 0) nowMs - lastRequestTimeMs else 0L
-              val filteredView = view.copy(candidates = freshnessFiltered)
+              // Place targeting, re-applied for THIS page. The candidates in the
+              // view were won on whichever pages share this slot id; drop the
+              // ones whose targeting does not admit this page, and decay the
+              // rest by this page's distance (CandidateLogic.forPage).
+              val placeFiltered =
+                CandidateLogic.forPage(freshnessFiltered, pagePlacesCache.getOrElse(url.value, Set.empty))
+              if (placeFiltered.size != freshnessFiltered.size && log.isDebugEnabled)
+                log.debug("Place filter dropped {} of {} candidates for url={}",
+                  (freshnessFiltered.size - placeFiltered.size): java.lang.Integer,
+                  freshnessFiltered.size: java.lang.Integer, url.value)
+              val filteredView = view.copy(candidates = placeFiltered)
               val selCtx = SelectionContext(
                 creativeStats = creativeStats,
                 pacingStrategy = pacingStrategy,

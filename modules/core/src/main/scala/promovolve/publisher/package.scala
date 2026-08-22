@@ -35,7 +35,13 @@ final case class CandidateView(
     categoryScore: Double = 0.5, // Thompson-sampled CTR (0.5 = neutral prior)
     adProductCategory: Option[AdProductCategoryId] = None, // IAB Ad Product Taxonomy 2.0 category
     landingDomain: String = "", // Landing page domain for domain blocking
-    landingUrl: String = "" // Full landing page URL for click-through
+    landingUrl: String = "", // Full landing page URL for click-through
+    // The campaign's content-place targeting (see Candidate.placeTargeting).
+    // Re-checked at serve against the page being served, because the
+    // ServeIndex key (site|slot) is shared across pages. Empty = untargeted.
+    // Default-empty is Jackson-safe: entries stored before this field read
+    // as untargeted until the next re-auction refreshes them.
+    placeTargeting: Set[String] = Set.empty
 ) extends CborSerializable
 
 // ========== Domain Models ==========

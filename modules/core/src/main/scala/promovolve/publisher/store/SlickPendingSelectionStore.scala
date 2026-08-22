@@ -755,16 +755,21 @@ object SlickPendingSelectionStore {
   // be defaulted on read or every pre-existing approval card fails to load:
   // ancestorHops (added 2026-07-25) and placeHops (2026-08-21). Both default
   // to 0, which reads as "native / no distance" — the same thing an
-  // untargeted bid records.
+  // untargeted bid records. placeTargeting (2026-08-22) defaults to the
+  // empty set, which reads as "untargeted" — again what such a bid records.
   private val HopDefaults = Vector("ancestorHops", "placeHops")
+  private val SetDefaults = Vector("placeTargeting")
 
   given candidateFormat: JsonFormat[Candidate] = new JsonFormat[Candidate] {
-    private val base = jsonFormat12(Candidate.apply)
+    private val base = jsonFormat13(Candidate.apply)
     def write(c: Candidate): JsValue = base.write(c)
     def read(json: JsValue): Candidate = {
       val obj = json.asJsObject
-      val patched = HopDefaults.foldLeft(obj) { (o, field) =>
+      val hopsPatched = HopDefaults.foldLeft(obj) { (o, field) =>
         if (o.fields.contains(field)) o else JsObject(o.fields + (field -> JsNumber(0)))
+      }
+      val patched = SetDefaults.foldLeft(hopsPatched) { (o, field) =>
+        if (o.fields.contains(field)) o else JsObject(o.fields + (field -> JsArray()))
       }
       base.read(patched)
     }

@@ -506,6 +506,44 @@ Set-valued eligibility is evaluated twice, and `siteAllowlist` shows where:
 carry `places` and `siteAudience`. Miss this and targeted campaigns get wrong
 answers from quotes up to `BookHardTtlMs` (10 min) old.
 
+## Serve-time re-check — the auction is per page, the ServeIndex is not
+
+Found live on 2026-08-22: a campaign targeting Kanazawa won the Kanazawa
+article's auction, landed in the `in-content_300x600-travel` slot's pool, and
+was served — and billed — on the Tainan article, which shares that slot id
+(the WordPress plugin's per-category scope, by design). The auction applied
+`placeAdmits` correctly; the **ServeIndex key is `site|slot`**, and the
+candidates a page reads were not necessarily won on that page. Place
+targeting was enforced at auction and leaked at serve. (Category targeting
+has the same structural leak across pages sharing a slot; per-category slot
+scope is its mitigation, and place is finer than category.)
+
+So place targeting is applied **twice**, once on each side of the key:
+
+- **Auction** (`canBid` / `answerFromBook`): decides who may bid on THIS
+  URL — unchanged.
+- **Serve** (`CandidateLogic.forPage`): the candidate carries the campaign's
+  `placeTargeting` (`Candidate` → `CandidateView`), the AdServer caches each
+  URL's places from `CandidatesCollected.pagePlaces`, and at selection it
+  drops any candidate whose targeting does not admit the page actually being
+  served. Untargeted candidates pass. A page with no known places — classified
+  that way, or never auctioned on this AdServer incarnation — drops targeted
+  candidates, exactly as the campaign would have declined to bid: a wrong
+  drop costs one impression, a wrong keep costs a billed impression the
+  advertiser never asked for.
+
+The relevance decay (`0.7^hops`) moved with it. It used to be baked into the
+view's `categoryScore` at auction, using the distance for the page that
+produced the candidate; it is now computed at serve for the page being
+served, so a Japan-wide campaign is 0.49× on a Kanazawa article and 0.7× on
+an Ishikawa one regardless of which page's auction it came through.
+`Candidate.placeHops` still rides the bid for diagnostics; it no longer
+scores anything.
+
+Entries stored before this field read as untargeted until the next re-auction
+refreshes them (CBOR default), so the fix phases in with the ServeIndex TTL
+rather than needing a migration.
+
 ## Eviction
 
 `CampaignChanged` already carries `siteAllowlist` and `targetCategories` so
