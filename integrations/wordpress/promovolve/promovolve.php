@@ -147,28 +147,87 @@ function promovolve_declared_topic() {
  * Matched on the slug, not the label, so a site can use its own wording
  * ("Reiseziel", "行き先") as long as the taxonomy is registered under one of
  * these. The filter below is the escape hatch for anything else.
+ *
+ * WHAT EARNS A SLUG A PLACE HERE
+ *   Only that its terms are, in practice, somewhere an advertiser can buy.
+ *   The server's targeting vocabulary is country → first-level subdivision →
+ *   city, so a term naming any of those matches directly, and a term naming
+ *   something SMALLER — a district, a neighbourhood, an onsen town — resolves
+ *   up to the city or subdivision containing it. Both are worth sending.
+ *   A slug is left out when its terms are usually NOT places at all
+ *   ("venue" is often a business name, "market" a segment) or when they
+ *   describe the publisher's own address rather than the article's subject
+ *   (store locators, Yoast/Rank Math Local) — that is the confidently-wrong
+ *   case this plugin exists to avoid.
+ *
+ * A wrong guess is cheap and a missing one is not: the hint reaches the
+ * server labelled unverified and is ignored when the page text disagrees,
+ * while a place taxonomy nobody recognised means a travel post about one town
+ * competes as generic travel inventory. So the list leans inclusive.
  */
 const PROMOVOLVE_PLACE_TAXONOMIES = array(
+	// Administrative units — matched by the server's vocabulary directly.
+	'country',
+	'countries',
+	'state',
+	'states',
+	'province',
+	'provinces',
+	'prefecture',
+	'prefectures',
+	'region',
+	'regions',
+	'county',
+	'counties',
+	'municipality',
+	'municipalities',
+	'city',
+	'cities',
+	'town',
+	'towns',
+	'village',
+	'villages',
+
+	// Generic wording for the same thing.
 	'destination',
 	'destinations',
 	'location',
 	'locations',
 	'place',
 	'places',
-	'city',
-	'cities',
-	'region',
-	'regions',
-	'country',
-	'countries',
 	'area',
 	'areas',
-	'prefecture',
-	'prefectures',
-	'state',
-	'states',
-	'province',
-	'provinces',
+	'locality',
+	'localities',
+
+	// Below city. No code of their own; they resolve to the city or
+	// subdivision around them, which is exactly what Kinosaki Onsen needed.
+	'district',
+	'districts',
+	'neighborhood',
+	'neighborhoods',
+	'neighbourhood',
+	'neighbourhoods',
+	'borough',
+	'boroughs',
+	'suburb',
+	'suburbs',
+	'island',
+	'islands',
+
+	// Slugs shipped by widely-installed plugins and themes, where the term
+	// genuinely IS what the page is about: the region a job is in, the city a
+	// listing sits in, the destination of a tour.
+	'job_listing_region',   // WP Job Manager
+	'travel_locations',     // WP Travel
+	'tour_location',        // tour/travel themes
+	'listing_city',         // directory themes
+	'listing_region',
+	'listing_location',
+	'property_city',        // real-estate themes (Houzez, RealHomes, …)
+	'property_state',
+	'property_country',
+	'property_area',
 );
 
 /**
@@ -289,6 +348,40 @@ function promovolve_topic_taxonomies( $post_id ) {
 	 * @param int      $post_id    Post being rendered.
 	 */
 	return apply_filters( 'promovolve_topic_taxonomies', array_merge( $leading, $rest ), $post_id );
+}
+
+/**
+ * What this SITE would send as context, for the settings screen.
+ *
+ * The place list is a convention nobody can see: an author with a `spot`
+ * taxonomy full of towns has no way to learn that renaming it `destination`
+ * (or adding one filter line) would make those towns matchable, and an author
+ * who already has `destination` has no way to know it is working. A static
+ * list in a readme answers neither question — this answers both, against the
+ * taxonomies the site actually has.
+ *
+ * Site-wide rather than per-post: the settings screen has no post in hand, and
+ * the useful question there is "does this site have a place taxonomy at all?"
+ * The per-post read (promovolve_topic_taxonomies) stays the authority at
+ * render time; this only mirrors its rules.
+ *
+ * @return array{place: WP_Taxonomy[], topic: WP_Taxonomy[]}
+ */
+function promovolve_context_taxonomies() {
+	$slugs = apply_filters( 'promovolve_place_taxonomies', PROMOVOLVE_PLACE_TAXONOMIES, 0 );
+	$out   = array(
+		'place' => array(),
+		'topic' => array(),
+	);
+
+	foreach ( get_taxonomies( array( 'public' => true ), 'objects' ) as $taxonomy ) {
+		if ( empty( $taxonomy->show_ui ) || in_array( $taxonomy->name, PROMOVOLVE_TOPIC_TAXONOMY_DENY, true ) ) {
+			continue;
+		}
+		$out[ in_array( $taxonomy->name, $slugs, true ) ? 'place' : 'topic' ][] = $taxonomy;
+	}
+
+	return $out;
 }
 
 /**
@@ -1055,6 +1148,65 @@ function promovolve_render_settings_page() {
 			<pre style="background:#fff;border:1px solid #c3c4c7;padding:12px;overflow-x:auto;"><code><?php echo esc_html( $tag_preview ); ?></code></pre>
 			<p class="description"><?php esc_html_e( 'Ads fill only after the site is approved and verified on the dashboard, and after each winning creative is approved in your Approval queue. Brand-new pages serve nothing on their first view while they classify — that is normal, not a fault.', 'promovolve' ); ?></p>
 		<?php endif; ?>
+
+		<?php
+		// What this site sends as context, and — the part no readme can
+		// answer — whether its own taxonomies qualify. Read-only: nothing
+		// here is a setting, because the answer lives in how the site
+		// registered its taxonomies, not in an option this plugin owns.
+		$context = promovolve_context_taxonomies();
+		$labels  = static function ( $taxonomies ) {
+			$out = array();
+			foreach ( $taxonomies as $taxonomy ) {
+				$out[] = '<strong>' . esc_html( $taxonomy->labels->singular_name ) . '</strong> <code>' . esc_html( $taxonomy->name ) . '</code>';
+			}
+			return implode( ', ', $out );
+		};
+		?>
+		<h2><?php esc_html_e( 'Context this site sends', 'promovolve' ); ?></h2>
+		<p><?php esc_html_e( 'Every ad request carries what WordPress already knows about the page, so it can be matched before a language model has read a word of it. Both are properties of the POST — what it is about and where it is set — never anything about the person reading it.', 'promovolve' ); ?></p>
+
+		<table class="form-table" role="presentation">
+			<tr>
+				<th scope="row"><?php esc_html_e( 'Topic', 'promovolve' ); ?></th>
+				<td>
+					<?php if ( ! empty( $context['topic'] ) ) : ?>
+						<p><?php echo wp_kses_post( $labels( $context['topic'] ) ); ?></p>
+						<p class="description"><?php esc_html_e( 'Terms from these taxonomies are sent as the topic hint. Every public taxonomy counts, not only categories and tags.', 'promovolve' ); ?></p>
+					<?php else : ?>
+						<p class="description"><?php esc_html_e( 'None — pages are classified from their text alone, which works.', 'promovolve' ); ?></p>
+					<?php endif; ?>
+				</td>
+			</tr>
+			<tr>
+				<th scope="row"><?php esc_html_e( 'Place', 'promovolve' ); ?></th>
+				<td>
+					<?php if ( ! empty( $context['place'] ) ) : ?>
+						<p><?php echo wp_kses_post( $labels( $context['place'] ) ); ?></p>
+						<p class="description"><?php esc_html_e( 'Terms from these are sent as the place hint — a post filed under one of them tells the ad server which town or region the article is about, which is what lets an advertiser buy that destination specifically. Term names are sent exactly as you wrote them, in any language; term slugs are never read.', 'promovolve' ); ?></p>
+					<?php else : ?>
+						<p class="description">
+							<?php
+							printf(
+								/* translators: %s: comma-separated list of taxonomy slugs, each in <code> */
+								esc_html__( 'None. A taxonomy registered under one of these slugs is read as a place: %s.', 'promovolve' ),
+								wp_kses_post( '<code>' . implode( '</code>, <code>', array_map( 'esc_html', apply_filters( 'promovolve_place_taxonomies', PROMOVOLVE_PLACE_TAXONOMIES, 0 ) ) ) . '</code>' )
+							);
+							?>
+						</p>
+						<p class="description"><?php esc_html_e( 'Worth having if your posts are about somewhere: a travel or local site whose destinations are only prose gets matched on topic alone, while one that files them under a place taxonomy can be bought by advertisers targeting that exact town. The label is yours — only the slug is matched — and the geo_address post meta is read as a fallback where no place taxonomy exists.', 'promovolve' ); ?></p>
+					<?php endif; ?>
+					<p class="description">
+						<?php esc_html_e( 'Already keep places in a taxonomy under a different slug? Point the plugin at it instead of renaming anything:', 'promovolve' ); ?>
+					</p>
+					<pre style="background:#fff;border:1px solid #c3c4c7;padding:8px;overflow-x:auto;margin:4px 0 0;"><code>add_filter( 'promovolve_place_taxonomies', function ( $slugs ) {
+	$slugs[] = 'your-taxonomy-slug';
+	return $slugs;
+} );</code></pre>
+				</td>
+			</tr>
+		</table>
+		<p class="description"><?php esc_html_e( 'Both hints are evidence, never the answer: the ad server treats them as an unverified claim, uses them only to settle what the page text already supports, and ignores them when the text disagrees. A place name is resolved against the server’s own vocabulary — the plugin never sends a code.', 'promovolve' ); ?></p>
 	</div>
 	<?php
 }

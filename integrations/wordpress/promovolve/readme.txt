@@ -104,6 +104,24 @@ no cookies. Visitors sending the Global Privacy Control signal receive no ads.
   dressed up as an authoritative one.
 * New `promovolve_place_taxonomies` filter, for a site whose destination
   taxonomy is registered under a slug the defaults do not cover.
+* **Settings → Promovolve now shows what this site actually sends**, and
+  whether any of its taxonomies count as places. Which slugs are read is a
+  choice made here, not something a site can see from the outside: an author
+  keeping towns in a taxonomy called `spot` had no way to learn that one
+  filter line would make those towns targetable, and an author who already
+  had `destination` had no way to know it was working. Both questions are now
+  answered on the screen, against the site's own taxonomies.
+* **The recognised place slugs go well beyond `destination`.** Administrative
+  units (`country`, `state`, `province`, `prefecture`, `region`, `county`,
+  `municipality`, `city`, `town`, `village`), everyday wording (`location`,
+  `place`, `area`, `locality`), units below a city that resolve up to the one
+  around them (`district`, `neighborhood`, `borough`, `suburb`, `island`),
+  and the slugs shipped by widely-installed plugins and themes where the term
+  really is the page's subject — WP Job Manager's `job_listing_region`, WP
+  Travel's `travel_locations`, directory `listing_city`, real-estate
+  `property_city`. Store-locator and local-SEO taxonomies are deliberately
+  NOT read: they hold the publisher's own address, not what the article is
+  about.
 
 = 0.3.0 =
 * **The topic hint now reads every taxonomy the post type has, not just
