@@ -67,9 +67,13 @@ Shape notes:
   `data-pub`), so the URL carries nothing new. Holding the token is the
   authentication, exactly as it is for the verification file itself.
 - **Constant-time comparison** (`MessageDigest.isEqual`) of the token bytes.
-- **Rate-limited** per client IP through the existing
-  `promovolve.fraud.RequestRateGate` (bucket key `token-check:<ip>`), on top
-  of the per-site natural limit (one call per plugin per 5 minutes).
+- **Rate-limited** per client IP through its own
+  `promovolve.fraud.RequestRateGate` (1/s, burst 10, bucket key
+  `token-check:<ip>`, first `X-Forwarded-For` entry behind the ingress), on
+  top of the per-site natural limit (one call per plugin per 5 minutes).
+  The bucket is per api POD, so the effective burst is 10 × replicas —
+  verified live 2026-08-22: a burst of 40 against two pods gave 20×200 and
+  20×429. Generous for every real caller, still useless for a guesser.
 - **No logging of the token.** Log `siteId` and `state` at debug only.
 - Lives next to `getVerificationToken` / `verifySite` in `Endpoints.scala`
   (`sitesBase / path[String]("siteId") / "token-check"`) but is NOT under
