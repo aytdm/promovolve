@@ -4,7 +4,7 @@ Tags: ads, advertising, publisher
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.4.0
+Stable tag: 0.5.0
 License: Apache-2.0
 License URI: https://www.apache.org/licenses/LICENSE-2.0
 
@@ -88,6 +88,45 @@ no cookies. Visitors sending the Global Privacy Control signal receive no ads.
 
 == Changelog ==
 
+= 0.5.0 =
+* **Your settings now survive deleting the plugin.** Deactivate → delete →
+  upload is how plenty of upgrades are done, and until now it silently
+  removed the site ID, API base, script URL and the verification token — the
+  last copy of that token, since the dashboard stops showing it once a site
+  is verified. The settings stay by default; a checkbox at the foot of
+  Settings → Promovolve opts in to removing them, for the publisher who is
+  genuinely finished.
+* **Settings → Promovolve now shows what this site actually sends**, and
+  whether any of its taxonomies count as places. Which slugs are read is a
+  choice made here, not something a site can see from the outside: an author
+  keeping towns in a taxonomy called `spot` had no way to learn that one
+  filter line would make those towns targetable, and an author who already
+  had `destination` had no way to know it was working. Both questions are now
+  answered on the screen, against the site's own taxonomies, with one
+  instruction up front and the full slug list folded away.
+* **The recognised place slugs go well beyond `destination`.** Administrative
+  units (`country`, `state`, `province`, `prefecture`, `region`, `county`,
+  `municipality`, `city`, `town`, `village`), everyday wording (`location`,
+  `place`, `area`, `locality`), units below a city that resolve up to the one
+  around them (`district`, `neighborhood`, `borough`, `suburb`, `island`),
+  and the slugs shipped by widely-installed plugins and themes where the term
+  really is the page's subject — WP Job Manager's `job_listing_region`, WP
+  Travel's `travel_locations`, directory `listing_city`, real-estate
+  `property_city`. Store-locator and local-SEO taxonomies are deliberately
+  NOT read: they hold the publisher's own address, not what the article is
+  about.
+* **`geo_address` is explained, with examples.** For the site that writes
+  about a place twice a year and will not add a taxonomy for two posts: a
+  custom field named `geo_address` holding a plain place name
+  (`Kinosaki Onsen, Toyooka, Hyogo`; `金沢市, 石川県`) is read when no place
+  taxonomy term is present. The screen shows how to add one and what not to
+  put in it.
+* Fixed: a `promovolve_topic_taxonomies` filter that removed a taxonomy from
+  the topic hint also removed it from the place hint, silently. The two hints
+  now enumerate independently; each has only its own filter.
+* Fixed: the ad-tag attribute splice replaced every ` src=` in the tag rather
+  than the first.
+
 = 0.4.0 =
 * **The tag now also tells the ad server what place a post is ABOUT.** A
   travel post filed under a `destination` taxonomy, or carrying WordPress's
@@ -104,24 +143,6 @@ no cookies. Visitors sending the Global Privacy Control signal receive no ads.
   dressed up as an authoritative one.
 * New `promovolve_place_taxonomies` filter, for a site whose destination
   taxonomy is registered under a slug the defaults do not cover.
-* **Settings → Promovolve now shows what this site actually sends**, and
-  whether any of its taxonomies count as places. Which slugs are read is a
-  choice made here, not something a site can see from the outside: an author
-  keeping towns in a taxonomy called `spot` had no way to learn that one
-  filter line would make those towns targetable, and an author who already
-  had `destination` had no way to know it was working. Both questions are now
-  answered on the screen, against the site's own taxonomies.
-* **The recognised place slugs go well beyond `destination`.** Administrative
-  units (`country`, `state`, `province`, `prefecture`, `region`, `county`,
-  `municipality`, `city`, `town`, `village`), everyday wording (`location`,
-  `place`, `area`, `locality`), units below a city that resolve up to the one
-  around them (`district`, `neighborhood`, `borough`, `suburb`, `island`),
-  and the slugs shipped by widely-installed plugins and themes where the term
-  really is the page's subject — WP Job Manager's `job_listing_region`, WP
-  Travel's `travel_locations`, directory `listing_city`, real-estate
-  `property_city`. Store-locator and local-SEO taxonomies are deliberately
-  NOT read: they hold the publisher's own address, not what the article is
-  about.
 
 = 0.3.0 =
 * **The topic hint now reads every taxonomy the post type has, not just
@@ -245,3 +266,12 @@ no cookies. Visitors sending the Global Privacy Control signal receive no ads.
 * Initial release: ad tag injection, well-known verification route,
   slot shortcode, optional automatic after-content slot with configurable
   identity scope (shared / per category / per post).
+
+== Upgrade Notice ==
+
+= 0.5.0 =
+Upgrade with Plugins → Add New → Upload Plugin → "Replace current with
+uploaded". That path keeps your settings. Deleting the plugin first used to
+wipe them — including the verification token, which the dashboard no longer
+shows once your site is verified; from this version they survive a delete
+unless you tick the new "Also delete these settings" box.

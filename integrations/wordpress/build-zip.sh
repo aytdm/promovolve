@@ -49,22 +49,39 @@ fi
 
 VERSION="$header_version"
 
+# ── the gates need php and node; a zip built without them is UNVERIFIED ──────
+# The checks below used to skip quietly when a tool was absent, which left a
+# machine without php producing a zip that looked identical to a verified one
+# — same name, same layout, none of the tests run. A zip that fatals on
+# activation is worse than no zip, so missing tools now fail the build.
+# PROMOVOLVE_ALLOW_UNVERIFIED=1 is the deliberate override, and it says so on
+# every line of output so nobody mistakes the result for a checked build.
+require_tool() {
+	if command -v "$1" >/dev/null 2>&1; then
+		return 0
+	fi
+	if [ "${PROMOVOLVE_ALLOW_UNVERIFIED:-0}" = "1" ]; then
+		echo "WARNING: $1 not installed — $2 SKIPPED. This zip is UNVERIFIED." >&2
+		return 1
+	fi
+	echo "error: $1 not installed — cannot run $2." >&2
+	echo "       Install it, or set PROMOVOLVE_ALLOW_UNVERIFIED=1 to build an unverified zip anyway." >&2
+	exit 1
+}
+
 # ── syntax gate: a zip that fatals on activation is worse than no zip ─────────
-if command -v php >/dev/null 2>&1; then
+if require_tool php "the PHP syntax check and topic-test.php"; then
 	find "$PLUGIN_DIR" -name '*.php' -print0 | xargs -0 -n1 php -l >/dev/null
 	echo "php -l: clean"
-else
-	echo "note: php not installed — skipping the syntax check" >&2
-fi
-# ── behaviour gate: the topic-hint selection rules ───────────────────────────
-# php -l only proves the file parses. These pin WHICH taxonomies are read, in
-# what order, and which terms survive the cap — all of which fail silently
-# (a hint that is merely thinner than it should be still looks fine).
-if command -v php >/dev/null 2>&1; then
+	# ── behaviour gate: the topic-hint selection rules ─────────────────────
+	# php -l only proves the file parses. These pin WHICH taxonomies are
+	# read, in what order, and which terms survive the cap — all of which
+	# fail silently (a hint that is merely thinner than it should be still
+	# looks fine).
 	php tests/topic-test.php
 fi
 
-if command -v node >/dev/null 2>&1; then
+if require_tool node "the JS syntax check and block.json parse"; then
 	find "$PLUGIN_DIR" -name '*.js' -print0 | xargs -0 -n1 node --check
 	node -e 'JSON.parse(require("fs").readFileSync("promovolve/blocks/slot/block.json","utf8"))'
 	echo "node --check + block.json: clean"

@@ -54,10 +54,68 @@ don't leave a hole in your layout.
 | `data-api` | script | Ads API base URL (required in production; defaults to `host:8080` for local dev) |
 | `data-promovolve-slot` | div | Your identifier for the slot. Pick any stable, unique-per-site string and keep it — it is how the slot is tracked for reporting and per-slot floor prices |
 | `data-w`, `data-h` | div | Slot dimensions in CSS pixels. **Required** — a slot missing positive dimensions is skipped with a console warning |
+| `data-section` | script | Optional. What your CMS already knows this page is **about** — a post's categories and tags, or the term an archive lists — as plain names, comma-separated (`旅行, 温泉`). See [Page context](#page-context) |
+| `data-place` | script | Optional. What **place** the page is about, as plain names (`Kanazawa`, `金沢`), never codes. See [Page context](#page-context) |
 
 Creatives are fluid: they scale to fill the box you declare with
 `data-w`/`data-h` rather than requiring exact IAB pixel sizes, so pick
 dimensions that fit your layout.
+
+### Page context
+
+Pages are classified from their rendered text, and that works on its own.
+But a CMS often already knows the answer as a fact rather than an inference
+— a post's categories, the destination it is filed under — and two optional
+attributes on the script tag hand that over:
+
+- **`data-section`** — the page's *topic*, as the names your CMS uses
+  (`Travel, Onsen`). On an archive page this is much better evidence than the
+  text, which is a blend of excerpts from unrelated posts.
+- **`data-place`** — the *place* the page is about (`Kanazawa`), which is
+  what lets an advertiser targeting that town reach the article
+  specifically. Send names in any language, never ISO codes: the server
+  resolves the name against its own place vocabulary, and a publisher-
+  supplied code would be an unverified value dressed as an authoritative one.
+
+Both are **hints, not answers**. The server treats them as an unverified,
+interested claim — a publisher earns more from some categories than others —
+uses them only to settle what the page text already supports, and ignores
+them when the text disagrees. So a blank or wrong value costs nothing, and
+you should send them whenever you can cheaply.
+
+Both describe the **page**, never the reader. That is what makes them safe
+to print into markup a page cache or CDN will store and replay to everyone:
+the value does not vary by who is looking. Do not derive either from a
+visitor's IP address or profile — a value like that, captured by the same
+cache, would be served to the world.
+
+The [WordPress plugin](#wordpress) sends both automatically. If you are
+integrating by hand, print them from whatever your CMS knows:
+
+```html
+<script data-pub="YOUR-SITE-ID" data-api="https://ads.example.com"
+        data-section="Travel, Onsen" data-place="Kinosaki Onsen, Toyooka"
+        src="https://cdn.example.com/promovolve-ad.js"></script>
+```
+
+### WordPress
+
+The Promovolve Publisher plugin (downloadable from the repository's Actions
+artifacts or Releases) prints the tag, serves the verification file, places
+slots via a block, a shortcode, or an automatic after-content slot, and sends
+both context hints from what the post already carries:
+
+- `data-section` from every public taxonomy on the post — categories, tags,
+  and custom ones.
+- `data-place` from taxonomies registered under a place-like slug
+  (`destination`, `location`, `city`, `region`, `prefecture`, …), or, where
+  none exists, from WordPress's own `geo_address` custom field. **Settings →
+  Promovolve** shows which of your taxonomies count and lists every
+  recognised slug; a `promovolve_place_taxonomies` filter adds your own.
+
+Upgrade with *Plugins → Add New → Upload Plugin → Replace current with
+uploaded*; your settings — including the verification token — survive a
+delete by default.
 
 ## What happens at runtime
 
