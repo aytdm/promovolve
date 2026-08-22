@@ -4,7 +4,7 @@ Tags: ads, advertising, publisher
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.5.2
+Stable tag: 0.5.3
 License: Apache-2.0
 License URI: https://www.apache.org/licenses/LICENSE-2.0
 
@@ -87,6 +87,16 @@ reader "dog-ear" bookmarks in the browser's IndexedDB (7-day expiry). It sets
 no cookies. Visitors sending the Global Privacy Control signal receive no ads.
 
 == Changelog ==
+
+= 0.5.3 =
+* **A built-in Destination taxonomy, one checkbox away.** Settings →
+  Promovolve → Page context → “Destination taxonomy” registers a Destinations
+  box in the post editor (slug `destination`, the one the plugin recommends),
+  so a post can say which town or region it is about without anyone writing
+  PHP. Type 金沢 on the Kanazawa post and that page sends its place to the ad
+  server. Off by default — a site with its own destination/location taxonomy
+  should not grow a second one, and the Context report says when it already
+  qualifies. Turning it off again hides the box; WordPress keeps the terms.
 
 = 0.5.2 =
 * **The verification token field stays visible on a verified site.** 0.5.0
@@ -301,6 +311,10 @@ no cookies. Visitors sending the Global Privacy Control signal receive no ads.
   identity scope (shared / per category / per post).
 
 == Upgrade Notice ==
+
+= 0.5.3 =
+New: a Destination box for posts, one checkbox in Settings → Promovolve →
+Page context. Optional; nothing changes until you tick it.
 
 = 0.5.2 =
 If your site is verified but its verification URL returns nothing, this

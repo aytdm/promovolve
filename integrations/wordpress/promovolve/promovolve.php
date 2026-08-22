@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Promovolve Publisher
  * Description:       Connects this site to a Promovolve ad server: prints the ad tag, serves the site-verification file, and places ad slots via editor block or shortcode.
- * Version:           0.5.2
+ * Version:           0.5.3
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Promovolve
@@ -16,7 +16,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 const PROMOVOLVE_OPTION  = 'promovolve_settings';
-const PROMOVOLVE_VERSION = '0.5.2';
+const PROMOVOLVE_VERSION = '0.5.3';
 
 /**
  * Settings with defaults applied.
@@ -34,6 +34,13 @@ function promovolve_settings() {
 		'auto_slot_scope'    => 'site',
 		'auto_slot_w'        => 728,
 		'auto_slot_h'        => 90,
+		// Register a "Destination" taxonomy (slug `destination`) so a publisher
+		// can file a post under the place it is about without writing PHP.
+		// Off by default: a site that already has its own place taxonomy
+		// should not grow a second one, and the Context panel says when it
+		// already qualifies. Turning it off later hides the box but keeps
+		// the terms (WordPress never deletes term data on unregister).
+		'destination_taxonomy' => false,
 		// Whether deleting the plugin also deletes this option. FALSE by
 		// default, against the usual "clean up after yourself" instinct,
 		// because of what the option holds: the verification token, which
@@ -291,6 +298,51 @@ const PROMOVOLVE_PLACE_TAXONOMIES = array(
 	'property_country',
 	'property_area',
 );
+
+/**
+ * The built-in place taxonomy, for a site that has none.
+ *
+ * Telling a publisher to paste register_taxonomy() into functions.php is the
+ * plugin failing at its job. When the option is on, this registers a plain
+ * non-hierarchical "Destination" taxonomy on posts under the slug
+ * `destination` — the first slug in PROMOVOLVE_PLACE_TAXONOMIES and the one
+ * the Context panel recommends — so filing a post under 金沢 is one box in
+ * the editor, and the page then sends data-place="金沢".
+ *
+ * Registered only when asked (default off): a site that already keeps places
+ * in its own taxonomy must not grow a second one. show_in_rest is what makes
+ * the box appear in the block editor; without it the taxonomy exists but is
+ * invisible there. Turning the option off unregisters the taxonomy — the box
+ * disappears — but WordPress keeps the terms and relationships, so turning
+ * it back on restores everything.
+ */
+add_action( 'init', function () {
+	$s = promovolve_settings();
+	if ( empty( $s['destination_taxonomy'] ) || taxonomy_exists( 'destination' ) ) {
+		return; // Off, or the site already has one of its own under this slug.
+	}
+	register_taxonomy( 'destination', array( 'post' ), array(
+		'labels'            => array(
+			'name'          => _x( 'Destinations', 'taxonomy general name', 'promovolve' ),
+			'singular_name' => _x( 'Destination', 'taxonomy singular name', 'promovolve' ),
+			'search_items'  => __( 'Search destinations', 'promovolve' ),
+			'all_items'     => __( 'All destinations', 'promovolve' ),
+			'edit_item'     => __( 'Edit destination', 'promovolve' ),
+			'update_item'   => __( 'Update destination', 'promovolve' ),
+			'add_new_item'  => __( 'Add new destination', 'promovolve' ),
+			'new_item_name' => __( 'New destination', 'promovolve' ),
+			'menu_name'     => __( 'Destinations', 'promovolve' ),
+			'not_found'     => __( 'No destinations found.', 'promovolve' ),
+		),
+		'description'       => __( 'The place a post is about — a town, region or country. Promovolve sends it as the page’s place so advertisers targeting that destination can reach the article. Names in any language; the ad server resolves them.', 'promovolve' ),
+		'public'            => true,
+		'show_ui'           => true,
+		'show_in_rest'      => true, // the block editor's sidebar box
+		'show_admin_column' => true,
+		'hierarchical'      => false,
+		'rewrite'           => array( 'slug' => 'destination' ),
+	) );
+}, 5 ); // Before the default priority, so it exists by the time anything reads taxonomies.
 
 /**
  * Where THIS page is about, according to WordPress.
@@ -1065,6 +1117,7 @@ function promovolve_sanitize_settings( $input ) {
 	// submitted form rather than falling through to the old value — that is
 	// what lets the box be UNticked again.
 	$clean['delete_on_uninstall'] = ! empty( $input['delete_on_uninstall'] );
+	$clean['destination_taxonomy'] = ! empty( $input['destination_taxonomy'] );
 	if ( isset( $input['auto_slot_id'] ) ) {
 		$clean['auto_slot_id'] = sanitize_text_field( (string) $input['auto_slot_id'] );
 	}
@@ -1453,6 +1506,21 @@ function promovolve_render_settings_page() {
 				</tr>
 			</table>
 
+			<h2><?php esc_html_e( 'Page context', 'promovolve' ); ?></h2>
+			<p><?php esc_html_e( 'Every ad request carries what WordPress already knows about the page — its topic from categories and tags, and the place it is about from a place taxonomy — so the article can be matched before a language model has read a word of it. Both describe the post, never the reader. The report below the form shows what this site sends.', 'promovolve' ); ?></p>
+			<table class="form-table" role="presentation">
+				<tr>
+					<th scope="row"><?php esc_html_e( 'Destination taxonomy', 'promovolve' ); ?></th>
+					<td>
+						<label>
+							<input name="<?php echo esc_attr( PROMOVOLVE_OPTION ); ?>[destination_taxonomy]" type="checkbox" value="1" <?php checked( $s['destination_taxonomy'] ); ?>>
+							<?php esc_html_e( 'Add a “Destination” box to the post editor, so each post can say which place it is about', 'promovolve' ); ?>
+						</label>
+						<p class="description"><?php esc_html_e( 'For a site that writes about places and has no place taxonomy of its own. Tick it, save, then open a post: a Destinations box appears in the sidebar — type the town or region (金沢, Kanazawa, any language) and update. That page then tells the ad server its place, which is what lets an advertiser targeting that destination reach it. Leave it off if your theme already has a destination/location taxonomy — the report below will list it under Place. Turning it off later hides the box but keeps what you typed.', 'promovolve' ); ?></p>
+					</td>
+				</tr>
+			</table>
+
 			<h2><?php esc_html_e( 'If you delete this plugin', 'promovolve' ); ?></h2>
 			<table class="form-table" role="presentation">
 				<tr>
@@ -1518,7 +1586,7 @@ function promovolve_render_settings_page() {
 							<?php
 							printf(
 								/* translators: %s: the recommended taxonomy slug, in <code> */
-								esc_html__( 'None yet. If your posts are about somewhere, register a taxonomy with the slug %s and file each post under the town or region it covers — that is the whole setup.', 'promovolve' ),
+								esc_html__( 'None yet. If your posts are about somewhere, tick “Destination taxonomy” in the form above and save — that adds a Destination box to the post editor, and filing each post under the town or region it covers is the whole setup. (Any taxonomy registered under the slug %s works the same way.)', 'promovolve' ),
 								'<code>' . esc_html( PROMOVOLVE_PLACE_TAXONOMY_RECOMMENDED ) . '</code>'
 							);
 							?>
