@@ -334,6 +334,10 @@ func main() {
 	mux.HandleFunc("POST /publisher/sites/{siteId}/delete", pub(h.DeleteSite))
 	mux.HandleFunc("POST /publisher/sites/{siteId}/verify", pub(h.VerifySite))
 	mux.HandleFunc("GET /publisher/sites/{siteId}/verification-token", pub(h.GetVerificationToken))
+	// Advisory ownership re-check, run when a publisher opens a site's
+	// details. Reports whether either proof is still in place; nothing acts
+	// on the answer — see CheckVerificationFile.
+	mux.HandleFunc("GET /publisher/sites/{siteId}/verification-check", pub(h.CheckVerificationFile))
 	mux.HandleFunc("POST /publisher/sites/floor", pub(h.UpdateFloorCPM))
 	mux.HandleFunc("POST /publisher/sites/min-floor", pub(h.UpdateMinFloorCPM))
 	mux.HandleFunc("POST /publisher/sites/audience", pub(h.UpdateAudienceRegions))

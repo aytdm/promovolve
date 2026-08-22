@@ -15,12 +15,14 @@ import (
 	"io"
 	"log/slog"
 	"math"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/hanishi/promovolve/platform/internal/i18n"
@@ -494,6 +496,180 @@ func (h *Handler) GetVerificationToken(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Write(body)
+}
+
+// verificationProbeClient fetches the publisher's own .well-known file.
+// Separate from coreClient: this talks to a third-party host, so it gets a
+// short timeout and a redirect cap. Two redirects covers http→https and
+// apex→www; more than that is a host doing something we should not follow.
+var verificationProbeClient = &http.Client{
+	Timeout: 5 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 2 {
+			return http.ErrUseLastResponse
+		}
+		return nil
+	},
+}
+
+// verificationProbeCache memoizes probe results. The probe is triggered by a
+// publisher opening a disclosure, so without this a page they keep open (or
+// reload) hits their own server repeatedly for an answer that changes rarely.
+var verificationProbeCache = struct {
+	sync.Mutex
+	entries map[string]verificationProbeEntry
+}{entries: map[string]verificationProbeEntry{}}
+
+type verificationProbeEntry struct {
+	result  verificationProbe
+	expires time.Time
+}
+
+// verificationProbe is what the publisher sees. Deliberately advisory: it
+// reports what the world can see at the .well-known URL and NOTHING acts on
+// it. Serving is gated by the one-time verification the core already
+// persisted, and removing the proof afterwards is legitimate — the WordPress
+// plugin gets deleted, a static file gets tidied, a DNS TXT record goes.
+// Ownership does not lapse because the receipt was thrown away, so a failed
+// probe must never revoke anything or stop an ad.
+type verificationProbe struct {
+	// present | foreign | missing | unreachable
+	// Named "present", not "serving": in this codebase "serving" means ads
+	// being delivered, and this answers a different question entirely.
+	State string `json:"state"`
+	// Which proof answered: "file" or "dns". Empty unless State is serving.
+	// Worth reporting: a publisher who thinks they are on the file method
+	// and is told "dns" has learned something real about their setup.
+	Method string `json:"method,omitempty"`
+	Code   int    `json:"code,omitempty"`
+}
+
+// CheckVerificationFile fetches the site's own /.well-known/promovolve.txt and
+// compares it with the token the core holds.
+//
+// Why it exists: once a site verifies, the dashboard used to hide the token
+// forever, which quietly made the WordPress plugin's stored copy the only one
+// left. This tells a publisher whether their proof is still in place BEFORE
+// they need it — most usefully, before they delete the plugin — and gives an
+// operator a signal for the one real risk here, a domain changing hands while
+// the tag keeps serving for its previous owner.
+func (h *Handler) CheckVerificationFile(w http.ResponseWriter, r *http.Request) {
+	_, claims := h.sessionUser(r)
+	if claims == nil {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+	siteID := r.PathValue("siteId")
+
+	// The token read is per-site authorized by the core, so it is also what
+	// stops this endpoint from probing a site the caller does not own.
+	body, err := h.coreGet(fmt.Sprintf("/v1/publishers/me/sites/%s/verification-token", siteID), claims)
+	if err != nil {
+		http.Error(w, "failed to get token", http.StatusInternalServerError)
+		return
+	}
+	// Every value of the challenge comes from the core response — the file
+	// URL, the exact record text, the DNS record name. The platform performs
+	// the lookups and compares; it never constructs the challenge itself, so
+	// a change to the record format or the DNS name cannot leave this
+	// reporting yesterday's rules.
+	var token struct {
+		FileURL       string `json:"fileUrl"`
+		FileContent   string `json:"fileContent"`
+		DNSRecordName string `json:"dnsRecordName"`
+	}
+	if err := json.Unmarshal(body, &token); err != nil || token.FileURL == "" {
+		writeJSONResp(w, http.StatusOK, verificationProbe{State: "unreachable"})
+		return
+	}
+
+	cacheKey := siteID
+	verificationProbeCache.Lock()
+	entry, ok := verificationProbeCache.entries[cacheKey]
+	verificationProbeCache.Unlock()
+	if ok && time.Now().Before(entry.expires) {
+		writeJSONResp(w, http.StatusOK, entry.result)
+		return
+	}
+
+	result := probeVerification(token.FileURL, token.DNSRecordName, token.FileContent)
+
+	verificationProbeCache.Lock()
+	verificationProbeCache.entries[cacheKey] = verificationProbeEntry{
+		result: result,
+		// Short for a negative answer: a publisher who has just put the file
+		// back should see that promptly, and "missing" is the state they act
+		// on. A positive answer is stable and worth holding longer.
+		expires: time.Now().Add(map[bool]time.Duration{true: time.Hour, false: 2 * time.Minute}[result.State == "present"]),
+	}
+	verificationProbeCache.Unlock()
+
+	writeJSONResp(w, http.StatusOK, result)
+}
+
+// probeVerification answers "is this site's proof of ownership still in
+// place?" against EITHER accepted proof.
+//
+// Both, not just the file: a publisher whose host owns the web root (lower-
+// tier WordPress.com and friends) verifies by DNS TXT and never serves the
+// file at all. Checking only the file would report "missing" on a site that
+// is perfectly proven, which is worse than not checking — it sends someone
+// fixing something that is not broken.
+//
+// The file is tried first because it is the common case and answers in
+// milliseconds; DNS is consulted only when the file does not settle it.
+func probeVerification(fileURL, dnsName, want string) verificationProbe {
+	result := probeVerificationFile(fileURL, want)
+	if result.State == "present" || dnsName == "" {
+		return result
+	}
+	if records, err := net.LookupTXT(dnsName); err == nil {
+		for _, record := range records {
+			if strings.TrimSpace(record) == strings.TrimSpace(want) {
+				return verificationProbe{State: "present", Method: "dns"}
+			}
+		}
+	}
+	// No DNS proof either: keep whatever the file probe concluded, since
+	// "missing" and "unreachable" and "foreign" are different fixes.
+	return result
+}
+
+// probeVerificationFile is the pure-ish probe, split out so its states are
+// testable without a handler or a session.
+func probeVerificationFile(fileURL, want string) verificationProbe {
+	resp, err := verificationProbeClient.Get(fileURL)
+	if err != nil {
+		// Unreachable is NOT missing. A blocked request, a TLS quirk or a
+		// host that refuses our user agent must not be reported to a
+		// publisher as "your file is gone" — that sends them fixing
+		// something that is not broken.
+		return verificationProbe{State: "unreachable"}
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return verificationProbe{State: "missing", Code: resp.StatusCode}
+	}
+	// Cap the read: this is a third-party response and the contract is one
+	// short line. A host that answers a 200 with a 4 MB error page should
+	// cost us a few KB, not memory.
+	raw, err := io.ReadAll(io.LimitReader(resp.Body, 4096))
+	if err != nil {
+		return verificationProbe{State: "unreachable"}
+	}
+	got := strings.TrimSpace(string(raw))
+	switch {
+	case got == strings.TrimSpace(want):
+		return verificationProbe{State: "present", Method: "file", Code: resp.StatusCode}
+	case strings.Contains(got, "promovolve-site-verification="):
+		// A token is served, but not this site's. Worth distinguishing:
+		// it means a stale static file or another install is answering,
+		// which is a different fix from "nothing is there".
+		return verificationProbe{State: "foreign", Code: resp.StatusCode}
+	default:
+		return verificationProbe{State: "missing", Code: resp.StatusCode}
+	}
 }
 
 // --- Publisher Stats ---
