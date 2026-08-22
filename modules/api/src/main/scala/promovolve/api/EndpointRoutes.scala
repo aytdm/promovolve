@@ -4362,6 +4362,43 @@ class EndpointRoutes(
         }
   }
 
+  // docs/design/SITE_TOKEN_CHECK.md. Own gate rather than the serve-path
+  // RequestHygiene: this is a tiny admin-driven trickle (one call per site
+  // per five minutes from a well-behaved plugin), and a cap tuned for ad
+  // serving would never bite an enumeration attempt. 1/s with a burst of 10
+  // per client IP is generous for every real caller and useless for a
+  // guesser.
+  private val tokenCheckGate = new promovolve.fraud.RequestRateGate(ratePerSec = 1.0, burst = 10.0)
+
+  private val tokenCheckLogic: ((String, Option[String], Option[String], TokenCheckRequest)) => Future[
+    Either[(sttp.model.StatusCode, ErrorResponse), TokenCheckResponse]] = {
+    case (siteId, connIp, forwardedFor, req) =>
+      // Behind the ingress the connection IP is the load balancer; the first
+      // X-Forwarded-For entry is the client. Fall back to the connection.
+      val ip = forwardedFor
+        .flatMap(_.split(',').headOption.map(_.trim).filter(_.nonEmpty))
+        .orElse(connIp)
+        .getOrElse("unknown")
+      if (!tokenCheckGate.allow(s"token-check:$ip"))
+        Future.successful(Left((sttp.model.StatusCode.TooManyRequests,
+          ErrorResponse("rate_limited", "Too many token checks from this address; try again shortly"))))
+      else
+        siteRef(siteId)
+          .ask[SiteEntity.TokenCheckResult](SiteEntity.CheckVerificationToken(req.token, _))
+          .map {
+            case SiteEntity.TokenValid   => Right(TokenCheckResponse("valid"))
+            case SiteEntity.TokenStale   => Right(TokenCheckResponse("stale"))
+            case SiteEntity.TokenUnknown => Right(TokenCheckResponse("unknown"))
+          }
+          // An ask failure is "I could not answer", not "no": 503 so the
+          // caller fails open and keeps serving its file. The presented token
+          // is deliberately not logged.
+          .recover { case ex =>
+            Left((sttp.model.StatusCode.ServiceUnavailable,
+              ErrorResponse("token_check_unavailable", ex.getMessage)))
+          }
+  }
+
   private val verifySiteLogic: ((String, String)) => Future[Either[ErrorResponse, VerificationResponse]] = {
     case (publisherId, siteId) =>
       siteRef(siteId)
@@ -4402,7 +4439,10 @@ class EndpointRoutes(
     PekkoHttpServerInterpreter().toRoute(
       Endpoints.getVerificationToken.serverLogic(gateSite2(getVerificationTokenLogic))),
     PekkoHttpServerInterpreter().toRoute(Endpoints.verifySite.serverLogic(gateSite2(verifySiteLogic))),
-    PekkoHttpServerInterpreter().toRoute(Endpoints.forceVerifySite.serverLogic(gateSite3(forceVerifySiteLogic)))
+    PekkoHttpServerInterpreter().toRoute(Endpoints.forceVerifySite.serverLogic(gateSite3(forceVerifySiteLogic))),
+    // Public, deliberately NOT behind gateSite2: the caller is a site's CMS,
+    // not a publisher session. See the endpoint doc.
+    PekkoHttpServerInterpreter().toRoute(Endpoints.tokenCheck.serverLogic(tokenCheckLogic))
   )
 
   private val resetFloorAgentLogic: ((String, String)) => Future[Either[ErrorResponse, Unit]] = {

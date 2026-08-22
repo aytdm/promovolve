@@ -1,7 +1,8 @@
 # Site token check
 
-> Status: **spec**, 2026-08-22. Not implemented. Ships as an api change first,
-> then WordPress plugin 0.5.1; either half is inert without the other.
+> Status: **api half built** (2026-08-22): `POST /v1/sites/{siteId}/token-check`,
+> `SiteEntity.CheckVerificationToken`, `SiteTokenCheckSpec`. Plugin 0.5.1 half
+> not yet built; until then the endpoint has no caller and is inert.
 
 ## Decision
 

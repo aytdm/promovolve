@@ -1406,6 +1406,14 @@ object SiteEntity {
                     Effect.none.thenReply(replyTo)(_ => VerificationTokenNotAvailable(siteId))
                 }
 
+              case CheckVerificationToken(presented, replyTo) =>
+                // Pure decision; nothing persisted, nothing logged above
+                // debug — the presented value is a credential on a public
+                // endpoint and must not end up in an INFO line.
+                val result = tokenCheck(state.config.isDefined, state.verificationToken, presented)
+                ctx.log.debug("SiteEntity {} token check: {}", siteId.value, result)
+                Effect.none.thenReply(replyTo)(_ => result)
+
               case GetVerificationStatus(replyTo) =>
                 Effect.none.thenReply(replyTo)(_ =>
                   VerificationStatusResult(
@@ -2619,6 +2627,40 @@ object SiteEntity {
   final case class VerificationTokenFound(siteId: SiteId, token: VerificationToken, domain: String)
       extends VerificationTokenResult
   final case class VerificationTokenNotAvailable(siteId: SiteId) extends VerificationTokenResult
+
+  /**
+   * "Is the token I hold still this site's current token?" — asked by a CMS
+   * integration (the WordPress plugin) so it can stop serving a stale one.
+   * docs/design/SITE_TOKEN_CHECK.md. Read-only: no persistence, no side
+   * effects, and deliberately no token generation — unlike
+   * GetVerificationToken, a caller proving a token must not be able to
+   * mint one.
+   */
+  final case class CheckVerificationToken(token: String, replyTo: ActorRef[TokenCheckResult]) extends Command
+  sealed trait TokenCheckResult extends promovolve.CborSerializable
+  case object TokenValid extends TokenCheckResult
+  case object TokenStale extends TokenCheckResult
+  case object TokenUnknown extends TokenCheckResult
+
+  /**
+   * The decision behind CheckVerificationToken, pure so it is testable.
+   *
+   * `Unknown` when the site is not initialised (never created, still a
+   * pre-approval shell, or a tombstone — all of which have no config) or
+   * holds no token; `Valid` on a byte-exact match; `Stale` otherwise.
+   * Constant-time comparison: the presented value is a credential and the
+   * endpoint is public, so the compare must not leak where it diverged.
+   */
+  def tokenCheck(initialised: Boolean, current: Option[VerificationToken], presented: String): TokenCheckResult =
+    if (!initialised) TokenUnknown
+    else
+      current match {
+        case None    => TokenUnknown
+        case Some(t) =>
+          val a = t.value.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+          val b = presented.getBytes(java.nio.charset.StandardCharsets.UTF_8)
+          if (java.security.MessageDigest.isEqual(a, b)) TokenValid else TokenStale
+      }
 
   /** Trigger HTTP-file verification check */
   final case class RequestVerification(replyTo: ActorRef[VerificationResult]) extends Command

@@ -271,6 +271,33 @@ object Endpoints extends ApiJsonFormats {
       .out(jsonBody[VerificationResponse])
       .errorOut(jsonBody[ErrorResponse])
 
+  /**
+   * docs/design/SITE_TOKEN_CHECK.md. PUBLIC and unauthenticated by design:
+   * the caller is a site's CMS integration, not a logged-in user, and
+   * holding the token is the authentication — exactly as it is for the
+   * verification file itself. Keyed by siteId (not secret; it is in every
+   * page's data-pub). Token in the body. Rate-limited per client IP in the
+   * server logic.
+   */
+  val tokenCheck: PublicEndpoint[(String, Option[String], Option[String], TokenCheckRequest),
+    (sttp.model.StatusCode, ErrorResponse), TokenCheckResponse, Any] =
+    endpoint
+      .tag("Sites")
+      .summary("Check a site's verification token")
+      .description(
+        "Answers whether the presented token is the site's current verification token: " +
+        "valid | stale | unknown. Always 200 for those three — existence cannot be probed by status. " +
+        "Used by CMS integrations to stop serving a token that is no longer the site's.")
+      .post
+      .in(v1 / "sites" / path[String]("siteId") / "token-check")
+      .in(clientIp)
+      .in(header[Option[String]]("X-Forwarded-For"))
+      .in(jsonBody[TokenCheckRequest])
+      .out(jsonBody[TokenCheckResponse])
+      // 429 under the rate cap, 503 when the entity cannot be asked — both
+      // are "unreachable" to a well-behaved caller, which then fails OPEN.
+      .errorOut(statusCode.and(jsonBody[ErrorResponse]))
+
   val forceVerifySite: PublicEndpoint[(String, String, String), ErrorResponse, VerificationResponse, Any] =
     endpoint
       .tag("Sites")

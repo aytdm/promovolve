@@ -339,6 +339,16 @@ object ApiModels {
       dnsRecordValue: String
   )
 
+  // docs/design/SITE_TOKEN_CHECK.md — the token travels in the BODY, never
+  // the query string: it is a credential and query strings land in access
+  // logs and Referers.
+  case class TokenCheckRequest(token: String)
+
+  // `state` is one of valid | stale | unknown — always HTTP 200, so a caller
+  // cannot tell stale from unknown by status code and existence cannot be
+  // probed that way.
+  case class TokenCheckResponse(state: String)
+
   case class VerificationResponse(
       verified: Boolean,
       host: Option[String] = None,

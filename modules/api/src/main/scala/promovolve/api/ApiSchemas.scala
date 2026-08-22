@@ -47,6 +47,8 @@ object ApiSchemas {
   given Schema[CreateSiteRequest] = Schema.derived
   given Schema[UpdateSiteRequest] = Schema.derived
   given Schema[VerificationTokenResponse] = Schema.derived
+  given Schema[TokenCheckRequest] = Schema.derived
+  given Schema[TokenCheckResponse] = Schema.derived
   given Schema[VerificationResponse] = Schema.derived
 
   // Pacing Config
