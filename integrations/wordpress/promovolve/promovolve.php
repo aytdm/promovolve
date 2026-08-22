@@ -1223,7 +1223,7 @@ function promovolve_render_settings_page() {
 				<td>
 					<?php if ( ! empty( $context['place'] ) ) : ?>
 						<p><?php echo wp_kses_post( $labels( $context['place'] ) ); ?></p>
-						<p class="description"><?php esc_html_e( 'Terms from these are sent as the place hint — a post filed under one of them tells the ad server which town or region the article is about, which is what lets an advertiser buy that destination specifically. Term names are sent exactly as you wrote them, in any language; term slugs are never read.', 'promovolve' ); ?></p>
+						<p class="description"><?php esc_html_e( 'Terms from these are sent as the place hint — a post filed under one of them tells the ad server which town or region the article is about, which is what lets an advertiser buy that destination specifically. Term names are sent exactly as you wrote them, in any language; term slugs are never read. While these exist, the geo_address fallback below is not consulted: a term you filed deliberately outranks a stray custom field.', 'promovolve' ); ?></p>
 					<?php else : ?>
 						<p class="description">
 							<?php
@@ -1234,7 +1234,43 @@ function promovolve_render_settings_page() {
 							);
 							?>
 						</p>
-						<p class="description"><?php esc_html_e( 'It is worth doing: a travel or local site whose destinations exist only in prose competes as generic inventory, while one that files them can be bought by an advertiser targeting that exact town. The label is yours — 行き先, Reiseziel, anything — only the slug is matched. Where no place taxonomy exists, the geo_address post meta is read instead.', 'promovolve' ); ?></p>
+						<p class="description"><?php esc_html_e( 'It is worth doing: a travel or local site whose destinations exist only in prose competes as generic inventory, while one that files them can be bought by an advertiser targeting that exact town. The label is yours — 行き先, Reiseziel, anything — only the slug is matched.', 'promovolve' ); ?></p>
+
+						<?php
+						// The per-post escape hatch, spelled out. A taxonomy is
+						// the right answer for a site that publishes about
+						// places regularly; geo_address is for the site that
+						// does so occasionally and will not restructure its
+						// content for one post.
+						?>
+						<p class="description" style="margin-top:10px;">
+							<strong><?php esc_html_e( 'One-off posts: the geo_address custom field', 'promovolve' ); ?></strong><br>
+							<?php esc_html_e( 'A taxonomy is overkill for a site that mentions a place twice a year. Where a post has no place taxonomy term, this plugin falls back to a custom field named geo_address — WordPress\'s own long-standing convention for "where is this post about", written by geo plugins such as Simple Location and readable by hand. Put a plain place name in it, most specific first, the way you would write it on an envelope. It is a property of the post, so it is safe under page caching, and it is only read on single posts and pages.', 'promovolve' ); ?>
+						</p>
+						<table class="widefat striped" style="max-width:46em;margin:4px 0 8px;">
+							<thead>
+								<tr>
+									<th style="width:11em;"><?php esc_html_e( 'Custom field', 'promovolve' ); ?></th>
+									<th><?php esc_html_e( 'Value', 'promovolve' ); ?></th>
+									<th style="width:14em;"><?php esc_html_e( 'What the server resolves', 'promovolve' ); ?></th>
+								</tr>
+							</thead>
+							<tbody>
+								<tr>
+									<td><code>geo_address</code></td>
+									<td><code>Kinosaki Onsen, Toyooka, Hyogo</code></td>
+									<td><?php esc_html_e( 'the town of Toyooka — the onsen district resolves up to the city around it', 'promovolve' ); ?></td>
+								</tr>
+								<tr>
+									<td><code>geo_address</code></td>
+									<td><code>金沢市, 石川県</code></td>
+									<td><?php esc_html_e( 'Kanazawa — names in any language are fine', 'promovolve' ); ?></td>
+								</tr>
+							</tbody>
+						</table>
+						<p class="description">
+							<?php esc_html_e( 'To add it by hand: open the post, choose Preferences from the editor’s ⋮ menu, switch on Custom fields, then add a field named geo_address with the place as its value. Write a place, not a street address or coordinates — geo_latitude and geo_longitude are deliberately ignored, and a postcode narrows nothing an advertiser can buy. Do not put your own business address here: what the article is ABOUT is the question, not where you are.', 'promovolve' ); ?>
+						</p>
 					<?php endif; ?>
 
 					<?php
