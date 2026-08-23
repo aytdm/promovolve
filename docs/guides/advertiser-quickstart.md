@@ -40,6 +40,7 @@ From **Campaigns → New campaign** you provide:
 | Target categories | Optional; auto-derived from your landing page if left empty |
 | Sites | Optional allowlist; empty = eligible everywhere |
 | Schedule | Optional start/end, in your account timezone (the form says which) |
+| Frequency cap | Optional: at most N impressions per hour / day / week **per reader's browser, per site**. The reader's own browser keeps the count and declines the campaign once it has seen enough; Promovolve never identifies readers, so the cap does not follow them across devices or sites |
 
 **Why the landing page is permanent:** your creative is generated *from*
 the landing page and the system's learning about the creative is anchored

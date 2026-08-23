@@ -972,6 +972,11 @@ type campaignData struct {
 	// Places a PAGE must be about. The other geographic axis from
 	// AudienceTargeting — subject, not readers.
 	PlaceTargeting []audienceRegion
+	// Frequency cap (docs/design/FREQUENCY_CAPPING.md): 0 = none. Window is
+	// "hour" | "day" | "week"; "day" when uncapped so the edit form's select
+	// has a sensible default. Per browser, per site — enforced by the ad tag.
+	FrequencyCapN      int
+	FrequencyCapWindow string
 	// Schedule. *Local fields are the value to put in a datetime-local
 	// input. *Display are human-readable strings for the row header.
 	// EndAtLocal = "" means open-ended. EndAtPassed = end date is in
@@ -1090,20 +1095,21 @@ func (h *Handler) AdvertiserCampaigns(w http.ResponseWriter, r *http.Request) {
 			Bidding           struct {
 				MaxCPM string `json:"maxCpm"`
 			} `json:"bidding"`
-			LandingURL              string   `json:"landingUrl"`
-			Spent                   *string  `json:"spent"`
-			Remaining               *string  `json:"remaining"`
-			BidOnUnmatchedContext   bool     `json:"bidOnUnmatchedContext"`
-			Untargeted              bool     `json:"untargeted"`
-			TargetCategories        []string `json:"targetCategories"`
-			TargetCategoryNames     []string `json:"targetCategoryNames"`
-			SuggestedCategories     []string `json:"suggestedCategories"`
-			SuggestedCategoryNames  []string `json:"suggestedCategoryNames"`
-			AdProductCategoryName   string   `json:"adProductCategoryName"`
-			SiteAllowlist           []string `json:"siteAllowlist"`
-			AudienceTargeting       []string `json:"audienceTargeting"`
-			RequireVerifiedAudience bool     `json:"requireVerifiedAudience"`
-			PlaceTargeting          []string `json:"placeTargeting"`
+			LandingURL              string            `json:"landingUrl"`
+			Spent                   *string           `json:"spent"`
+			Remaining               *string           `json:"remaining"`
+			BidOnUnmatchedContext   bool              `json:"bidOnUnmatchedContext"`
+			Untargeted              bool              `json:"untargeted"`
+			TargetCategories        []string          `json:"targetCategories"`
+			TargetCategoryNames     []string          `json:"targetCategoryNames"`
+			SuggestedCategories     []string          `json:"suggestedCategories"`
+			SuggestedCategoryNames  []string          `json:"suggestedCategoryNames"`
+			AdProductCategoryName   string            `json:"adProductCategoryName"`
+			SiteAllowlist           []string          `json:"siteAllowlist"`
+			AudienceTargeting       []string          `json:"audienceTargeting"`
+			RequireVerifiedAudience bool              `json:"requireVerifiedAudience"`
+			PlaceTargeting          []string          `json:"placeTargeting"`
+			FrequencyCap            *coreFrequencyCap `json:"frequencyCap"`
 			Schedule                struct {
 				StartAt string  `json:"startAt"`
 				EndAt   *string `json:"endAt"`
@@ -1216,6 +1222,7 @@ func (h *Handler) AdvertiserCampaigns(w http.ResponseWriter, r *http.Request) {
 				endPassed = time.Now().After(t)
 			}
 		}
+		freqN, freqWindow := freqCapFields(c.FrequencyCap)
 		cd := campaignData{
 			ID:                      c.ID,
 			Name:                    c.Name,
@@ -1232,6 +1239,8 @@ func (h *Handler) AdvertiserCampaigns(w http.ResponseWriter, r *http.Request) {
 			AudienceTargeting:       h.resolvePlaces(c.AudienceTargeting, claims, lang),
 			RequireVerifiedAudience: c.RequireVerifiedAudience,
 			PlaceTargeting:          h.resolvePlaces(c.PlaceTargeting, claims, lang),
+			FrequencyCapN:           freqN,
+			FrequencyCapWindow:      freqWindow,
 			StartAtLocal:            startLocal,
 			StartAtDisplay:          startDisplay,
 			StartAtFuture:           startFuture,
@@ -1694,6 +1703,12 @@ func (h *Handler) CreateCampaign(w http.ResponseWriter, r *http.Request) {
 			payload["siteAllowlist"] = sites
 		}
 	}
+	// Frequency cap: "0" / absent = no cap. Per browser, per site — the ad
+	// tag enforces it from the reader's own storage; the core only keeps
+	// the policy (docs/design/FREQUENCY_CAPPING.md).
+	if n, err := strconv.Atoi(strings.TrimSpace(r.FormValue("freqCapN"))); err == nil && n > 0 {
+		payload["frequencyCap"] = map[string]any{"impressions": n, "window": freqCapWindowOr(r.FormValue("freqCapWindow"))}
+	}
 	body, _ := json.Marshal(payload)
 	// Checked: a rejected create (e.g. operator-prohibited ad-product
 	// category) must land back on the form as an error banner, not
@@ -1859,6 +1874,15 @@ func (h *Handler) UpdateCampaign(w http.ResponseWriter, r *http.Request) {
 		// The checkbox only submits when checked, so its absence alongside a
 		// present targeting field is a real "off" rather than "unchanged".
 		payload["requireVerifiedAudience"] = r.FormValue("requireVerifiedAudience") == "on"
+	}
+	// Frequency cap: the edit panel always submits both selects, so their
+	// presence means "set to this"; impressions 0 clears (the core maps it
+	// to Some(None)). Absent ⇒ omit (no change) — the quick CPM/schedule
+	// forms never touch it.
+	if r.Form.Has("freqCapN") {
+		if n, err := strconv.Atoi(strings.TrimSpace(r.FormValue("freqCapN"))); err == nil && n >= 0 {
+			payload["frequencyCap"] = map[string]any{"impressions": n, "window": freqCapWindowOr(r.FormValue("freqCapWindow"))}
+		}
 	}
 	// Schedule: only when a start is provided (CampaignSchedule.startAt is
 	// required to also set endAt). Mirrors CreateCampaign's datetime-local
@@ -5144,4 +5168,33 @@ func computeArgmaxStability(lang string, history []argmaxHistoryPoint) *argmaxSt
 		Recent:      recent,
 		N:           n,
 	}
+}
+
+// coreFrequencyCap mirrors the core's FrequencyCapDto on the Campaign
+// response: at most Impressions per reader's browser per Window
+// ("hour" | "day" | "week"); nil = uncapped.
+type coreFrequencyCap struct {
+	Impressions int    `json:"impressions"`
+	Window      string `json:"window"`
+}
+
+// freqCapFields turns the core's optional cap into the two values the edit
+// form pre-fills: 0/"day" when uncapped so the selects show "No cap / per
+// day" instead of an empty option.
+func freqCapFields(fc *coreFrequencyCap) (int, string) {
+	if fc == nil || fc.Impressions <= 0 {
+		return 0, "day"
+	}
+	return fc.Impressions, freqCapWindowOr(fc.Window)
+}
+
+// freqCapWindowOr whitelists the window select's value; anything else
+// (tampered form, older template) falls back to "day" rather than letting
+// the core reject the whole edit.
+func freqCapWindowOr(w string) string {
+	switch w {
+	case "hour", "day", "week":
+		return w
+	}
+	return "day"
 }

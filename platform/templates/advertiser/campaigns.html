@@ -277,6 +277,26 @@
         <span data-hint-slot>{{template "market-rates-hint" $.MarketRates}}</span>
       </div>
     </div>
+    <div class="mb-4">
+      <label class="form-label">{{t "Frequency cap"}} <span class="font-normal text-gray-500">{{t "(optional)"}}</span></label>
+      <div class="flex items-center gap-2">
+        <select name="freqCapN" class="form-input w-28">
+          <option value="0">{{t "No cap"}}</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3">3</option>
+          <option value="5">5</option>
+          <option value="10">10</option>
+        </select>
+        <span class="text-sm text-gray-600">{{t "impressions"}}</span>
+        <select name="freqCapWindow" class="form-input w-32">
+          <option value="hour">{{t "per hour"}}</option>
+          <option value="day" selected>{{t "per day"}}</option>
+          <option value="week">{{t "per week"}}</option>
+        </select>
+      </div>
+      <p class="text-xs text-gray-400 mt-1">{{t "Per browser, per site: the reader's own browser keeps the count and simply declines this campaign once it has seen enough. Promovolve never identifies readers, so the cap does not follow them across devices or sites."}}</p>
+    </div>
     <div class="grid grid-cols-2 gap-4 mb-4">
       <div>
         <label class="form-label">{{t "Start date"}} <span class="font-normal text-gray-500">{{t "(optional — blank = start now)"}}</span></label>
@@ -855,7 +875,26 @@
               <span data-hint-slot>{{template "market-rates-hint" $.MarketRates}}</span>
             </div>
           </div>
-
+          <div class="mb-4">
+            <label class="form-label">{{t "Frequency cap"}} <span class="font-normal text-gray-500">{{t "(optional)"}}</span></label>
+            <div class="flex items-center gap-2">
+              <select name="freqCapN" class="form-input w-28">
+                <option value="0" {{if eq .FrequencyCapN 0}}selected{{end}}>{{t "No cap"}}</option>
+                <option value="1" {{if eq .FrequencyCapN 1}}selected{{end}}>1</option>
+                <option value="2" {{if eq .FrequencyCapN 2}}selected{{end}}>2</option>
+                <option value="3" {{if eq .FrequencyCapN 3}}selected{{end}}>3</option>
+                <option value="5" {{if eq .FrequencyCapN 5}}selected{{end}}>5</option>
+                <option value="10" {{if eq .FrequencyCapN 10}}selected{{end}}>10</option>
+              </select>
+              <span class="text-sm text-gray-600">{{t "impressions"}}</span>
+              <select name="freqCapWindow" class="form-input w-32">
+                <option value="hour" {{if eq .FrequencyCapWindow "hour"}}selected{{end}}>{{t "per hour"}}</option>
+                <option value="day" {{if eq .FrequencyCapWindow "day"}}selected{{end}}>{{t "per day"}}</option>
+                <option value="week" {{if eq .FrequencyCapWindow "week"}}selected{{end}}>{{t "per week"}}</option>
+              </select>
+            </div>
+            <p class="text-xs text-gray-400 mt-1">{{t "Per browser, per site: the reader's own browser keeps the count and simply declines this campaign once it has seen enough. Promovolve never identifies readers, so the cap does not follow them across devices or sites."}}</p>
+          </div>
           <div class="grid grid-cols-2 gap-4 mb-4">
             <div>
               <label class="form-label">{{t "Start date"}} <span class="font-normal text-gray-500">({{$.ScheduleTz}})</span></label>

@@ -16,7 +16,11 @@
 > pin-honoured), sends `excludeCampaigns`. `FrequencyCapWire` carries
 > `campaignId` (ServeRes has no campaign id otherwise). vitest: `frequency-cap`,
 > `dogear-storage` impressions, `serve-retry` body case. **Dashboard half
-> (create/edit field, i18n, help) not built yet.** Before this: the only cap was *one campaign per page per
+> BUILT** (2026-08-24): create form + inline Edit panel "Frequency cap"
+> (No cap / 1 2 3 5 10 × per hour/day/week; `freqCapN`/`freqCapWindow`),
+> Go proxy sends `frequencyCap` on create (n > 0) and on every edit-panel save
+> (0 clears), EN/ja strings, advertiser guide row, `campaigns_render_test`.
+> **All three halves built; rollout in progress.** Before this: the only cap was *one campaign per page per
 > batch* (`AdServer.batchReserveWithRetry`); no `frequencyCap` field had ever
 > existed (`git log --all -S frequencyCap` was empty).
 
