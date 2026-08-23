@@ -41,7 +41,7 @@ Return ONLY a raw JSON array. No markdown fences, no explanation.
 HTML:
 '
 
-RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$GEMINI_API_KEY" \
+RESPONSE=$(curl -s "https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL:-gemini-2.5-flash}:generateContent?key=$GEMINI_API_KEY" \
   -H "Content-Type: application/json" \
   -d "$(jq -n --arg prompt "$PROMPT" --arg html "$LP_HTML" '{
     contents: [{parts: [{text: ($prompt + $html)}]}],

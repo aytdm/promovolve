@@ -125,7 +125,7 @@ class IABTaxonomySpec extends AnyWordSpec with Matchers with OptionValues {
       val provider = Provider.Gemini("gemini-key")
 
       provider.name shouldBe "Gemini"
-      provider.model shouldBe "gemini-2.0-flash"
+      provider.model shouldBe "gemini-2.5-flash"
     }
 
     "fromEnv should throw when no API keys are set" in {

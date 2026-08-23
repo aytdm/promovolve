@@ -19,7 +19,7 @@ import scala.util.Try
  * Supports multiple providers:
  *   - OpenAI (gpt-4o-mini) - default
  *   - Anthropic (claude-3-haiku)
- *   - Google Gemini (gemini-2.0-flash) - cheapest
+ *   - Google Gemini (gemini-2.5-flash) - cheapest
  *
  * Uses Pekko HTTP for all providers.
  */
@@ -711,13 +711,20 @@ object IABTaxonomy extends DefaultJsonProtocol {
       val name = "Anthropic"
     }
 
-    case class Gemini(apiKey: String, model: String = "gemini-2.0-flash") extends Provider {
+    case class Gemini(apiKey: String, model: String = Provider.DefaultGeminiModel) extends Provider {
       val name = "Gemini"
     }
 
-    /** Create provider from environment variables (cheapest first). */
+    /**
+     * One name for the default Gemini model, shared with ClusterBootstrap.
+     * Google retires model names (gemini-2.0-flash answers 404 since
+     * 2026-08); a tool that lagged the app's default broke silently.
+     */
+    val DefaultGeminiModel = "gemini-2.5-flash"
+
+    /** Create provider from environment variables (cheapest first); GEMINI_MODEL overrides the model. */
     def fromEnv(): Provider =
-      sys.env.get("GEMINI_API_KEY").map(Gemini(_))
+      sys.env.get("GEMINI_API_KEY").map(k => Gemini(k, sys.env.getOrElse("GEMINI_MODEL", DefaultGeminiModel)))
         .orElse(sys.env.get("OPENAI_API_KEY").map(OpenAI(_)))
         .orElse(sys.env.get("ANTHROPIC_API_KEY").map(Anthropic(_)))
         .getOrElse(throw new IllegalStateException(

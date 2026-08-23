@@ -534,7 +534,7 @@ object ClusterBootstrap {
           val apiKey = config.getString("promovolve.gemini.api-key")
           val model = if (config.hasPath("promovolve.gemini.model"))
             config.getString("promovolve.gemini.model")
-          else "gemini-2.5-flash"
+          else IABTaxonomy.Provider.DefaultGeminiModel
           system.log.info("Using Gemini for taxonomy classification (model: {})", model)
           IABTaxonomy.Provider.Gemini(apiKey, model)
         } else if (configuredKey("promovolve.openai.api-key").isDefined) {

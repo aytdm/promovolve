@@ -29,7 +29,7 @@ no static relevance-score table.
 
 LLM-backed classifier with pluggable providers — Gemini (the effective
 deployment default is `gemini-2.5-flash`, set in `ClusterBootstrap`; the bare
-case-class default is `gemini-2.0-flash`), OpenAI (`gpt-4o-mini`), and
+case-class default is `gemini-2.5-flash`, `GEMINI_MODEL` overrides), OpenAI (`gpt-4o-mini`), and
 Anthropic (`claude-3-haiku`). Operational hardening around the call:
 
 - **Circuit breaker** — 5 consecutive failures open the breaker for 30s
