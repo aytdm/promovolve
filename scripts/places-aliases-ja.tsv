@@ -1,0 +1,12 @@
+# Everyday Japanese names that NEITHER source carries - iso-codes ships the
+# formal name (英国), GeoNames' ja alternate names for the country entity
+# are sparse (the UK has only 英国). Merged into places/aliases_ja.tsv by
+# build-places.mjs; search-only, never displayed. code<TAB>name.
+GB	イギリス
+GB	UK
+US	アメリカ合衆国
+US	USA
+AU	豪州
+RU	ロシア
+AE	UAE
+VN	ヴェトナム

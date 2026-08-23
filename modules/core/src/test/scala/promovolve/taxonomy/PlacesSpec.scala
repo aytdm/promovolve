@@ -194,6 +194,32 @@ class PlacesSpec extends AnyWordSpec with Matchers with OptionValues {
       Places.search("kyoto").map(_.code) should contain("JP-26")
     }
 
+    "find a country by its everyday Japanese name, not only the catalogue's formal one" in {
+      // iso-codes says 米国 / 英国; GeoNames' alternate names supply the
+      // names people actually type.
+      Places.search("アメリカ").headOption.map(_.code) shouldBe Some("US")
+      Places.search("イギリス").map(_.code) should contain("GB")
+      Places.search("米国").map(_.code) should contain("US")
+    }
+
+    "find foreign cities by their Japanese names" in {
+      Places.search("ロサンゼルス").map(_.code) should contain("GN5368361")
+      Places.search("ロンドン").map(_.code) should contain("GN2643743")
+      Places.search("ニューヨーク").map(_.code) should contain("GN5128581")
+    }
+
+    "keep kana voicing marks apart: パリ is Paris, not Bali" in {
+      val paris = Places.search("パリ").map(_.code)
+      paris should contain("GN2988507")
+      paris should not contain "ID-BA"
+    }
+
+    "tolerate a Japanese administrative suffix on the query" in {
+      Places.search("石川県").map(_.code) should contain("JP-17")
+      Places.search("豊岡市").map(_.code) should contain("GN1849831")
+      Places.search("鎌倉市").map(_.code) should contain(Kamakura)
+    }
+
     "rank broader places above cities on an equal prefix match" in {
       val hits = Places.search("japan").map(_.code)
       hits.headOption.value shouldBe "JP"

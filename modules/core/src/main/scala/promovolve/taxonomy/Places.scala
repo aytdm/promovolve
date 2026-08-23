@@ -47,6 +47,10 @@ object Places {
   private val CountriesPath = "/places/countries"
   private val SubdivisionsPath = "/places/subdivisions"
   private val CitiesPath = "/places/cities"
+  // Search-only names: every OTHER localised name GeoNames knows for a
+  // place (アメリカ beside the catalogue's 米国, ロス beside ロサンゼルス).
+  // Many rows per code, never shown — display stays the one curated name.
+  private val AliasesPath = "/places/aliases"
 
   private lazy val byCode: Map[String, Place] = {
     val countries = loadTsv(s"$CountriesPath.tsv", 2) { cols =>
@@ -73,9 +77,27 @@ object Places {
     }.toMap
   }
 
-  /** Search index: normalized name → codes, built once from both languages. */
+  /** Search-only aliases per compiled-in language, as (code, name) rows. */
+  private lazy val aliases: Vector[(String, String)] =
+    LocalizedNames.langs.toVector.flatMap { lang =>
+      Option(getClass.getResourceAsStream(s"${AliasesPath}_$lang.tsv")) match {
+        case None     => Vector.empty // optional table: search is merely narrower without it
+        case Some(is) =>
+          Using(Source.fromInputStream(is, "UTF-8")) { source =>
+            source
+              .getLines()
+              .drop(1)
+              .filter(_.nonEmpty)
+              .map(_.split("\t", -1))
+              .collect { case cols if cols.length >= 2 && cols(0).nonEmpty && cols(1).nonEmpty => cols(0) -> cols(1) }
+              .toVector
+          }.getOrElse(Vector.empty)
+      }
+    }
+
+  /** Search index: normalized name → codes, built once from every language plus aliases. */
   private lazy val searchIndex: Vector[(String, Place)] = {
-    val locales = localized.values.flatten.toVector
+    val locales = localized.values.flatten.toVector ++ aliases
     val fromLocal = locales.flatMap { case (code, name) => byCode.get(code).map(p => normalize(name) -> p) }
     val fromEn = byCode.valuesIterator.map(p => normalize(p.name) -> p).toVector
     (fromEn ++ fromLocal).distinct
@@ -278,6 +300,24 @@ object Places {
    * ahead of cities since their population is 0 but they are broader).
    */
   def search(query: String, limit: Int = 20): List[Place] = {
+    val direct = searchExact(query, limit)
+    // Japanese place names are typed with their administrative suffix
+    // (石川県, 豊岡市) while the tables carry the bare name (石川, 豊岡) —
+    // the same tolerance `resolveCity` extends to the classifier.
+    if (direct.nonEmpty) direct
+    else
+      stripAdminSuffix(query.trim) match {
+        case Some(bare) => searchExact(bare, limit)
+        case None       => direct
+      }
+  }
+
+  private val AdminSuffixes = "都道府県市町村区"
+
+  private def stripAdminSuffix(s: String): Option[String] =
+    if (s.length > 1 && AdminSuffixes.contains(s.last)) Some(s.dropRight(1)) else None
+
+  private def searchExact(query: String, limit: Int): List[Place] = {
     val q = normalize(query)
     if (q.isEmpty) Nil
     else {
@@ -301,14 +341,17 @@ object Places {
   }
 
   /** Diacritic- and punctuation-insensitive key, matching the build script. */
-  private def normalize(s: String): String =
-    java.text.Normalizer
+  private def normalize(s: String): String = {
+    val decomposed = java.text.Normalizer
       .normalize(s, java.text.Normalizer.Form.NFD)
       .toLowerCase
       // NFD splits diacritics into combining marks, which are not
       // letters or digits — so this one filter drops accents and
-      // punctuation together.
-      .filter(_.isLetterOrDigit)
+      // punctuation together. Kana voicing marks are the exception:
+      // dropping them makes パリ (Paris) and バリ (Bali) the same word.
+      .filter(c => c.isLetterOrDigit || c == '\u3099' || c == '\u309A')
+    java.text.Normalizer.normalize(decomposed, java.text.Normalizer.Form.NFC)
+  }
 
   private def loadTsv(resourcePath: String, minCols: Int)(build: Array[String] => Place): Vector[Place] =
     Option(getClass.getResourceAsStream(resourcePath)) match {

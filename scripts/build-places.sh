@@ -26,10 +26,13 @@ trap 'rm -rf "$TMP"' EXIT
 
 # Languages with a catalogue in this build (see LocalizedNames.langs), and
 # the countries whose GeoNames alternate-name dumps supply localised CITY
-# names. Country and subdivision names come from the iso-codes catalogues
-# and need no per-country dump.
+# names and search aliases. Country and subdivision DISPLAY names come from
+# the iso-codes catalogues; the dumps add the everyday names next to them
+# (アメリカ beside 米国) and the only localised names cities get at all, so
+# the list is the set of destinations an advertiser is likely to type in
+# the catalogue language. Each country is one more download.
 LANGS="${PLACES_LANGS:-ja}"
-ALT_COUNTRIES="${PLACES_ALT_COUNTRIES:-JP}"
+ALT_COUNTRIES="${PLACES_ALT_COUNTRIES:-JP,KR,CN,TW,HK,TH,VN,SG,MY,ID,PH,IN,AU,NZ,US,CA,MX,GB,IE,FR,DE,IT,ES,PT,NL,CH,AT,GR,TR,AE}"
 
 echo "-> downloading into $TMP"
 node -e '
@@ -41,6 +44,7 @@ const files = [
   [`${iso}/data/iso_3166-1.json`, "iso_3166-1.json"],
   [`${iso}/data/iso_3166-2.json`, "iso_3166-2.json"],
   [`${gn}/admin1CodesASCII.txt`, "admin1CodesASCII.txt"],
+  [`${gn}/countryInfo.txt`, "countryInfo.txt"],
   [`${gn}/cities5000.zip`, "cities5000.zip"],
   ...langs.split(",").filter(Boolean).flatMap((l) => [
     [`${iso}/iso_3166-1/${l}.po`, `iso_3166-1_${l}.po`],

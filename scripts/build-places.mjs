@@ -22,8 +22,12 @@
 //
 // Localised names follow the existing taxonomy convention
 // (LocalizedNames.loadAll): `<base>_<lang>.tsv` of `code<TAB>name`.
+// `aliases_<lang>.tsv` (same shape, many rows per code) carries every
+// OTHER localised name GeoNames knows for a place - the everyday アメリカ
+// next to the catalogue's formal 米国 - and feeds search only, never display.
 
 import fs from "node:fs";
+import readline from "node:readline";
 
 const [srcDir, outDir, langsArg] = process.argv.slice(2);
 const LANGS = (langsArg || "ja").split(",").filter(Boolean);
@@ -99,6 +103,23 @@ for (const [gnKey, name] of gnAdmin1Name) {
   if (iso) { gnToIso.set(gnKey, iso); gnAdmin1Mapped++; }
 }
 
+// GeoNames ids of the countries and subdivisions we ship, so their
+// alternate names (which the per-country dumps carry alongside the
+// cities') can be attributed to the ISO code.
+const countryGeoId = new Map(); // geonameid -> "JP"
+for (const line of lines("countryInfo.txt")) {
+  if (!line.trim() || line.startsWith("#")) continue;
+  const c = line.split("\t");
+  if (c[0] && c[16] && validCountries.has(c[0])) countryGeoId.set(c[16], c[0]);
+}
+const admin1GeoId = new Map(); // geonameid -> "JP-28"
+for (const line of lines("admin1CodesASCII.txt")) {
+  if (!line.trim()) continue;
+  const c = line.split("\t");
+  const iso = c[0] && gnToIso.get(c[0]);
+  if (iso && c[3]) admin1GeoId.set(c[3], iso);
+}
+
 const cities = [];
 const cityGeoId = new Map(); // geonameid -> "GN123"
 for (const line of lines("cities5000.txt")) {
@@ -129,6 +150,46 @@ write("cities.tsv", "code\tname_en\tcountry\tadmin1\tpopulation",
 // places - what a Japanese publisher declaring their own town needs. It
 // does not give the Japanese name for Paris; that lives in FR.txt.
 const counts = [];
+
+/** Key for "is this the same name" across scripts - no case, no marks, no punctuation. */
+const normKey = (s) =>
+  (s || "").normalize("NFD").toLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, "");
+
+// One streaming pass over every alternate-name dump (US.txt alone is
+// hundreds of MB; a whole-file split would not fit a JS string).
+// Columns: 0 id, 1 geonameid, 2 lang, 3 name, 4 preferred, 5 short,
+// 6 colloquial, 7 historic.
+//   altPick  lang -> code -> {name, rank}   the one display name per CITY
+//   altNames lang -> code -> [names]        every non-historic name, all levels
+const altPick = new Map(LANGS.map((l) => [l, new Map()]));
+const altNames = new Map(LANGS.map((l) => [l, new Map()]));
+const wanted = new Set(LANGS);
+const codeOf = (geoId) =>
+  cityGeoId.get(geoId) || admin1GeoId.get(geoId) || countryGeoId.get(geoId);
+for (const f of fs.readdirSync(srcDir).filter((f) => /^alt-[A-Z]{2}\.txt$/.test(f))) {
+  const rl = readline.createInterface({ input: fs.createReadStream(`${srcDir}/${f}`, "utf8") });
+  for await (const line of rl) {
+    if (!line) continue;
+    const c = line.split("\t");
+    if (!wanted.has(c[2]) || !c[3]) continue;
+    if (c[7] === "1") continue; // historic
+    const code = codeOf(c[1]);
+    if (!code) continue;
+    const names = altNames.get(c[2]);
+    const list = names.get(code);
+    if (list) list.push(c[3]); else names.set(code, [c[3]]);
+    if (c[6] === "1" || !code.startsWith("GN")) continue; // display pick: cities, non-colloquial
+    const rank = c[4] === "1" ? 0 : c[5] === "1" ? 1 : 2;
+    const pick = altPick.get(c[2]);
+    const prev = pick.get(code);
+    if (!prev || rank < prev.rank ||
+        (rank === prev.rank && c[3].length < prev.name.length)) {
+      pick.set(code, { name: c[3], rank });
+    }
+  }
+}
+
 for (const lang of LANGS) {
   const po1 = fs.existsSync(`${srcDir}/iso_3166-1_${lang}.po`)
     ? parsePo(read(`iso_3166-1_${lang}.po`)) : new Map();
@@ -146,32 +207,42 @@ for (const lang of LANGS) {
     if (t) sRows.push([code, t]);
   }
 
-  const cityPick = new Map();
-  for (const f of fs.readdirSync(srcDir).filter((f) => /^alt-[A-Z]{2}\.txt$/.test(f))) {
-    for (const line of read(f).split("\n")) {
-      if (!line.trim()) continue;
-      const c = line.split("\t");
-      if (c[2] !== lang) continue;
-      if (c[7] === "1" || c[6] === "1") continue; // historic / colloquial
-      const code = cityGeoId.get(c[1]);
-      if (!code || !c[3]) continue;
-      const rank = c[4] === "1" ? 0 : c[5] === "1" ? 1 : 2;
-      const prev = cityPick.get(code);
-      if (!prev || rank < prev.rank ||
-          (rank === prev.rank && c[3].length < prev.name.length)) {
-        cityPick.set(code, { name: c[3], rank });
-      }
+  const cityPick = altPick.get(lang) || new Map();
+  const cityRows = [...cityPick].map(([code, v]) => [code, v.name]);
+
+  // Aliases: every other name the dumps know, minus the one shown, plus
+  // the curated scripts/places-aliases-<lang>.tsv for names neither
+  // source carries (イギリス: iso-codes and GeoNames both say only 英国).
+  const shown = new Map([...cRows, ...sRows, ...cityRows].map(([code, n]) => [code, normKey(n)]));
+  const merged = new Map(altNames.get(lang) || new Map());
+  const curatedPath = `${import.meta.dirname}/places-aliases-${lang}.tsv`;
+  if (fs.existsSync(curatedPath)) {
+    for (const line of fs.readFileSync(curatedPath, "utf8").split("\n")) {
+      if (!line.trim() || line.startsWith("#")) continue;
+      const [code, name] = line.split("\t");
+      if (!code || !name) continue;
+      const list = merged.get(code);
+      if (list) list.push(name); else merged.set(code, [name]);
     }
   }
-  const cityRows = [...cityPick].map(([code, v]) => [code, v.name]);
+  const aliasRows = [];
+  for (const [code, names] of merged) {
+    const seen = new Set([shown.get(code)].filter(Boolean));
+    for (const n of names) {
+      const k = normKey(n);
+      if (!k || seen.has(k)) continue;
+      seen.add(k);
+      aliasRows.push([code, n]);
+    }
+  }
 
   for (const [file, rows] of
        [[`countries_${lang}.tsv`, cRows], [`subdivisions_${lang}.tsv`, sRows],
-        [`cities_${lang}.tsv`, cityRows]]) {
+        [`cities_${lang}.tsv`, cityRows], [`aliases_${lang}.tsv`, aliasRows]]) {
     rows.sort(byCode);
     write(file, "code\tname", rows.map((r) => r.join("\t")));
   }
-  counts.push(`${lang}: ${cRows.length}c/${sRows.length}s/${cityRows.length}city`);
+  counts.push(`${lang}: ${cRows.length}c/${sRows.length}s/${cityRows.length}city/${aliasRows.length}alias`);
 }
 
 const pct = (n, d) => d ? `${(100 * n / d).toFixed(1)}%` : "n/a";
