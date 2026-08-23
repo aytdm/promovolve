@@ -180,6 +180,18 @@ server: excludedCampaigns ++= body.excludeCampaigns   →  batchReserveWithRetry
 
 ## Limits, stated plainly
 
+**Per browser, per publisher site — not cross-site.** The tag's IndexedDB
+belongs to the publisher's origin (the page the tag runs in), not to
+Promovolve, so a reader capped on one publisher starts from zero on the
+next. A cross-site cap would need storage under a Promovolve origin — the
+third-party identity this design refuses, and one browsers now partition by
+top-level site anyway (ITP, Total Cookie Protection, Chrome storage
+partitioning), so it would not work reliably even if wanted. Corollary:
+`www` and apex are distinct origins to the browser although one site to
+Promovolve; a publisher reachable on both gets two counters until they
+canonicalise. Advertiser copy must say "per browser, per site", never "per
+reader".
+
 Per browser, not per person. Resets when site data is cleared; absent in
 private windows after close; a phone and a laptop are two readers. A reader
 who blocks storage is uncapped. A loosened cap takes up to the old window
