@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Promovolve Publisher
  * Description:       Connects this site to a Promovolve ad server: prints the ad tag, serves the site-verification file, and places ad slots via editor block or shortcode.
- * Version:           0.5.3
+ * Version:           0.5.4
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Promovolve
@@ -16,12 +16,12 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 const PROMOVOLVE_OPTION  = 'promovolve_settings';
-const PROMOVOLVE_VERSION = '0.5.3';
+const PROMOVOLVE_VERSION = '0.5.4';
 
 /**
  * Settings with defaults applied.
  *
- * @return array{site_id:string,api_base:string,script_url:string,verification_token:string,auto_slot_enabled:bool,auto_slot_id:string,auto_slot_w:int,auto_slot_h:int}
+ * @return array{site_id:string,api_base:string,script_url:string,verification_token:string,auto_slot_enabled:bool,auto_slot_id:string,auto_slot_scope:string,auto_slot_w:int,auto_slot_h:int,destination_taxonomy:bool,delete_on_uninstall:bool}
  */
 function promovolve_settings() {
 	$defaults = array(
@@ -946,9 +946,12 @@ function promovolve_record_token_state( $state ) {
  * Ask the ad server whether this site is verified.
  *
  * The serve endpoint already answers this: its host gate replies 403
- * (BatchHostNotVerified) for an unverified site or a host mismatch, and that
- * check runs BEFORE the auction, so an unverified probe costs the server
- * nothing. Sending an EMPTY impression list keeps the verified case just as
+ * (BatchHostNotVerified) when the page URL's host does not match the site's
+ * verified host — the site is unverified, the host differs, or the AdServer
+ * entity does not yet know a verified host (right after an api restart,
+ * before the DData publish lands; a transient false negative this cache
+ * holds for up to five minutes). The gate runs BEFORE the auction, so an
+ * unverified probe costs the server nothing. Sending an EMPTY impression list keeps the verified case just as
  * cheap — the request passes the gate, finds no slots to fill, and returns
  * `seatbid: []`, so it can neither reserve budget nor enroll a slot id. (It
  * does count as one request arrival, which is why the answer is cached and
@@ -987,11 +990,15 @@ function promovolve_verification_status( $s ) {
 		$state = 'unknown';
 	} else {
 		$code = (int) wp_remote_retrieve_response_code( $response );
-		if ( 200 === $code || 204 === $code ) {
-			// 204 = operator-suspended: the host gate passed, so the site IS
-			// verified. Suspension is a separate condition with its own
-			// dashboard surface; do not report it as a verification failure.
+		if ( 200 === $code ) {
 			$state = 'verified';
+		} elseif ( 204 === $code ) {
+			// 204 = operator-suspended (BatchSiteSuspended). The server checks
+			// suspension BEFORE the host gate, so this says nothing about
+			// verification either way: neither "verified" nor "unverified".
+			// Suspension has its own dashboard surface; here it is simply no
+			// answer.
+			$state = 'unknown';
 		} elseif ( 403 === $code ) {
 			$state = 'unverified';
 		} else {
@@ -999,8 +1006,9 @@ function promovolve_verification_status( $s ) {
 		}
 	}
 
-	// Short cache: this decides whether the token field appears at all, so a
-	// publisher who has just verified should see it disappear promptly.
+	// Short cache: this picks which verification guidance the settings page
+	// shows, so a publisher who has just verified should see it change
+	// promptly.
 	set_transient( PROMOVOLVE_VERIFIED_TRANSIENT, $state, 5 * MINUTE_IN_SECONDS );
 	return $state;
 }
@@ -1008,11 +1016,11 @@ function promovolve_verification_status( $s ) {
 /**
  * What does the world ACTUALLY see at /.well-known/promovolve.txt?
  *
- * The settings field alone cannot answer that. Uninstalling the plugin
- * deletes its option (uninstall.php), so a remove-and-reinstall leaves the
- * token box empty while the file may still be served by something else
- * entirely — a static file uploaded over FTP, or a previous install. An empty
- * box then reads as "verification is broken" when it usually isn't:
+ * The settings field alone cannot answer that. The token box can be empty
+ * (a pre-0.5.0 uninstall deleted it; a publisher cleared it; a fresh install)
+ * while the file is still served by something else entirely — a static file
+ * uploaded over FTP, or a previous install. An empty box then reads as
+ * "verification is broken" when it usually isn't:
  * verification is one-time and persisted server-side, so an already-verified
  * site stays verified with no token here at all.
  *
@@ -1161,9 +1169,10 @@ function promovolve_purge_page_caches() {
 	if ( function_exists( 'wpo_cache_flush' ) ) {
 		wpo_cache_flush(); // WP-Optimize
 	}
-	if ( function_exists( 'wp_cache_flush' ) ) {
-		wp_cache_flush(); // object cache (harmless, keeps option reads fresh)
-	}
+	// No wp_cache_flush() here: it empties the WHOLE persistent object cache
+	// (Redis/Memcached — and every site sharing it without key prefixes) on
+	// every save, and update_option already refreshes this option's own
+	// cache entry. Page caches are what hold the old markup; those are above.
 }
 
 // BOTH hooks: WordPress fires add_option_* the FIRST time the option row is
@@ -1426,7 +1435,7 @@ function promovolve_render_settings_page() {
 					</td>
 				</tr>
 			</table>
-			<?php endif; // 'verified' hides the token field entirely ?>
+			<?php endif; // verified / not-verified verification sections ?>
 
 			<h2><?php esc_html_e( 'Ad slots', 'promovolve' ); ?></h2>
 			<p>
@@ -1453,7 +1462,7 @@ function promovolve_render_settings_page() {
 					<td>
 						<label>
 							<input name="<?php echo esc_attr( PROMOVOLVE_OPTION ); ?>[auto_slot_enabled]" type="checkbox" value="1" <?php checked( $s['auto_slot_enabled'] ); ?>>
-							<?php esc_html_e( 'Append an ad slot after the content on single posts and pages', 'promovolve' ); ?>
+							<?php esc_html_e( 'Append an ad slot after the content on single posts, pages and other single views', 'promovolve' ); ?>
 						</label>
 						<p class="description">
 							<?php

@@ -52,8 +52,8 @@ function wp_remote_post( $url, $args ) {
 function do_action( $hook ) {}
 function function_exists_stub() {}
 class WP_Error {}
-// Stubs for functions the plugin file calls at load or in purge.
-function wp_cache_flush() {}
+// Stubs for functions the plugin file calls at load, in purge, or in the serve probe.
+function home_url( $path = '' ) { return 'https://example.com' . $path; }
 
 require_once __DIR__ . '/../promovolve/promovolve.php';
 
@@ -158,6 +158,33 @@ delete_transient( PROMOVOLVE_TOKEN_TRANSIENT );
 respond( 200, '{"state":"unknown"}' );
 promovolve_token_status( settings() );
 t( 'a state change clears a previous dismissal', false, get_option( PROMOVOLVE_TOKEN_STATE_OPTION )['dismissed'] );
+
+// ── the serve probe (promovolve_verification_status) ─────────────────────
+// 200 = passed the host gate with an empty imp; 403 = host gate refused;
+// 204 = operator-suspended, which the server decides BEFORE the host gate,
+// so it must not read as verified; everything else = no answer.
+echo "\nverification probe\n";
+$probe = array(
+	array( 200, 'verified' ),
+	array( 403, 'unverified' ),
+	array( 204, 'unknown' ),
+	array( 500, 'unknown' ),
+	array( 429, 'unknown' ),
+);
+foreach ( $probe as $case ) {
+	reset_state();
+	respond( $case[0], $case[0] === 200 ? '{"seatbid":[]}' : '' );
+	t( "serve/batch {$case[0]} → {$case[1]}", $case[1], promovolve_verification_status( settings() ) );
+}
+reset_state();
+$GLOBALS['tk']['response'] = new WP_Error();
+t( 'serve/batch network error → unknown', 'unknown', promovolve_verification_status( settings() ) );
+t( '  …probe posts to /v1/serve/batch with an empty imp', true,
+	substr( $GLOBALS['tk']['last_post']['url'], -15 ) === '/v1/serve/batch'
+	&& json_decode( $GLOBALS['tk']['last_post']['args']['body'], true )['imp'] === array() );
+reset_state();
+t( 'no site_id → unknown without asking', 'unknown', promovolve_verification_status( array( 'site_id' => '', 'api_base' => 'https://x' ) ) );
+t( '  …and no request was made', null, $GLOBALS['tk']['last_post'] );
 
 // ── fuses ────────────────────────────────────────────────────────────────
 t( 'unknown fuse is 7 days', 7 * DAY_IN_SECONDS, PROMOVOLVE_NOTICE_FUSE['unknown'] );

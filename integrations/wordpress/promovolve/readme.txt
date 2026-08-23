@@ -4,7 +4,7 @@ Tags: ads, advertising, publisher
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.5.3
+Stable tag: 0.5.4
 License: Apache-2.0
 License URI: https://www.apache.org/licenses/LICENSE-2.0
 
@@ -83,10 +83,35 @@ domain are merged), each with its own site ID, verification, and settings.
 
 The tag sends the page URL and visible page text to the ads API once per new
 page for on-demand ad targeting, plus anonymous delivery beacons. It stores
-reader "dog-ear" bookmarks in the browser's IndexedDB (7-day expiry). It sets
-no cookies. Visitors sending the Global Privacy Control signal receive no ads.
+reader "dog-ear" bookmarks in the browser's IndexedDB (kept for up to seven
+days, or until the campaign ends). It sets no cookies and builds no reader
+profile: the ad server selects ads from the page, never from the visitor, so
+there is nothing for a Global Privacy Control signal to opt out of — ads
+serve the same with or without it.
 
 == Changelog ==
+
+= 0.5.4 =
+* Fixed: the settings page could report a site as verified on an HTTP 204
+  from the ad server. 204 means the site's organisation is suspended by the
+  operator, and the server checks that before it checks verification, so it
+  says nothing about verification either way — it is now treated as "no
+  answer" rather than "verified".
+* Removed the object-cache flush on settings save. It emptied the site's
+  entire persistent object cache (and neighbours sharing a Redis without key
+  prefixes) for no benefit — saving an option already refreshes that option's
+  cache entry; the page-cache purges, which are what actually matter, are
+  unchanged.
+* Corrected the privacy statement in this readme: the ad server serves ads
+  under the Global Privacy Control signal exactly as without it, because it
+  selects from the page and holds no reader identity — there is nothing for
+  the signal to opt out of. Dog-ear bookmarks are kept for up to seven days
+  or until the campaign ends, whichever is sooner.
+* The automatic-slot checkbox now says what the code does: it appends on
+  every single view (posts, pages, custom post types), not only posts and
+  pages.
+* Comments that predated 0.5.0/0.5.2 (uninstall deleting settings; the
+  verification check hiding the token field) brought up to date.
 
 = 0.5.3 =
 * **A built-in Destination taxonomy, one checkbox away.** Settings →
@@ -311,6 +336,10 @@ no cookies. Visitors sending the Global Privacy Control signal receive no ads.
   identity scope (shared / per category / per post).
 
 == Upgrade Notice ==
+
+= 0.5.4 =
+Small correctness release; nothing to do after upgrading. Upload with
+"Replace current with uploaded"; settings are kept.
 
 = 0.5.3 =
 New: a Destination box for posts, one checkbox in Settings → Promovolve →
