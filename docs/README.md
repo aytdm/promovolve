@@ -9,6 +9,10 @@ Start here if you want to run, publish with, or advertise on Promovolve.
   setup.
 - [Publisher Integration](guides/publisher-integration.md) — put ads on
   your site with a script tag and a `div` per slot.
+  - [WordPress plugin reference](../integrations/wordpress/README.md) —
+    the complete reference for the Promovolve Publisher plugin: settings,
+    verification and the token lifecycle, slot identity, context hints,
+    what it stores and calls, development, build and release.
 - [Advertiser Quickstart](guides/advertiser-quickstart.md) — create a
   campaign from a landing page and understand what you pay.
 

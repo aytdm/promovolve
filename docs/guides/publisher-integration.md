@@ -117,6 +117,11 @@ Upgrade with *Plugins → Add New → Upload Plugin → Replace current with
 uploaded*; your settings — including the verification token — survive a
 delete by default.
 
+The complete plugin reference — every setting, how verification and the
+token check behave, slot identity rules, the place-slug vocabulary, what the
+plugin stores and which endpoints it calls, and how to build and release it —
+is `integrations/wordpress/README.md` in the repository.
+
 ## What happens at runtime
 
 1. On `DOMContentLoaded` the loader collects your slots and issues one
