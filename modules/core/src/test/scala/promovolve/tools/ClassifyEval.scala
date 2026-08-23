@@ -70,7 +70,9 @@ object ClassifyEval {
     val expects = readExpectations(dir.resolve("pages.tsv"))
     val texts = readPageTexts(dir.resolve("pages"))
     val provider = IABTaxonomy.Provider.fromEnv()
-    println(s"classify-eval: ${expects.size} pages, provider=${provider.name}, hints=${if (noHints) "OFF" else "as the tag sends them"}, label=$label")
+    println(s"classify-eval: ${expects.size} pages, provider=${provider.name}, hints=${
+        if (noHints) "OFF" else "as the tag sends them"
+      }, label=$label")
 
     given system: ActorSystem[Nothing] = ActorSystem(Behaviors.empty, "classify-eval")
     given ec: ExecutionContext = system.executionContext
@@ -89,7 +91,8 @@ object ClassifyEval {
               val attempt = Try(Await.result(classifier.analyze(e.url, t.text, Set.empty, hint, placeHint), 60.seconds))
               val r = attempt.fold(
                 ex =>
-                  Result(e.url, Vector.empty, Vector.empty, Verdict.Skip, Verdict.Skip, hint.isDefined || placeHint.isDefined,
+                  Result(e.url, Vector.empty, Vector.empty, Verdict.Skip, Verdict.Skip,
+                    hint.isDefined || placeHint.isDefined,
                     Some(ex.getMessage)),
                 a => {
                   val cats = a.categories.map(_.id).toVector
@@ -174,7 +177,8 @@ object ClassifyEval {
     var changes = 0
     after.foreach { r =>
       before.get(r.url).foreach { b =>
-        def cell(name: String, was: Verdict, now: Verdict, wasV: Vector[String], nowV: Vector[String], show: String => String) =
+        def cell(name: String, was: Verdict, now: Verdict, wasV: Vector[String], nowV: Vector[String],
+            show: String => String) =
           if (was != now || wasV != nowV) {
             changes += 1
             val arrow = if (now.rank > was.rank) "▲" else if (now.rank < was.rank) "▼" else "·"
@@ -240,11 +244,13 @@ object ClassifyEval {
       def arr(k: String) = f(k).asInstanceOf[JsArray].elements.collect { case JsString(s) => s }
       def verdict(k: String) = Verdict.valueOf(f(k).asInstanceOf[JsString].value)
       val url = f("url").asInstanceOf[JsString].value
-      url -> Result(url, arr("categories"), arr("places"), verdict("catVerdict"), verdict("placeVerdict"), hintsUsed = true,
+      url ->
+      Result(url, arr("categories"), arr("places"), verdict("catVerdict"), verdict("placeVerdict"), hintsUsed = true,
         None)
     }.toMap
 
   private def gitShortSha(): Option[String] =
-    Try(new String(Runtime.getRuntime.exec(Array("git", "rev-parse", "--short", "HEAD")).getInputStream.readAllBytes()).trim)
+    Try(new String(Runtime.getRuntime.exec(Array("git", "rev-parse", "--short",
+      "HEAD")).getInputStream.readAllBytes()).trim)
       .toOption.filter(_.nonEmpty)
 }
