@@ -92,6 +92,27 @@ object Endpoints extends ApiJsonFormats {
       .in(query[Int]("offset").default(0))
       .out(jsonBody[CampaignList])
       .errorOut(jsonBody[ErrorResponse])
+
+  /**
+   * "Would this campaign bid on this page?" — the same predicate the auction
+   * uses, run against the page's stored classification, the site's declared
+   * audience and the floor in force. For the advertiser who set a target and
+   * sees no ads on the page they care about: the answer names the gate.
+   */
+  val bidCheck: PublicEndpoint[(String, String, String), ErrorResponse, BidCheckResponse, Any] =
+    endpoint
+      .tag("Campaigns")
+      .summary("Would this campaign bid on a URL?")
+      .description(
+        "Runs the auction's eligibility predicate for this campaign against a page URL: the page's " +
+        "classification (categories fan out to ancestors), the site's declared audience, the floor. " +
+        "Returns the verdict and, when it would not bid, the gate that stops it.")
+      .get
+      .in(campaignsBase / path[String]("campaignId") / "bid-check")
+      .in(query[String]("url"))
+      .out(jsonBody[BidCheckResponse])
+      .errorOut(jsonBody[ErrorResponse])
+
   val getCampaign: PublicEndpoint[(String, String), ErrorResponse, Campaign, Any] =
     endpoint
       .tag("Campaigns")

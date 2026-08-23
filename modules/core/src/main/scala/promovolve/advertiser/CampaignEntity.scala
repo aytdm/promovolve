@@ -981,6 +981,10 @@ object CampaignEntity {
         // ═══════════════════════════════════════════════════════════════════════
 
         def configManagement(state: State): PartialFunction[Command, Effect[State]] = {
+          case CheckBid(siteId, pageCategories, floorCpm, siteAudience, verified, pagePlaces, replyTo) =>
+            replyTo ! state.bidVerdict(siteId, pageCategories, floorCpm, siteAudience, verified, pagePlaces)
+            Effect.none
+
           case GetCampaign(replyTo) =>
             replyTo ! CampaignInfo(
               campaignId = campaignId,
@@ -1760,6 +1764,28 @@ object CampaignEntity {
 
   final case class GetCampaign(replyTo: ActorRef[CampaignInfo]) extends Command
 
+  /**
+   * The advertiser's bid checker: would this campaign bid on a page with
+   * these facts? Read-only; see State.bidVerdict. `placeHops` is -1 when
+   * the place gate refused.
+   */
+  final case class CheckBid(
+      siteId: SiteId,
+      pageCategories: Set[String],
+      floorCpm: CPM,
+      siteAudience: Set[String],
+      siteAudienceVerified: Boolean,
+      pagePlaces: Set[String],
+      replyTo: ActorRef[BidVerdict]
+  ) extends Command
+  final case class BidVerdict(
+      wouldBid: Boolean,
+      matchedCategory: Option[String],
+      categoryHops: Int,
+      placeHops: Int,
+      reason: Option[String]
+  ) extends promovolve.CborSerializable
+
   final case class CampaignInfo(
       campaignId: CampaignId,
       status: Status,
@@ -2217,6 +2243,53 @@ object CampaignEntity {
       else if (categoryBlocklist.contains(pageCategory)) Some(BidRejectReason.CategoryBlocked)
       else if (maxCpm < floorCpm) Some(BidRejectReason.BelowFloor)
       else None
+    }
+
+    /**
+     * "Would this campaign bid on a page like this?" — the advertiser's
+     * bid checker, answered by the SAME predicate the auction uses
+     * (`bidRejectReason`), applied the same way: page categories fan out to
+     * their taxonomy ancestors (nearest first), a page with no categories
+     * is the filler case, and the first category that clears every gate is
+     * the match. When nothing clears, the reason reported is the one that
+     * would have stopped the bid on ANY category (paused, site, audience,
+     * place, floor); category mismatch is the answer only when everything
+     * else passed and no category lined up.
+     */
+    def bidVerdict(
+        siteId: SiteId,
+        pageCategories: Set[String],
+        floorCpm: CPM,
+        siteAudience: Set[String],
+        siteAudienceVerified: Boolean,
+        pagePlaces: Set[String]
+    ): BidVerdict = {
+      val expanded: List[(String, Int)] =
+        if (pageCategories.isEmpty) List(CategoryId.Filler.value -> 0)
+        else
+          pageCategories.toList
+            .flatMap { c =>
+              (c, 0) :: promovolve.taxonomy.TieredCategory.getAncestors(c).map(_.id).zipWithIndex.map {
+                case (a, i) => (a, i + 1)
+              }
+            }
+            .groupMapReduce(_._1)(_._2)(math.min)
+            .toList
+            .sortBy(_._2)
+      val tried = expanded.map { case (c, hops) =>
+        (c, hops, bidRejectReason(siteId, CategoryId(c), floorCpm, siteAudience, siteAudienceVerified, pagePlaces))
+      }
+      val hops = placeAdmits(placeTargeting, pagePlaces)
+      tried.collectFirst { case (c, catHops, None) => (c, catHops) } match {
+        case Some((c, catHops)) =>
+          BidVerdict(wouldBid = true, matchedCategory = Some(c), categoryHops = catHops,
+            placeHops = hops.getOrElse(0), reason = None)
+        case None =>
+          val reasons = tried.flatMap(_._3)
+          val reason = reasons.find(_ != BidRejectReason.CategoryMismatch).orElse(reasons.headOption)
+          BidVerdict(wouldBid = false, matchedCategory = None, categoryHops = -1,
+            placeHops = hops.getOrElse(-1), reason = reason.map(_.toString))
+      }
     }
 
     def assignCreatives(creativeIds: Set[CreativeId]): State =

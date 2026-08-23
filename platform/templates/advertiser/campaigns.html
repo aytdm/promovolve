@@ -455,6 +455,57 @@
           </form>
           <p class="text-xs text-gray-400 mt-2">{{if .EndAtDisplay}}{{t "Stops bidding %s. Dog-ear pins expire then." .EndAtDisplay}}{{else}}{{t "Open-ended — runs until paused."}}{{end}}</p>
 
+          {{/* The bid checker. "I targeted X and the page I care about shows
+               no ads" has five possible answers (category, place, audience,
+               floor, paused) and until now the advertiser had to infer which
+               from a blank slot. This asks the core to run the auction's own
+               predicate against the page's stored classification and names
+               the gate. */}}
+          <div class="mt-4" x-data="{ url: '', busy: false, r: null, err: '' ,
+              check() {
+                if (!this.url.trim()) return;
+                this.busy = true; this.err = ''; this.r = null;
+                fetch('/api/bid-check?campaignId={{.ID}}&url=' + encodeURIComponent(this.url.trim()))
+                  .then(res => res.json().then(d => ({ ok: res.ok, d })))
+                  .then(({ ok, d }) => { if (ok && d && typeof d.wouldBid === 'boolean') this.r = d; else this.err = (d && (d.message || d.error)) || 'check failed'; })
+                  .catch(() => { this.err = 'check failed'; })
+                  .finally(() => { this.busy = false; });
+              } }">
+            <p class="text-gray-500 text-xs uppercase mb-1">{{t "Would this campaign bid on a page?"}}</p>
+            <div class="flex items-center gap-2">
+              <input type="url" x-model="url" @keydown.enter.prevent="check()" placeholder="https://example.com/some-article/"
+                     class="form-input text-sm flex-1 min-w-0">
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="busy" @click="check()" x-text="busy ? '…' : '{{t "Check"}}'">{{t "Check"}}</button>
+            </div>
+            <template x-if="err"><p class="text-xs text-red-600 mt-1" x-text="err"></p></template>
+            <template x-if="r">
+              <div class="text-xs mt-2 space-y-1">
+                <p :class="r.wouldBid ? 'text-green-700' : 'text-amber-700'" class="font-medium">
+                  <span x-show="r.wouldBid">{{t "Yes — this campaign would bid on this page."}}</span>
+                  <span x-show="!r.wouldBid && r.reason === 'UnknownSite'">{{t "No — this host is not a verified Promovolve site."}}</span>
+                  <span x-show="!r.wouldBid && r.reason === 'PageNotClassified'">{{t "Not yet — this page has not been classified; it is on its first views. Try again after it has had traffic."}}</span>
+                  <span x-show="!r.wouldBid && r.reason === 'CategoryMismatch'">{{t "No — the page’s categories do not match this campaign’s. Categories match upward to their parents, never sideways: add the page’s category or its parent."}}</span>
+                  <span x-show="!r.wouldBid && r.reason === 'PlaceNotAllowed'">{{t "No — the page is not about a place this campaign targets. A broader target (the region or country) would reach it; a narrower one never does."}}</span>
+                  <span x-show="!r.wouldBid && r.reason === 'AudienceNotAllowed'">{{t "No — the site’s declared reader audience does not satisfy this campaign’s audience targeting (or it is not verified and the campaign requires that)."}}</span>
+                  <span x-show="!r.wouldBid && r.reason === 'SiteNotAllowed'">{{t "No — this site is not in the campaign’s media allowlist."}}</span>
+                  <span x-show="!r.wouldBid && r.reason === 'BelowFloor'">{{t "No — the campaign’s max CPM is below this site’s floor."}}</span>
+                  <span x-show="!r.wouldBid && r.reason === 'Paused'">{{t "No — the campaign is paused."}}</span>
+                  <span x-show="!r.wouldBid && r.reason === 'CategoryBlocked'">{{t "No — the page’s category is on this campaign’s blocklist."}}</span>
+                  <span x-show="!r.wouldBid && !['UnknownSite','PageNotClassified','CategoryMismatch','PlaceNotAllowed','AudienceNotAllowed','SiteNotAllowed','BelowFloor','Paused','CategoryBlocked'].includes(r.reason)" x-text="'{{t "No"}} — ' + r.reason"></span>
+                </p>
+                <p class="text-gray-500" x-show="r.siteId">
+                  {{t "Page categories:"}} <span x-text="r.pageCategoryNames && r.pageCategoryNames.length ? r.pageCategoryNames.join(', ') : '—'"></span>
+                  · {{t "Page places:"}} <span x-text="r.pagePlaces && r.pagePlaces.length ? r.pagePlaces.join(', ') : '—'"></span>
+                  · {{t "Site audience:"}} <span x-text="r.siteAudience && r.siteAudience.length ? r.siteAudience.join(', ') + (r.siteAudienceVerified ? ' ✓' : '') : '—'"></span>
+                  · {{t "Floor:"}} <span x-text="r.floorCpm"></span>
+                </p>
+                <p class="text-gray-500" x-show="r.wouldBid && r.matchedCategory">
+                  {{t "Matched via category"}} <span x-text="r.matchedCategory"></span><span x-show="r.categoryHops > 0" x-text="' (' + r.categoryHops + ' {{t "level(s) up"}})'"></span><span x-show="r.placeHops > 0" x-text="' · {{t "place"}} ' + r.placeHops + ' {{t "hop(s) away"}}'"></span>
+                </p>
+              </div>
+            </template>
+          </div>
+
         </div>
         <div>
           <p class="text-gray-500 text-xs uppercase mb-2">{{t "Actions"}}</p>

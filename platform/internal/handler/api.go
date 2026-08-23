@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 // SearchAdProducts proxies taxonomy search to core API and returns JSON.
@@ -90,6 +91,33 @@ func (h *Handler) SearchPlaces(w http.ResponseWriter, r *http.Request) {
 }
 
 // GeoAvailability proxies the geographic inventory check. Called while the
+// BidCheck asks the core whether a campaign would bid on a given page URL
+// and, if not, which gate stops it. For the advertiser who set a target and
+// sees no ads on the page they care about — the answer names the gate
+// (category, place, audience, floor, paused) instead of leaving them to
+// infer it from a blank slot.
+func (h *Handler) BidCheck(w http.ResponseWriter, r *http.Request) {
+	_, claims := h.sessionUser(r)
+	if claims == nil {
+		http.Error(w, `{"error":"unauthorized"}`, http.StatusUnauthorized)
+		return
+	}
+	campaignID := r.URL.Query().Get("campaignId")
+	pageURL := strings.TrimSpace(r.URL.Query().Get("url"))
+	if campaignID == "" || pageURL == "" {
+		http.Error(w, `{"error":"campaignId and url are required"}`, http.StatusBadRequest)
+		return
+	}
+	body, err := h.coreGet(fmt.Sprintf("/v1/advertisers/me/campaigns/%s/bid-check?url=%s",
+		url.PathEscape(campaignID), url.QueryEscape(pageURL)), claims)
+	if err != nil {
+		http.Error(w, `{"error":"bid check unavailable"}`, http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.Write(body)
+}
+
 // advertiser edits targeting, so a campaign that would never serve says so
 // before it is saved rather than after a flat week of spend.
 func (h *Handler) GeoAvailability(w http.ResponseWriter, r *http.Request) {

@@ -1680,6 +1680,95 @@ class EndpointRoutes(
    * direct id lookup can't return a phantom of another advertiser's
    * campaign.
    */
+  /**
+   * The bid checker. Resolves the URL's host to a site (the verified-host
+   * map), reads the page's stored classification and the site's cached
+   * geo summary and floor, and asks the campaign for its verdict — the
+   * same State.bidRejectReason the auction runs. No guessing: an unknown
+   * host or an unclassified page is reported as such rather than answered.
+   */
+  private val bidCheckLogic: ((String, String, String)) => Future[Either[ErrorResponse, BidCheckResponse]] = {
+    case (advertiserId, campaignId, rawUrl) =>
+      import org.apache.pekko.cluster.ddata.LWWMap
+      import org.apache.pekko.cluster.ddata.typed.scaladsl.{
+        DistributedData => ClusterDData,
+        Replicator => DDReplicator
+      }
+      val replicator = ClusterDData(system).replicator
+      val url = promovolve.browser.UrlNormalizer.stripTrackingParams(rawUrl.trim)
+      val host = scala.util.Try(new java.net.URI(url).getHost).toOption
+        .map(_.toLowerCase.stripPrefix("www."))
+        .getOrElse("")
+      if (host.isEmpty)
+        Future.successful(Left(ErrorResponse("bad_url", s"Could not read a host from '$rawUrl'")))
+      else {
+        def noSite = BidCheckResponse(url, None, pageKnown = false, Vector.empty, Vector.empty, Vector.empty,
+          Vector.empty, siteAudienceVerified = false, floorCpm = 0.0, wouldBid = false, None, -1, -1,
+          reason = Some("UnknownSite"))
+        replicator
+          .ask[DDReplicator.GetResponse[LWWMap[SiteId, String]]](
+            DDReplicator.Get(SiteEntity.VerifiedHostKey, DDReplicator.ReadLocal, _))
+          .map {
+            case rsp @ DDReplicator.GetSuccess(SiteEntity.VerifiedHostKey) =>
+              rsp.get(SiteEntity.VerifiedHostKey).entries
+            case _ => Map.empty[SiteId, String]
+          }
+          .flatMap { hosts =>
+            hosts.collectFirst { case (sid, h) if h.toLowerCase.stripPrefix("www.") == host => sid } match {
+              case None         => Future.successful(Right(noSite))
+              case Some(siteId) =>
+                val pageF = siteRef(siteId.value)
+                  .ask[SiteEntity.PageClassificationResult](SiteEntity.GetPageClassification(url, _))
+                val floorF = siteRef(siteId.value).ask[CPM](SiteEntity.GetFloorCpm(_))
+                val geoF = replicator
+                  .ask[DDReplicator.GetResponse[LWWMap[SiteId, SiteEntity.CachedSiteGeo]]](
+                    DDReplicator.Get(SiteEntity.SiteGeoKey, DDReplicator.ReadLocal, _))
+                  .map {
+                    case rsp @ DDReplicator.GetSuccess(SiteEntity.SiteGeoKey) =>
+                      rsp.get(SiteEntity.SiteGeoKey).entries.get(siteId)
+                    case _ => None
+                  }
+                for {
+                  page <- pageF
+                  floor <- floorF
+                  geo <- geoF
+                  cats = page.entry.map(_.categories.keySet).getOrElse(Set.empty)
+                  places = page.entry.map(_.places).getOrElse(Set.empty)
+                  audience = geo.map(_.audienceRegions).getOrElse(Set.empty)
+                  verified = geo.exists(_.audienceVerified)
+                  v <- campaignRef(advertiserId, campaignId).ask[CampaignEntity.BidVerdict](
+                    CampaignEntity.CheckBid(siteId, cats, floor, audience, verified, places, _))
+                } yield Right(BidCheckResponse(
+                  url = url,
+                  siteId = Some(siteId.value),
+                  pageKnown = page.entry.isDefined,
+                  pageCategories = cats.toVector.sorted,
+                  pageCategoryNames = cats.toVector.sorted.map(c =>
+                    promovolve.taxonomy.TieredCategory.displayName(c, "")),
+                  pagePlaces = places.toVector.sorted,
+                  siteAudience = audience.toVector.sorted,
+                  siteAudienceVerified = verified,
+                  floorCpm = floor.toDouble,
+                  wouldBid = v.wouldBid,
+                  matchedCategory = v.matchedCategory,
+                  categoryHops = v.categoryHops,
+                  placeHops = v.placeHops,
+                  reason = if (page.entry.isEmpty && !v.wouldBid) Some("PageNotClassified") else v.reason
+                ))
+            }
+          }
+          .recover { case ex => Left(ErrorResponse("bid_check_failed", ex.getMessage)) }
+      }
+  }
+
+  private val bidCheckOwnedLogic: ((String, String, String)) => Future[Either[ErrorResponse, BidCheckResponse]] = {
+    case (advertiserId, campaignId, url) =>
+      requireOwnedCampaign(advertiserId, campaignId).flatMap {
+        case Left(err) => Future.successful(Left(err))
+        case Right(_)  => bidCheckLogic((advertiserId, campaignId, url))
+      }
+  }
+
   private val getCampaignOwnedLogic: ((String, String)) => Future[Either[ErrorResponse, Campaign]] = {
     case (advertiserId, campaignId) =>
       requireOwnedCampaign(advertiserId, campaignId).flatMap {
@@ -4322,6 +4411,7 @@ class EndpointRoutes(
   private val campaignRoutes: List[Route] = List(
     PekkoHttpServerInterpreter().toRoute(Endpoints.listCampaigns.serverLogic(listCampaignsLogic)),
     PekkoHttpServerInterpreter().toRoute(Endpoints.getCampaign.serverLogic(getCampaignOwnedLogic)),
+    PekkoHttpServerInterpreter().toRoute(Endpoints.bidCheck.serverLogic(bidCheckOwnedLogic)),
     PekkoHttpServerInterpreter().toRoute(Endpoints.createCampaign.serverLogic(createCampaignLogic)),
     PekkoHttpServerInterpreter().toRoute(Endpoints.updateCampaign.serverLogic(updateCampaignLogic))
   )

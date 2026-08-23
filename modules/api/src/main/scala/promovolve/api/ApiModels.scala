@@ -349,6 +349,27 @@ object ApiModels {
   // probed that way.
   case class TokenCheckResponse(state: String)
 
+  // The advertiser's bid checker: would this campaign bid on this URL, and
+  // if not, which gate stops it. Everything the verdict used is echoed so
+  // the answer can be read without a second question: what the page is
+  // classified as, what the site declares, the floor in force.
+  case class BidCheckResponse(
+      url: String,
+      siteId: Option[String],
+      pageKnown: Boolean,
+      pageCategories: Vector[String],
+      pageCategoryNames: Vector[String],
+      pagePlaces: Vector[String],
+      siteAudience: Vector[String],
+      siteAudienceVerified: Boolean,
+      floorCpm: Double,
+      wouldBid: Boolean,
+      matchedCategory: Option[String],
+      categoryHops: Int,
+      placeHops: Int,
+      reason: Option[String]
+  )
+
   case class VerificationResponse(
       verified: Boolean,
       host: Option[String] = None,
