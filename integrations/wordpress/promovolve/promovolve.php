@@ -133,10 +133,8 @@ add_filter( 'script_loader_tag', function ( $tag, $handle ) {
  *                confident to say (front page, 404, search results).
  */
 function promovolve_declared_topic() {
-	// Singular: every topical taxonomy the post type has, not just the two
-	// built-in ones. A travel site keeps its destinations in a `destination`
-	// taxonomy and its recipes in `cuisine`; reading only category and
-	// post_tag threw away the most specific thing WordPress knew.
+	// Singular: every public taxonomy, not just category and post_tag — a
+	// custom `destination` or `cuisine` is the most specific thing WP knows.
 	if ( is_singular() ) {
 		$post_id     = get_queried_object_id();
 		$by_taxonomy = array();
