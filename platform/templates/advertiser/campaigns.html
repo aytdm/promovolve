@@ -715,6 +715,10 @@
           <div class="mb-4" x-data="{
               query: '', results: [], open: false,
               selected: [{{range $i, $a := .AudienceTargeting}}{{if $i}},{{end}}{code:'{{$a.Code}}',name:'{{$a.Name}}'}{{end}}],
+              verifiedOnly: {{if .RequireVerifiedAudience}}true{{else}}false{{end}},
+              // Reader location is observed per country, so only a 2-letter
+              // country code survives the verified-only check on save.
+              unverifiable() { return this.verifiedOnly && this.selected.some(p => p.code.length !== 2); },
               add(p) { if (!this.selected.find(x => x.code === p.code)) this.selected.push(p); this.query=''; this.results=[]; this.open=false; this.onAudience(this.codes()); },
               remove(c) { this.selected = this.selected.filter(x => x.code !== c); this.onAudience(this.codes()); },
               codes() { return this.selected.map(p => p.code).join(','); }
@@ -753,10 +757,13 @@
             <label class="inline-flex items-center gap-1.5 text-sm text-gray-600 cursor-pointer mt-2"
                    x-show="selected.length > 0" x-cloak
                    title="{{t "Reader location is observed at country granularity, so a region or town target cannot be verified. Such a campaign is rejected on save rather than left to never serve."}}">
-              <input type="checkbox" name="requireVerifiedAudience" {{if .RequireVerifiedAudience}}checked{{end}}
+              <input type="checkbox" name="requireVerifiedAudience" x-model="verifiedOnly"
                      class="rounded border-gray-300 text-brand focus:ring-brand">
               {{t "Verified audiences only (fewer sites)"}}
             </label>
+            <p class="text-xs text-red-600 mt-1" x-show="unverifiable()" x-cloak>
+              {{t "Verified-only campaigns can target countries only. Untick the box or replace the region or town with its country — otherwise saving is rejected."}}
+            </p>
             {{/* The reach cost of that checkbox, in numbers. Without them the
                  toggle is a superstition knob — nobody can weigh a trade they
                  cannot see. */}}

@@ -1385,6 +1385,14 @@ func (h *Handler) AdvertiserCampaigns(w http.ResponseWriter, r *http.Request) {
 		formError = i18n.T(lang, "Pick your product category from the suggestions — the campaign was not created.")
 	case "create_failed":
 		formError = i18n.T(lang, "Could not create the campaign — try again")
+	// Edit-modal rejections. The core refuses the whole patch, so the
+	// banner has to say so: nothing the advertiser changed was kept.
+	case "unverifiable_audience_target":
+		formError = i18n.T(lang, "Changes not saved: a verified-only campaign can target countries only as its reader audience. Untick \"Verified audiences only\", or replace the region or town with its country, then save again.")
+	case "invalid_budget":
+		formError = i18n.T(lang, "Changes not saved: the new daily budget must exceed what the campaign has already spent today.")
+	case "update_failed":
+		formError = i18n.T(lang, "Changes not saved — the update was rejected. Try again.")
 	}
 
 	h.render(w, r, "advertiser/campaigns.html", pageData{
@@ -1865,7 +1873,21 @@ func (h *Handler) UpdateCampaign(w http.ResponseWriter, r *http.Request) {
 	}
 
 	body, _ := json.Marshal(payload)
-	h.corePatch(fmt.Sprintf("/v1/advertisers/me/campaigns/%s", campID), claims, string(body))
+	// Checked: the core validates the patch as a whole (a verified-only
+	// audience naming a town, a budget below today's spend) and applies
+	// NONE of it on rejection — so a silent redirect here would read as
+	// "saved" while every field, place targeting included, stayed put.
+	if respBody, err := h.corePatchChecked(fmt.Sprintf("/v1/advertisers/me/campaigns/%s", campID), claims, string(body)); err != nil {
+		code := "update_failed"
+		for _, known := range []string{"unverifiable_audience_target", "invalid_budget"} {
+			if bytes.Contains(respBody, []byte(known)) {
+				code = known
+			}
+		}
+		slog.Warn("update campaign rejected", "campaign", campID, "code", code, "error", err)
+		http.Redirect(w, r, "/advertiser/campaigns?error="+code, http.StatusSeeOther)
+		return
+	}
 	http.Redirect(w, r, "/advertiser/campaigns", http.StatusSeeOther)
 }
 

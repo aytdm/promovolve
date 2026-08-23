@@ -947,6 +947,31 @@ func (h *Handler) corePatch(path string, claims *model.Claims, body string) ([]b
 	return io.ReadAll(resp.Body)
 }
 
+// corePatchChecked is corePatch that reports a non-2xx core response as an
+// error (body included) instead of handing the caller an error document as
+// if it were a result.
+func (h *Handler) corePatchChecked(path string, claims *model.Claims, body string) ([]byte, error) {
+	url := h.coreAPIURL + rewriteMePath(path, claims)
+	req, err := http.NewRequest("PATCH", url, strings.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return respBody, fmt.Errorf("core returned %d: %s", resp.StatusCode, truncStr(string(respBody), 200))
+	}
+	return respBody, nil
+}
+
 // corePut sends a PUT to the core API
 func (h *Handler) corePut(path string, claims *model.Claims, body string) ([]byte, error) {
 	url := h.coreAPIURL + rewriteMePath(path, claims)
