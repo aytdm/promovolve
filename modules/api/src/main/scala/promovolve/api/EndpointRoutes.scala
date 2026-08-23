@@ -1662,6 +1662,7 @@ class EndpointRoutes(
             audienceTargeting = info.audienceTargeting.toVector.sorted,
             requireVerifiedAudience = info.requireVerifiedAudience,
             placeTargeting = info.placeTargeting.toVector.sorted,
+            frequencyCap = info.frequencyCap.map(c => FrequencyCapDto(c.impressions, c.window)),
             adProductCategoryName = adProductName,
             targetCategoryNames = sortedCatNames,
             suggestedCategories = sortedSuggested,
@@ -1794,6 +1795,16 @@ class EndpointRoutes(
       }
   }
 
+  /** Frequency cap: 0 = no cap (always valid); else 1..100 and a known window. */
+  private def validateFrequencyCap(cap: Option[FrequencyCapDto]): Option[ErrorResponse] =
+    cap.flatMap(c =>
+      CampaignEntity.FrequencyCap.validate(c.impressions, c.window)
+        .map(msg => ErrorResponse("invalid_frequency_cap", msg)))
+
+  /** API → entity shape; impressions = 0 means "cleared" (None). */
+  private def frequencyCapToCore(cap: FrequencyCapDto): Option[CampaignEntity.FrequencyCap] =
+    CampaignEntity.FrequencyCap.fromApi(cap.impressions, cap.window)
+
   // ── operator-prohibited ad-product categories ────────────────────────
   // The operator's system-wide disallow list (/admin/settings), stored in
   // the dashboard's platform_settings row 'prohibited_ad_products' as a
@@ -1868,7 +1879,8 @@ class EndpointRoutes(
         Future.successful(Left(ErrorResponse("invalid_name", "Campaign name is required")))
       } else
         validateLandingUrl(req.landingUrl)
-          .orElse(validateAudienceTargeting(req.audienceTargeting, req.requireVerifiedAudience)) match {
+          .orElse(validateAudienceTargeting(req.audienceTargeting, req.requireVerifiedAudience))
+          .orElse(validateFrequencyCap(req.frequencyCap)) match {
           case Some(err) => Future.successful(Left(err))
           case None      =>
             validateAdProductCategory(req.adProductCategory).flatMap {
@@ -1909,6 +1921,7 @@ class EndpointRoutes(
               requireVerifiedAudience = req.requireVerifiedAudience,
               placeTargeting = req.placeTargeting.map(p => promovolve.taxonomy.Places.validate(p)),
               name = Some(req.name),
+              frequencyCap = req.frequencyCap.map(frequencyCapToCore),
               replyTo = ref
             )
           )
@@ -1933,7 +1946,8 @@ class EndpointRoutes(
                 .map(a => promovolve.taxonomy.Places.validate(a).toVector.sorted).getOrElse(Vector.empty),
               requireVerifiedAudience = req.requireVerifiedAudience.getOrElse(false),
               placeTargeting = req.placeTargeting
-                .map(p => promovolve.taxonomy.Places.validate(p).toVector.sorted).getOrElse(Vector.empty)
+                .map(p => promovolve.taxonomy.Places.validate(p).toVector.sorted).getOrElse(Vector.empty),
+              frequencyCap = req.frequencyCap.filter(_.impressions > 0)
             )
           )
         }
@@ -2005,7 +2019,7 @@ class EndpointRoutes(
           scheduleStartAt.isDefined || scheduleEndAt.isDefined || req.targetCategories.isDefined ||
           req.siteAllowlist.isDefined || req.audienceTargeting.isDefined ||
           req.requireVerifiedAudience.isDefined || req.placeTargeting.isDefined ||
-          req.landingUrl.isDefined || req.name.exists(_.trim.nonEmpty)) {
+          req.landingUrl.isDefined || req.name.exists(_.trim.nonEmpty) || req.frequencyCap.isDefined) {
           campaignRef(advertiserId, campaignId)
             .ask(ref =>
               CampaignEntity.UpdateConfig(
@@ -2027,6 +2041,8 @@ class EndpointRoutes(
                 // Rename. Blank-after-trim is treated as "no change" both
                 // here and in the entity, so a name can never become empty.
                 name = req.name,
+                // None = no change; impressions 0 → Some(None) clears.
+                frequencyCap = req.frequencyCap.map(frequencyCapToCore),
                 replyTo = ref
               ))
             .map(_ => Right(()))
@@ -2037,7 +2053,10 @@ class EndpointRoutes(
 
       // Combine updates and return updated campaign
       for {
-        prohibitedResult <- prohibitedCheckF
+        prohibitedResult <- validateFrequencyCap(req.frequencyCap) match {
+          case Some(err) => Future.successful(Left(err))
+          case None      => prohibitedCheckF
+        }
         audienceResult <-
           if (prohibitedResult.isRight) audienceCheckF else Future.successful(prohibitedResult)
         budgetResult <-

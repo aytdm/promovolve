@@ -77,6 +77,17 @@ object ApiModels {
       maxCpm: String // "5.0000"
   )
 
+  /**
+   * Frequency cap: at most `impressions` per BROWSER per `window` ("hour" |
+   * "day" | "week"), enforced by the ad tag from its own storage — per
+   * browser, per publisher site, never per person and never cross-site. On
+   * write, `impressions = 0` clears the cap. docs/design/FREQUENCY_CAPPING.md.
+   */
+  case class FrequencyCapDto(
+      impressions: Int,
+      window: String
+  )
+
   case class Campaign(
       id: String,
       advertiserId: String,
@@ -133,7 +144,9 @@ object ApiModels {
       // actually targets (restoring these chips) instead of rendering blank.
       // suggestedCategoryNames is index-aligned with suggestedCategories.
       suggestedCategories: Vector[String] = Vector.empty,
-      suggestedCategoryNames: Vector[String] = Vector.empty
+      suggestedCategoryNames: Vector[String] = Vector.empty,
+      // Per-browser frequency cap; None = uncapped.
+      frequencyCap: Option[FrequencyCapDto] = None
   )
 
   case class CampaignList(
@@ -164,7 +177,10 @@ object ApiModels {
       // still gates which pages, this gates whose readers.
       audienceTargeting: Option[Seq[String]] = None,
       requireVerifiedAudience: Option[Boolean] = None,
-      placeTargeting: Option[Seq[String]] = None
+      placeTargeting: Option[Seq[String]] = None,
+      // Option, never a defaulted non-Option: spray's jsonFormatN ignores
+      // case-class defaults, so older clients omitting it must still parse.
+      frequencyCap: Option[FrequencyCapDto] = None
   )
 
   case class UpdateCampaignRequest(
@@ -189,7 +205,9 @@ object ApiModels {
       audienceTargeting: Option[Seq[String]] = None,
       requireVerifiedAudience: Option[Boolean] = None,
       // Content place targeting. None = no change, Some(empty) = clear.
-      placeTargeting: Option[Seq[String]] = None
+      placeTargeting: Option[Seq[String]] = None,
+      // Frequency cap. None = no change; impressions = 0 clears it.
+      frequencyCap: Option[FrequencyCapDto] = None
   )
 
   case class CampaignBudgetStatus(

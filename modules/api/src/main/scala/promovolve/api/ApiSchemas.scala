@@ -21,6 +21,7 @@ object ApiSchemas {
   given Schema[CampaignBudget] = Schema.derived
   given Schema[CampaignSchedule] = Schema.derived
   given Schema[CampaignBidding] = Schema.derived
+  given Schema[FrequencyCapDto] = Schema.derived
   given Schema[Campaign] = Schema.derived
   given Schema[CampaignList] = Schema.derived
   given Schema[CreateCampaignRequest] = Schema.derived

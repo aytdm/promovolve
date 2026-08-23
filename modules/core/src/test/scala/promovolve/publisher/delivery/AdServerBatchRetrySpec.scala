@@ -348,6 +348,36 @@ class AdServerBatchRetrySpec extends AnyWordSpec with Matchers with ScalaFutures
       pending.keySet shouldBe Set(CampaignId("campB"))
     }
 
+    "honour an on-page pin whose campaign is in excludedCampaigns (a frequency cap never overrides a bookmark)" in {
+      // The browser capped campA (ServeRoutes merged it into excludedCampaigns),
+      // but slot s1 carries a dog-ear pin for c1 ∈ campA. The reader asked for
+      // that creative: the pin is honoured (free, dogear.honored), the cap only
+      // removes campA from the AUCTION — s2 must not pick c1b from campA.
+      val c1 = candidate("c1", "campA", 300, 250, cpm = 10.0)
+      val c1b = candidate("c1b", "campA", 300, 250, cpm = 9.0)
+      val c2 = candidate("c2", "campB", 300, 250, cpm = 3.0)
+      val (outcomes, pending) = AdServer.batchReserveWithRetry(
+        slots = Vector(
+          BatchSlotSpec(SlotId("s1"), 300, 250, pin = Some(CreativeId("c1"))),
+          slot("s2", 300, 250)
+        ),
+        pool = Vector(c1, c1b, c2),
+        pageBlocked = Set.empty,
+        alpha = 0.5,
+        stats = Map.empty,
+        siteFloor = CPM(0.5),
+        reserve = reserveFn(_ => true),
+        rng = seedRng(),
+        excludedCampaigns = Set(CampaignId("campA"))
+      ).futureValue
+      val byId = outcomes.map(o => o.slotId.value -> o).toMap
+      byId("s1").winner.map(_.creativeId.value) shouldBe Some("c1")
+      byId("s1").dogear.map(_.honored) shouldBe Some(true)
+      byId("s1").clearingPrice shouldBe CPM.zero
+      byId("s2").winner.map(_.creativeId.value) shouldBe Some("c2")
+      pending.keySet shouldBe Set(CampaignId("campB"))
+    }
+
     "return winner=None when the only fitting candidate is excluded" in {
       // Pool has just c1, but c1 is pinned elsewhere. No fallback
       // candidate exists for this slot — outcome is winner=None, no

@@ -21,6 +21,7 @@ trait ApiJsonFormats extends DefaultJsonProtocol {
   given RootJsonFormat[CampaignBudget] = jsonFormat2(CampaignBudget.apply)
   given RootJsonFormat[CampaignSchedule] = jsonFormat2(CampaignSchedule.apply)
   given RootJsonFormat[CampaignBidding] = jsonFormat2(CampaignBidding.apply)
+  given RootJsonFormat[FrequencyCapDto] = jsonFormat2(FrequencyCapDto.apply)
   // Hand-written because Campaign has 23 fields and spray-json's derivation
   // stops at jsonFormat22. Reads tolerate absent optional fields so an older
   // client's payload still parses.
@@ -50,7 +51,8 @@ trait ApiJsonFormats extends DefaultJsonProtocol {
       "adProductCategoryName" -> c.adProductCategoryName.fold[JsValue](JsNull)(JsString(_)),
       "targetCategoryNames" -> JsArray(c.targetCategoryNames.map(JsString(_))),
       "suggestedCategories" -> JsArray(c.suggestedCategories.map(JsString(_))),
-      "suggestedCategoryNames" -> JsArray(c.suggestedCategoryNames.map(JsString(_)))
+      "suggestedCategoryNames" -> JsArray(c.suggestedCategoryNames.map(JsString(_))),
+      "frequencyCap" -> c.frequencyCap.fold[JsValue](JsNull)(summon[RootJsonFormat[FrequencyCapDto]].write)
     )
 
     def read(json: JsValue): Campaign = {
@@ -82,13 +84,14 @@ trait ApiJsonFormats extends DefaultJsonProtocol {
         adProductCategoryName = o.get("adProductCategoryName").flatMap(_.convertTo[Option[String]]),
         targetCategoryNames = strs("targetCategoryNames"),
         suggestedCategories = strs("suggestedCategories"),
-        suggestedCategoryNames = strs("suggestedCategoryNames")
+        suggestedCategoryNames = strs("suggestedCategoryNames"),
+        frequencyCap = o.get("frequencyCap").flatMap(_.convertTo[Option[FrequencyCapDto]])
       )
     }
   }
   given RootJsonFormat[CampaignList] = jsonFormat2(CampaignList.apply)
-  given RootJsonFormat[CreateCampaignRequest] = jsonFormat11(CreateCampaignRequest.apply)
-  given RootJsonFormat[UpdateCampaignRequest] = jsonFormat13(UpdateCampaignRequest.apply)
+  given RootJsonFormat[CreateCampaignRequest] = jsonFormat12(CreateCampaignRequest.apply)
+  given RootJsonFormat[UpdateCampaignRequest] = jsonFormat14(UpdateCampaignRequest.apply)
   given RootJsonFormat[CampaignBudgetStatus] = jsonFormat3(CampaignBudgetStatus.apply)
 
   // Creative

@@ -1,10 +1,16 @@
 # Frequency capping
 
-> Status: **design, not built** (2026-08-23). Nothing in the code implements a
-> cross-pageview cap today: the only cap is *one campaign per page per
-> batch* (`AdServer.batchReserveWithRetry`, hard in-batch + soft 15 s
-> `pageWinners` preference on reloads). There is no `frequencyCap` field on
-> campaigns — never was (`git log --all -S frequencyCap` is empty).
+> Status: **server half BUILT** (2026-08-24): `CampaignEntity.FrequencyCap`
+> (+ `State`/`CampaignInfo`/`UpdateConfig` tri-state), API DTOs
+> (`FrequencyCapDto`, create/update/get; `impressions = 0` clears), `ServeRes.frequencyCap`
+> (`FrequencyCapWire{n, windowMs}` via the widened per-winner `GetCampaign` ask),
+> `BatchServeReq.excludeCampaigns` → `ExcludeCampaigns.merge` (≤ 32) into the
+> hard exclusion; size-only logging. Specs: `CampaignFrequencyCapSpec`
+> (rules + real-entity tri-state), `CampaignJsonSpec`, `ExcludeCampaignsSpec`,
+> `AdServerBatchRetrySpec` pin-bypass case. **Tag and dashboard halves not
+> built yet.** Before this: the only cap was *one campaign per page per
+> batch* (`AdServer.batchReserveWithRetry`); no `frequencyCap` field had ever
+> existed (`git log --all -S frequencyCap` was empty).
 
 ## Decision
 
@@ -99,11 +105,20 @@ server: excludedCampaigns ++= body.excludeCampaigns   →  batchReserveWithRetry
 - `UpdateConfig.frequencyCap: Option[Option[FrequencyCap]] = None` — the
   existing tri-state convention (`None` = no change, `Some(None)` = clear to
   unlimited, `Some(Some(x))` = set).
+  Campaign *creation* carries no config payload (`AdvertiserEntity.CreateCampaign`
+  → the API's immediate `UpdateConfig`), so the cap rides on that first
+  `UpdateConfig` — nothing to add to the create command. `CampaignEntity` is a
+  `DurableStateBehavior`: the only persisted shape is `State` (Jackson,
+  default-`None` field is recovery-safe).
 - API: `CreateCampaignRequest` / `UpdateCampaignRequest` / `Campaign`
   response gain `frequencyCap: Option[FrequencyCapDto]` — **`Option`**, never
   a defaulted field (spray `jsonFormatN` ignores case-class defaults; an
   older client omitting it would fail to parse otherwise). Validation:
-  `1 ≤ impressions ≤ 100`, window in the enum.
+  `1 ≤ impressions ≤ 100`, window in the enum. **Clearing on PATCH**: spray
+  cannot tell an explicit `null` from an absent field for `Option[Option[_]]`,
+  so the wire convention is `{"impressions": 0, "window": "…"}` = clear; the
+  route maps that to `UpdateConfig(frequencyCap = Some(None))`. `Campaign`
+  responses write `frequencyCap: null` when uncapped (hand-written format).
 - Dashboard: campaign create form + the inline Edit panel get "Frequency
   cap: at most ⟨N⟩ impressions per reader per ⟨hour|day|week⟩ · ☐ none".
   New strings go into the EN/ja catalogs (drift test). Help guide: one

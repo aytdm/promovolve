@@ -37,7 +37,8 @@ final case class ServeRes(
     honorPin: Boolean = false, // Pinned creative will be honored if a hint is sent
     foldToken: Option[String] = None, // Server-issued fold token, only set when canFold=true
     dogear: Option[DogearInfo] = None, // Pin-honoring outcome; only set when the request carried a pin hint for this slot
-    pinExpiresAt: Option[Long] = None // Campaign endAt as epoch millis — bootstrap caps the pin's expiresAt at this value
+    pinExpiresAt: Option[Long] = None, // Campaign endAt as epoch millis — bootstrap caps the pin's expiresAt at this value
+    frequencyCap: Option[FrequencyCapWire] = None // Campaign's per-browser cap; None = uncapped
 )
 
 /**
@@ -45,6 +46,14 @@ final case class ServeRes(
  *   creative_removed | campaign_inactive | budget_exhausted | dogear_disabled
  */
 final case class DogearInfo(honored: Boolean, reason: Option[String] = None)
+
+/**
+ * Frequency-cap policy for the winner's campaign, for the BROWSER to enforce
+ * from its own storage: at most `n` billed impressions per `windowMs`. The
+ * server never counts — it only carries the policy out and honours the
+ * browser's `excludeCampaigns` on the way back. docs/design/FREQUENCY_CAPPING.md.
+ */
+final case class FrequencyCapWire(n: Int, windowMs: Long)
 
 /**
  * Pin hint from the bootstrap. Tells the server "this slot is pinned to
@@ -78,7 +87,12 @@ final case class BatchServeReq(
     url: String,
     domain: Option[String] = None,
     imp: Vector[BatchImp],
-    pins: Option[Vector[PinHint]] = None // optional dog-ear pin hints, one per pinned slot
+    pins: Option[Vector[PinHint]] = None, // optional dog-ear pin hints, one per pinned slot
+    // Campaigns the browser declines because it has reached their frequency
+    // cap (computed client-side from its own impression records). Option —
+    // spray ignores defaults, and older tags omit it. Bounded server-side
+    // (ExcludeCampaigns.MaxEntries); never logged by value.
+    excludeCampaigns: Option[Vector[String]] = None
 )
 
 /**
@@ -169,6 +183,27 @@ final case class BatchServeRes(
  * must apply only to off-page pins and only when the site has a
  * non-empty slot config.
  */
+/**
+ * Pure merge of the two sources of hard campaign exclusion for a batch:
+ * off-page dog-ear pins (resolved server-side) and the browser's own
+ * frequency-cap list. Bounded so a hostile client cannot blank its auction
+ * by sending thousands of ids; blanks dropped, order-preserving dedupe.
+ */
+private[api] object ExcludeCampaigns {
+  val MaxEntries: Int = 32
+
+  def merge(fromPins: Set[promovolve.CampaignId], fromRequest: Option[Vector[String]]): Set[promovolve.CampaignId] =
+    fromPins ++
+    fromRequest
+      .getOrElse(Vector.empty)
+      .iterator
+      .map(_.trim)
+      .filter(_.nonEmpty)
+      .distinct
+      .take(MaxEntries)
+      .map(promovolve.CampaignId.apply)
+}
+
 private[api] object StalePins {
 
   /**
@@ -205,9 +240,10 @@ private[api] object StalePins {
 trait ServeJson extends DefaultJsonProtocol {
   given RootJsonFormat[DogearInfo] = jsonFormat2(DogearInfo.apply)
   given RootJsonFormat[PinHint] = jsonFormat2(PinHint.apply)
-  given RootJsonFormat[ServeRes] = jsonFormat16(ServeRes.apply)
+  given RootJsonFormat[FrequencyCapWire] = jsonFormat2(FrequencyCapWire.apply)
+  given RootJsonFormat[ServeRes] = jsonFormat17(ServeRes.apply)
   given RootJsonFormat[BatchImp] = jsonFormat4(BatchImp.apply)
-  given RootJsonFormat[BatchServeReq] = jsonFormat5(BatchServeReq.apply)
+  given RootJsonFormat[BatchServeReq] = jsonFormat6(BatchServeReq.apply)
   given RootJsonFormat[ClassifyImp] = jsonFormat7(ClassifyImp.apply)
   given RootJsonFormat[ClassifyPageTextReq] = jsonFormat6(ClassifyPageTextReq.apply)
   given RootJsonFormat[BatchImpResult] = jsonFormat3(BatchImpResult.apply)
@@ -301,9 +337,15 @@ final class ServeRoutes(
                     ))
                   case _ => Future.successful(Vector.empty[(String, Option[Option[String]])])
                 }
-                excludedCampaigns = pinLookups.collect {
-                  case (_, Some(Some(campaignId))) => promovolve.CampaignId(campaignId)
-                }.toSet
+                // Hard campaign exclusion = off-page pins' campaigns (above)
+                // ∪ the browser's frequency-capped campaigns. Merged here so
+                // the auction sees one set; AdServer needs no cap logic.
+                excludedCampaigns = ExcludeCampaigns.merge(
+                  pinLookups.collect {
+                    case (_, Some(Some(campaignId))) => promovolve.CampaignId(campaignId)
+                  }.toSet,
+                  req.excludeCampaigns
+                )
                 // Slot-existence pass: an off-page pin whose slotId no
                 // longer exists in the site's slot config can never be
                 // reconciled by the per-slot dogear channel (its page
@@ -328,9 +370,11 @@ final class ServeRoutes(
                   siteSlotIds
                 )
                 _ = system.log.info(
-                  "BatchServe pub={} url={} pins.size={} offPagePinCreatives={} excludedCreatives={} excludedCampaigns={}",
+                  "BatchServe pub={} url={} pins.size={} excludeCampaigns.size={} offPagePinCreatives={} excludedCreatives={} excludedCampaigns={}",
                   req.pub, pageUrl,
                   req.pins.fold(0)(_.size),
+                  // Size only: the ids describe the reader's own history.
+                  req.excludeCampaigns.fold(0)(_.size),
                   offPagePinCreatives.mkString(","),
                   excludedCreatives.map(_.value).mkString(","),
                   excludedCampaigns.map(_.value).mkString(",")
@@ -405,7 +449,8 @@ final class ServeRoutes(
                           foldToken <-
                             foldTokenFor(req.pub, pageUrl, outcome.slotId.value, cand.creativeId.value, version,
                               cand.campaignId.value, cand.advertiserId.value)
-                          pinExpiresAt <- campaignPinExpiresAt(cand.advertiserId.value, cand.campaignId.value)
+                          (pinExpiresAt, frequencyCap) <-
+                            campaignServeFacts(cand.advertiserId.value, cand.campaignId.value)
                         } yield {
                           val pagesJson = creativeOpt.flatMap(_.pagesJson)
                           val bannerConfigJson = creativeOpt.flatMap(_.bannerConfigJson)
@@ -440,7 +485,8 @@ final class ServeRoutes(
                                   honorPin = true,
                                   foldToken = foldToken,
                                   dogear = slotDogear,
-                                  pinExpiresAt = pinExpiresAt
+                                  pinExpiresAt = pinExpiresAt,
+                                  frequencyCap = frequencyCap
                                 )),
                                 dogear = slotDogear
                               )
@@ -621,10 +667,16 @@ final class ServeRoutes(
    * fall through with None instead of failing the entire serve. The
    * pin still works, it just defaults to the bootstrap cap.
    */
-  private def campaignPinExpiresAt(
+  /**
+   * Per-winner campaign facts the ad tag needs: the campaign's endAt (caps the
+   * dog-ear pin's expiry) and its frequency-cap policy. One GetCampaign ask
+   * serves both — a second ask per winner would double the serve-path load
+   * for a field that rides in the same reply. Fails soft to (None, None).
+   */
+  private def campaignServeFacts(
       advertiserId: String,
       campaignId: String
-  ): Future[Option[Long]] = {
+  ): Future[(Option[Long], Option[FrequencyCapWire])] = {
     given Timeout = Timeout(300.millis)
     val entityId = s"$advertiserId|$campaignId"
     val ref = sharding.entityRefFor(promovolve.advertiser.CampaignEntity.TypeKey, entityId)
@@ -632,8 +684,14 @@ final class ServeRoutes(
       .ask[promovolve.advertiser.CampaignEntity.CampaignInfo](
         promovolve.advertiser.CampaignEntity.GetCampaign(_)
       )
-      .map(_.endAt.map(_.toEpochMilli))
-      .recover { case _ => None }
+      .map(info =>
+        (
+          info.endAt.map(_.toEpochMilli),
+          info.frequencyCap.flatMap(cap =>
+            promovolve.advertiser.CampaignEntity.FrequencyCap.windowMs(cap.window)
+              .map(ms => FrequencyCapWire(cap.impressions, ms)))
+        ))
+      .recover { case _ => (None, None) }
   }
 
   private def impUrl(

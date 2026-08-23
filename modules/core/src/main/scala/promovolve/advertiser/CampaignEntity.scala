@@ -1003,7 +1003,8 @@ object CampaignEntity {
               requireVerifiedAudience = state.requireVerifiedAudience,
               placeTargeting = state.placeTargeting,
               suggestedCategories = state.suggestedCategories,
-              name = state.name
+              name = state.name,
+              frequencyCap = state.frequencyCap
             )
             Effect.none
 
@@ -1042,7 +1043,7 @@ object CampaignEntity {
 
           case UpdateConfig(maxCpm, dailyBudget, adProductCat, categoriesOpt, landingUrlOpt, bidOnUnmatchedCtx,
                 startAtOpt, endAtOpt, siteAllowlistOpt, audienceTargetingOpt, requireVerifiedOpt,
-                placeTargetingOpt, nameOpt, replyTo) =>
+                placeTargetingOpt, nameOpt, frequencyCapOpt, replyTo) =>
             val newAdProductCategory = adProductCat.getOrElse(state.adProductCategory)
             // Target categories are now an explicit advertiser declaration —
             // no longer derived from adProductCategory. Any 2.x ids the
@@ -1070,7 +1071,9 @@ object CampaignEntity {
               audienceTargeting = audienceTargetingOpt.getOrElse(state.audienceTargeting),
               requireVerifiedAudience = requireVerifiedOpt.getOrElse(state.requireVerifiedAudience),
               placeTargeting = placeTargetingOpt.getOrElse(state.placeTargeting),
-              name = nameOpt.map(_.trim).filter(_.nonEmpty).getOrElse(state.name)
+              name = nameOpt.map(_.trim).filter(_.nonEmpty).getOrElse(state.name),
+              // Some(None) clears, Some(Some(cap)) sets, None = no change.
+              frequencyCap = frequencyCapOpt.getOrElse(state.frequencyCap)
             )
             val nowWithin = withinBudget(newState)
             // Defer reply until directory registration completes
@@ -1786,6 +1789,49 @@ object CampaignEntity {
       reason: Option[String]
   ) extends promovolve.CborSerializable
 
+  /**
+   * Per-campaign frequency cap: at most `impressions` billed impressions per
+   * BROWSER per `window`, enforced by the ad tag from its own IndexedDB (see
+   * docs/design/FREQUENCY_CAPPING.md). The server only carries the policy
+   * to the browser on each served winner and honours the browser's resulting
+   * `excludeCampaigns`; it never counts, never identifies a viewer.
+   *
+   * `window` is a plain String ("hour" | "day" | "week") — never a sealed
+   * trait of case objects: Pekko's Jackson CBOR serialiser turns those into
+   * empty maps and the entity would lose the field on recovery.
+   */
+  final case class FrequencyCap(impressions: Int, window: String) extends promovolve.CborSerializable
+
+  object FrequencyCap {
+
+    /** Window name → length in ms. The only windows the API accepts. */
+    val Windows: Map[String, Long] = Map(
+      "hour" -> 60L * 60 * 1000,
+      "day" -> 24L * 60 * 60 * 1000,
+      "week" -> 7L * 24 * 60 * 60 * 1000
+    )
+    val MaxImpressions: Int = 100
+
+    def windowMs(window: String): Option[Long] = Windows.get(window)
+
+    /**
+     * Validate an API-supplied cap. `impressions == 0` means "no cap" and is
+     * always valid (the window is then ignored); otherwise 1..MaxImpressions
+     * and a known window. Returns a human-readable problem, or None when OK.
+     */
+    def validate(impressions: Int, window: String): Option[String] =
+      if (impressions == 0) None
+      else if (impressions < 0 || impressions > MaxImpressions)
+        Some(s"impressions must be between 1 and $MaxImpressions (0 = no cap)")
+      else if (!Windows.contains(window))
+        Some(s"window must be one of ${Windows.keys.toSeq.sorted.mkString(", ")}")
+      else None
+
+    /** API shape → entity shape: 0 impressions = cleared (None). */
+    def fromApi(impressions: Int, window: String): Option[FrequencyCap] =
+      if (impressions <= 0) None else Some(FrequencyCap(impressions, window))
+  }
+
   final case class CampaignInfo(
       campaignId: CampaignId,
       status: Status,
@@ -1810,7 +1856,10 @@ object CampaignEntity {
       suggestedCategories: Set[CategoryId] = Set.empty,
       // Advertiser-provided display name; "" for legacy campaigns
       // created before the name was persisted (API falls back to id).
-      name: String = ""
+      name: String = "",
+      // Per-browser frequency cap policy; None = uncapped. Carried to the
+      // ad tag on every served winner (ServeRes.frequencyCap).
+      frequencyCap: Option[FrequencyCap] = None
   ) extends promovolve.CborSerializable
 
   final case class UpdateStatus(status: Status, replyTo: ActorRef[StatusUpdated]) extends Command
@@ -1848,6 +1897,9 @@ object CampaignEntity {
       // Display name. None = no change; Some(s) sets the trimmed value
       // (blank-after-trim is ignored — a name can't be unset to empty).
       name: Option[String] = None,
+      // Frequency cap. None = no change, Some(None) = clear (uncapped),
+      // Some(Some(cap)) = set. Same tri-state as endAt.
+      frequencyCap: Option[Option[FrequencyCap]] = None,
       replyTo: ActorRef[ConfigUpdated]
   ) extends Command
 
@@ -2161,7 +2213,10 @@ object CampaignEntity {
       // this zone's midnight. Mirrored from AdvertiserEntity (fan-out on
       // change + periodic self-heal); plain String so Jackson recovery of
       // pre-timezone snapshots defaults cleanly. FlushIds stay UTC-based.
-      timezone: String = ""
+      timezone: String = "",
+      // Per-browser frequency cap policy (docs/design/FREQUENCY_CAPPING.md).
+      // None = uncapped. Default-None is Jackson-safe for older State.
+      frequencyCap: Option[FrequencyCap] = None
   ) extends CborSerializable {
 
     /**
