@@ -4,7 +4,7 @@ Tags: ads, advertising, publisher
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.5.4
+Stable tag: 0.5.5
 License: Apache-2.0
 License URI: https://www.apache.org/licenses/LICENSE-2.0
 
@@ -83,13 +83,22 @@ domain are merged), each with its own site ID, verification, and settings.
 
 The tag sends the page URL and visible page text to the ads API once per new
 page for on-demand ad targeting, plus anonymous delivery beacons. It stores
-reader "dog-ear" bookmarks in the browser's IndexedDB (kept for up to seven
-days, or until the campaign ends). It sets no cookies and builds no reader
+reader "dog-ear" bookmarks in the browser's IndexedDB: a bookmark lives until
+its campaign ends (indefinitely for an open-ended campaign) and is dropped
+when the reader unfolds it or does not revisit the page for 24 hours; it is
+never synced anywhere. It sets no cookies and builds no reader
 profile: the ad server selects ads from the page, never from the visitor, so
 there is nothing for a Global Privacy Control signal to opt out of — ads
 serve the same with or without it.
 
 == Changelog ==
+
+= 0.5.5 =
+* Readme only: corrected the dog-ear retention statement. 0.5.4 said
+  bookmarks are "kept for up to seven days"; a bookmark actually lives until
+  its campaign ends (indefinitely for an open-ended campaign) and is dropped
+  when the reader unfolds it or does not revisit the page for 24 hours. No
+  code change.
 
 = 0.5.4 =
 * Fixed: the settings page could report a site as verified on an HTTP 204
@@ -336,6 +345,9 @@ serve the same with or without it.
   identity scope (shared / per category / per post).
 
 == Upgrade Notice ==
+
+= 0.5.5 =
+Readme correction only; no behaviour change. Nothing to do after upgrading.
 
 = 0.5.4 =
 Small correctness release; nothing to do after upgrading. Upload with

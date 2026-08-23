@@ -12,7 +12,7 @@ section of [`docs/guides/publisher-integration.md`](../../docs/guides/publisher-
 Server-side design lives in `docs/design/` — `SITE_VERIFICATION.md`,
 `SITE_TOKEN_CHECK.md`, `ON_DEMAND_CLASSIFICATION.md`, `GEOGRAPHIC_CONTEXT.md`.
 
-Everything here was checked against plugin 0.5.4, the ad server in this
+Everything here was checked against plugin 0.5.5, the ad server in this
 repository (`modules/`), the ad tag (`platform/banner-bootstrap/`), CI, and a
 live WordPress on 2026-08-23. Where a statement is a design intention or an
 unverified assumption, it says so explicitly.
@@ -164,7 +164,7 @@ on every function and a `PROMOVOLVE_` prefix on every constant.
 
 ## 3. Code map
 
-All line numbers refer to `promovolve.php` at 0.5.4; they drift, the names
+All line numbers refer to `promovolve.php` at 0.5.5; they drift, the names
 do not.
 
 ### 3.1 Constants
@@ -172,7 +172,7 @@ do not.
 | Constant | Value | Used for |
 |---|---|---|
 | `PROMOVOLVE_OPTION` | `'promovolve_settings'` | the one settings option |
-| `PROMOVOLVE_VERSION` | `'0.5.4'` | cache-buster for `editor.js` (`wp_register_script` version). Must equal the header `Version:` and readme `Stable tag:`. |
+| `PROMOVOLVE_VERSION` | `'0.5.5'` | cache-buster for `editor.js` (`wp_register_script` version). Must equal the header `Version:` and readme `Stable tag:`. |
 | `PROMOVOLVE_PLACE_TAXONOMY_RECOMMENDED` | `'destination'` | the one slug the settings page recommends to a site with no place taxonomy |
 | `PROMOVOLVE_PLACE_TAXONOMY_GROUPS` | `array('admin'=>[…],'generic'=>[…],'sub'=>[…],'plugin'=>[…])` | display grouping on the settings page only |
 | `PROMOVOLVE_PLACE_TAXONOMIES` | flat list of 52 slugs | **matching** list for the place hint. `tests/topic-test.php` asserts GROUPS ⟺ flat, no slug in two groups, RECOMMENDED ∈ flat. PHP 7.4 cannot spread inside a constant array, hence two constants + a test. |
@@ -860,7 +860,7 @@ only distribution channel besides artifacts; `dist/` is gitignored.
 (+ Upgrade Notice if installing needs words) → `./build-zip.sh` → Docker WP
 checklist (§11) → commit → either dispatch the build workflow (artifact,
 private-ish) or `git tag wp-vx.y && git push --tags` (public). Note the
-record: `wp-v0.2.2` is the only public Release; 0.3.0–0.5.4 shipped as
+record: `wp-v0.2.2` is the only public Release; 0.3.0–0.5.5 shipped as
 artifacts; a `wp-v0.4.0` release was published and then deleted.
 
 The cluster deploy (`deploy.yml`) never packages the plugin, and a plugin
@@ -895,16 +895,19 @@ first — the plugin can print an attribute the tag ignores, never the reverse.
 
 ## 14. Known gaps and open issues
 
-As of 0.5.4 / 2026-08-23.
+As of 0.5.5 / 2026-08-23.
 
 **Fixed in 0.5.4** (kept here one release for anyone diffing): 204 now maps
 to `unknown`, not `verified`; the object-cache flush is gone from the purge;
 `readme.txt`'s privacy paragraph no longer claims GPC visitors get no ads
 (the server serves under `Sec-GPC: 1` since 2026-08-12 — `ServeRoutes.scala`,
-`GPC.md`) and states the dog-ear TTL correctly; the 403 comment names all
+`GPC.md`); the 403 comment names all
 three causes; the stale pre-0.5.0/0.5.2 comments and the `@return` shape are
 updated; the auto-slot checkbox says "single posts, pages and other single
-views".
+views". **0.5.5** (readme only) corrected the dog-ear retention sentence 0.5.4
+introduced: bookmarks live until campaign end (or forever) with a 24 h idle
+sweep — `dogear-storage.ts` is the authority; the "default 7-day TTL" comment
+in `bootstrap.ts` was stale and is fixed too.
 
 Still open:
 
@@ -971,6 +974,10 @@ Dated, plugin-relevant only; the repo-wide memory holds the rest.
   = host gate passed") without reading the server; the order was the
   reverse. Verify claims about the other side of a contract against its
   source, and pin the mapping in a test (`verification probe` cases).
+- **2026-08-23 (0.5.5)** — And the same mistake the same day, the other way:
+  I trusted a stale comment in `bootstrap.ts` ("default 7-day TTL") over the
+  storage module that implements the policy. Read the implementation, not
+  the comment about it, before writing a user-facing sentence.
 
 ---
 

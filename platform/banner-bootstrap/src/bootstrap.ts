@@ -89,9 +89,10 @@ interface ServeRes {
   honorPin?: boolean;
   foldToken?: string;
   dogear?: DogearInfo;
-  // Campaign endAt as epoch millis — bootstrap caps the pin's
-  // expiresAt at this value. Absent = open-ended campaign, fall back
-  // to the bootstrap's default 7-day TTL.
+  // Campaign endAt as epoch millis — the pin's expiresAt. Absent =
+  // open-ended campaign → the pin lives forever (dogear-storage.ts
+  // FOREVER sentinel), subject only to the 24h idle sweep, unfold, or
+  // creative_removed. There is no time-based default TTL.
   pinExpiresAt?: number;
 }
 
