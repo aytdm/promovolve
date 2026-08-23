@@ -163,3 +163,21 @@ describe("runBatch 204", () => {
     expect(out.needClassify).toBe(false);
   });
 });
+
+describe("runBatch frequency-cap exclusions", () => {
+  beforeEach(() => vi.unstubAllGlobals());
+
+  it("sends excludeCampaigns only when there is something to exclude", async () => {
+    const { runBatch } = await load(0);
+    const fetchMock = vi.fn().mockResolvedValue(okResponse());
+    vi.stubGlobal("fetch", fetchMock);
+
+    await runBatch(SLOTS, [], []);
+    const first = JSON.parse((fetchMock.mock.calls[0]?.[1] as RequestInit).body as string);
+    expect("excludeCampaigns" in first).toBe(false);
+
+    await runBatch(SLOTS, [], ["campA", "campB"]);
+    const second = JSON.parse((fetchMock.mock.calls[1]?.[1] as RequestInit).body as string);
+    expect(second.excludeCampaigns).toEqual(["campA", "campB"]);
+  });
+});

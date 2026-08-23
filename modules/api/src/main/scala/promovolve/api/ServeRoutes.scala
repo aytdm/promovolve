@@ -53,7 +53,7 @@ final case class DogearInfo(honored: Boolean, reason: Option[String] = None)
  * server never counts — it only carries the policy out and honours the
  * browser's `excludeCampaigns` on the way back. docs/design/FREQUENCY_CAPPING.md.
  */
-final case class FrequencyCapWire(n: Int, windowMs: Long)
+final case class FrequencyCapWire(campaignId: String, n: Int, windowMs: Long)
 
 /**
  * Pin hint from the bootstrap. Tells the server "this slot is pinned to
@@ -240,7 +240,7 @@ private[api] object StalePins {
 trait ServeJson extends DefaultJsonProtocol {
   given RootJsonFormat[DogearInfo] = jsonFormat2(DogearInfo.apply)
   given RootJsonFormat[PinHint] = jsonFormat2(PinHint.apply)
-  given RootJsonFormat[FrequencyCapWire] = jsonFormat2(FrequencyCapWire.apply)
+  given RootJsonFormat[FrequencyCapWire] = jsonFormat3(FrequencyCapWire.apply)
   given RootJsonFormat[ServeRes] = jsonFormat17(ServeRes.apply)
   given RootJsonFormat[BatchImp] = jsonFormat4(BatchImp.apply)
   given RootJsonFormat[BatchServeReq] = jsonFormat6(BatchServeReq.apply)
@@ -689,7 +689,7 @@ final class ServeRoutes(
           info.endAt.map(_.toEpochMilli),
           info.frequencyCap.flatMap(cap =>
             promovolve.advertiser.CampaignEntity.FrequencyCap.windowMs(cap.window)
-              .map(ms => FrequencyCapWire(cap.impressions, ms)))
+              .map(ms => FrequencyCapWire(campaignId, cap.impressions, ms)))
         ))
       .recover { case _ => (None, None) }
   }

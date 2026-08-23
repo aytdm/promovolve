@@ -13,10 +13,10 @@ beforeEach(() => {
   globalThis.indexedDB = new IDBFactory();
 });
 
-// All tests construct Pins with the same default-TTL semantics the
-// bootstrap uses when the server didn't supply a campaign endAt: 7
-// days from foldedAt. Local helper so tests don't have to import the
-// production pinExpiresAt() (which is exercised separately).
+// Tests construct Pins with an arbitrary 7-day expiry. (The production
+// policy — pinExpiresAt(), exercised separately — is campaign endAt or
+// FOREVER; there is no time-based default. The constant here is only a
+// convenient "far enough in the future" for these fixtures.)
 const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
 const defaultExpiry = (foldedAt: number): number => foldedAt + SEVEN_DAYS;
 
@@ -314,5 +314,39 @@ describe("dogear-storage", () => {
     const pin = await storage.getPin("s1");
     expect(pin?.page).toBe(1);
     expect(pin?.foldedAt).toBe(t1);
+  });
+});
+
+describe("impressions store (frequency capping)", () => {
+  it("recordImpression → getImpressions round-trips and keeps the policy stamped on the row", async () => {
+    const { recordImpression, getImpressions } = await loadStorage();
+    const now = Date.now();
+    await recordImpression({ campaignId: "campA", creativeId: "c1", at: now, n: 3, windowMs: 86_400_000 });
+    const rows = await getImpressions(now);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ campaignId: "campA", creativeId: "c1", at: now, n: 3, windowMs: 86_400_000 });
+    expect(rows[0]?.id).toBeDefined();
+  });
+
+  it("sweeps rows older than the retention window on read and on write", async () => {
+    const { recordImpression, getImpressions, IMPRESSION_RETENTION_MS } = await loadStorage();
+    const now = Date.now();
+    await recordImpression({ campaignId: "old", creativeId: "c0", at: now - IMPRESSION_RETENTION_MS - 1000, n: 1, windowMs: 3_600_000 });
+    await recordImpression({ campaignId: "new", creativeId: "c1", at: now, n: 1, windowMs: 3_600_000 });
+    const rows = await getImpressions(now);
+    expect(rows.map((r) => r.campaignId)).toEqual(["new"]);
+  });
+
+  it("caps the store at MAX_IMPRESSION_RECORDS by dropping the oldest", async () => {
+    const { recordImpression, getImpressions, MAX_IMPRESSION_RECORDS } = await loadStorage();
+    const now = Date.now();
+    for (let i = 0; i < MAX_IMPRESSION_RECORDS + 5; i++) {
+      await recordImpression({ campaignId: `c${i}`, creativeId: "x", at: now - (MAX_IMPRESSION_RECORDS + 5 - i) * 1000, n: 9, windowMs: 86_400_000 });
+    }
+    const rows = await getImpressions(now);
+    expect(rows).toHaveLength(MAX_IMPRESSION_RECORDS);
+    // The oldest five (c0..c4) are gone; the newest survives.
+    expect(rows.some((r) => r.campaignId === "c0")).toBe(false);
+    expect(rows.some((r) => r.campaignId === `c${MAX_IMPRESSION_RECORDS + 4}`)).toBe(true);
   });
 });

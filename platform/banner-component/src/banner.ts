@@ -512,6 +512,11 @@ export class ExpandableMagazineBanner extends HTMLElement {
     // doesn't compete with banner asset loads at default priority.
     const pixel = new Image();
     pixel.src = impUrl;
+    // Tell the bootstrap (outside the shadow root) that THIS is the
+    // billed impression moment, so it can record it for frequency
+    // capping (docs/design/FREQUENCY_CAPPING.md). Presentation stays
+    // here; storage and policy live in the bootstrap, like dog-ears.
+    this.dispatchEvent(new CustomEvent("impression", { bubbles: true, composed: true }));
     // Tie the teaser to the viewability moment: the corner-lift hint
     // plays exactly when the impression counts (and the reader is
     // looking), not on mount where it'd fire off-screen.

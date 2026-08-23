@@ -34,9 +34,15 @@ const DB_NAME = "promovolve-dogear";
 // new store created on next page load — no migration needed because
 // `ts_counted` is purely additive (deduping fold POSTs that were
 // previously always sent).
-const DB_VERSION = 2;
+// 3 adds the `impressions` store (frequency capping — see recordImpression).
+const DB_VERSION = 3;
 const STORE = "pins";
 const COUNTED_STORE = "ts_counted";
+// Frequency capping (docs/design/FREQUENCY_CAPPING.md): one row per BILLED
+// impression of an auction winner, with the campaign's cap policy as it
+// stood at that moment. Read before every batch to compute the campaigns
+// this browser declines; never leaves the browser except as that list.
+const IMPRESSIONS_STORE = "impressions";
 
 // Sentinel used when no campaign endAt is provided — the pin (and the
 // matching ts_counted record) lives forever. Number.POSITIVE_INFINITY
@@ -162,6 +168,9 @@ function openDb(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(COUNTED_STORE)) {
         db.createObjectStore(COUNTED_STORE, { keyPath: "creativeId" });
+      }
+      if (!db.objectStoreNames.contains(IMPRESSIONS_STORE)) {
+        db.createObjectStore(IMPRESSIONS_STORE, { keyPath: "id", autoIncrement: true });
       }
     };
     req.onsuccess = () => resolve(req.result);
@@ -463,5 +472,69 @@ export function clearCounted(creativeId: string): Promise<void> {
     tx.oncomplete = () => resolve();
     tx.onerror = () => resolve();
     tx.onabort = () => resolve();
+  });
+}
+
+// ─── Frequency capping: impression records ───────────────────────
+
+export interface Impression {
+  id?: number;          // autoIncrement key
+  campaignId: string;
+  creativeId: string;
+  at: number;           // epoch ms when the impression beacon fired
+  n: number;            // the campaign's cap at that moment
+  windowMs: number;     // …and its window
+}
+
+/** Longest window the server can send (7 days); older rows are useless. */
+export const IMPRESSION_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+/** Hard size cap; a heavy reader never grows this store unboundedly. */
+export const MAX_IMPRESSION_RECORDS = 500;
+
+/** Append one billed impression and prune: drop rows older than the
+ *  retention window and, if still over the size cap, the oldest rows.
+ *  Best-effort — a failed write loses a count, never a render. */
+export function recordImpression(rec: Impression): Promise<void> {
+  return idb<void>(undefined, (db, resolve) => {
+    const tx = db.transaction(IMPRESSIONS_STORE, "readwrite");
+    const store = tx.objectStore(IMPRESSIONS_STORE);
+    store.add({ campaignId: rec.campaignId, creativeId: rec.creativeId, at: rec.at, n: rec.n, windowMs: rec.windowMs });
+    const req = store.getAll();
+    req.onsuccess = () => {
+      const all = ((req.result as Impression[]) ?? []).slice().sort((a, b) => a.at - b.at);
+      const cutoff = rec.at - IMPRESSION_RETENTION_MS;
+      let excess = Math.max(0, all.length - MAX_IMPRESSION_RECORDS);
+      for (const row of all) {
+        if (row.id === undefined) continue;
+        if (row.at < cutoff || excess > 0) {
+          store.delete(row.id);
+          if (row.at >= cutoff) excess--;
+        }
+      }
+    };
+    tx.oncomplete = () => resolve(undefined);
+    tx.onerror = () => resolve(undefined);
+    tx.onabort = () => resolve(undefined);
+  });
+}
+
+/** All impressions inside the retention window; older rows are deleted
+ *  in the same pass (read-time sweep, like getAllPins). */
+export function getImpressions(now: number = Date.now()): Promise<Impression[]> {
+  return idb<Impression[]>([], (db, resolve) => {
+    const tx = db.transaction(IMPRESSIONS_STORE, "readwrite");
+    const store = tx.objectStore(IMPRESSIONS_STORE);
+    const req = store.getAll();
+    req.onsuccess = () => {
+      const all = (req.result as Impression[]) ?? [];
+      const cutoff = now - IMPRESSION_RETENTION_MS;
+      const fresh: Impression[] = [];
+      for (const row of all) {
+        if (row.at >= cutoff) fresh.push(row);
+        else if (row.id !== undefined) store.delete(row.id);
+      }
+      resolve(fresh);
+    };
+    req.onerror = () => resolve([]);
   });
 }

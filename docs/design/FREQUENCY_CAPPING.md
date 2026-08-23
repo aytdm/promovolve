@@ -7,8 +7,16 @@
 > `BatchServeReq.excludeCampaigns` → `ExcludeCampaigns.merge` (≤ 32) into the
 > hard exclusion; size-only logging. Specs: `CampaignFrequencyCapSpec`
 > (rules + real-entity tri-state), `CampaignJsonSpec`, `ExcludeCampaignsSpec`,
-> `AdServerBatchRetrySpec` pin-bypass case. **Tag and dashboard halves not
-> built yet.** Before this: the only cap was *one campaign per page per
+> `AdServerBatchRetrySpec` pin-bypass case. **Tag half BUILT** (2026-08-24):
+> `banner.ts` dispatches `impression` at the viewability/billing moment;
+> `dogear-storage.ts` v3 adds the `impressions` store (`recordImpression`,
+> `getImpressions`, 7-day retention, 500-row cap); `frequency-cap.ts`
+> `cappedCampaigns` (policy = most recent record, exclusive window boundary,
+> ≤ 32, most-recent-first); bootstrap records auction winners only (not
+> pin-honoured), sends `excludeCampaigns`. `FrequencyCapWire` carries
+> `campaignId` (ServeRes has no campaign id otherwise). vitest: `frequency-cap`,
+> `dogear-storage` impressions, `serve-retry` body case. **Dashboard half
+> (create/edit field, i18n, help) not built yet.** Before this: the only cap was *one campaign per page per
 > batch* (`AdServer.batchReserveWithRetry`); no `frequencyCap` field had ever
 > existed (`git log --all -S frequencyCap` was empty).
 
@@ -129,7 +137,10 @@ server: excludedCampaigns ++= body.excludeCampaigns   →  batchReserveWithRetry
 ### Serve (api)
 
 - `ServeRes.frequencyCap: Option[FrequencyCapWire] = None` with
-  `FrequencyCapWire(n: Int, windowMs: Long)`; populated per winner. Source:
+  `FrequencyCapWire(campaignId: String, n: Int, windowMs: Long)` — the
+  campaign id rides inside the policy because `ServeRes` carries none
+  otherwise (it is already public in the signed beacon URLs and landing
+  macros); populated per winner. Source:
   the campaign's current config. `campaignPinExpiresAt` already does one
   `GetCampaign` ask per winner for `pinExpiresAt`; widen that ask to return
   both values in one round trip rather than adding a second ask.

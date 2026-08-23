@@ -53,9 +53,9 @@ class ExcludeCampaignsSpec extends AnyWordSpec with Matchers with ServeJson {
     "carry frequencyCap when set and omit it when not" in {
       val base = ServeRes("a", "image/png", "click", "imp", "cta", "cr1", 1L, "https://example.com")
       base.toJson.asJsObject.fields.get("frequencyCap") shouldBe None
-      val capped = base.copy(frequencyCap = Some(FrequencyCapWire(3, 86_400_000L)))
+      val capped = base.copy(frequencyCap = Some(FrequencyCapWire("camp-1", 3, 86_400_000L)))
       capped.toJson.asJsObject.fields("frequencyCap") shouldBe
-      JsObject("n" -> JsNumber(3), "windowMs" -> JsNumber(86_400_000L))
+      JsObject("campaignId" -> JsString("camp-1"), "n" -> JsNumber(3), "windowMs" -> JsNumber(86_400_000L))
       capped.toJson.convertTo[ServeRes] shouldBe capped
     }
   }

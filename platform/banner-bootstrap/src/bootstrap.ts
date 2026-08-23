@@ -35,11 +35,12 @@
 //      display:none so they don't leave reserved space.
 
 import {
-  claimUnfoldReport, clearPin, clearPinsByCreativeIds, getAllPins, markCounted, pinExpiresAt,
-  setPin, wasCounted,
+  claimUnfoldReport, clearPin, clearPinsByCreativeIds, getAllPins, getImpressions, markCounted,
+  pinExpiresAt, recordImpression, setPin, wasCounted,
   type Pin,
 } from "./dogear-storage.js";
 import { attachLpPrefetch } from "./lp-prefetch.js";
+import { cappedCampaigns } from "./frequency-cap.js";
 import { clearRemovedPin, isCreativeRemoved, processDogearResponse } from "./dogear-response.js";
 import { hbArmFlush, hbInit, hbMounted, hbSend, hbServe, hbSlots } from "./heartbeat.js";
 
@@ -61,6 +62,18 @@ interface BatchServeReq {
   pub: string;
   url: string;
   imp: BatchImp[];  pins?: PinHint[];
+  // Campaigns this browser declines — at/over their frequency cap per its
+  // own impression records (frequency-cap.ts). Only present when non-empty.
+  excludeCampaigns?: string[];
+}
+
+// Per-winner frequency-cap policy (docs/design/FREQUENCY_CAPPING.md): at
+// most `n` billed impressions per `windowMs` of this campaign in this
+// browser. The server never counts; this bootstrap does, in IndexedDB.
+interface FrequencyCapWire {
+  campaignId: string;
+  n: number;
+  windowMs: number;
 }
 
 interface DogearInfo {
@@ -94,6 +107,8 @@ interface ServeRes {
   // FOREVER sentinel), subject only to the 24h idle sweep, unfold, or
   // creative_removed. There is no time-based default TTL.
   pinExpiresAt?: number;
+  // Absent = uncapped campaign: nothing to record, nothing to exclude.
+  frequencyCap?: FrequencyCapWire;
 }
 
 interface BatchImpResult {
@@ -447,6 +462,24 @@ async function renderWinner(slot: Slot, winner: ServeRes, pin?: Pin): Promise<vo
   if (pinnedPage !== null) {
     banner.setAttribute("data-pinned-page", String(pinnedPage));
   }
+  // Frequency capping: count this render against the campaign's cap the
+  // moment the banner fires its impression (≥50% viewable — the billing
+  // moment, so the cap counts what the advertiser pays for). Pin-honoured
+  // renders are NOT counted: the reader asked for that creative, and the
+  // server keeps them out of primary metrics too. Uncapped campaigns send
+  // no policy, so nothing is stored for them.
+  const cap = winner.frequencyCap;
+  if (cap && !winner.dogear?.honored && cap.n > 0 && cap.windowMs > 0) {
+    banner.addEventListener("impression", () => {
+      void recordImpression({
+        campaignId: cap.campaignId,
+        creativeId: winner.creativeId,
+        at: Date.now(),
+        n: cap.n,
+        windowMs: cap.windowMs,
+      });
+    }, { once: true });
+  }
   // Wire LP prefetch / preconnect / prerender to the banner's
   // lifecycle events before mount so the listeners are live by the
   // time `magazine-expand` fires from `_expand()` post-renderOverlay.
@@ -491,12 +524,14 @@ export function isTransientFailure(failReason: string | undefined): boolean {
 export async function runBatch(
   slotsToServe: Slot[],
   pinHints: PinHint[],
+  excludeCampaigns: string[] = [],
 ): Promise<BatchOutcome> {
   const body: BatchServeReq = {
     pub: config.pub,
     url: window.location.href,
     imp: slotsToServe.map((s) => ({ id: s.id, w: s.w, h: s.h })),
     pins: pinHints.length > 0 ? pinHints : undefined,
+    excludeCampaigns: excludeCampaigns.length > 0 ? excludeCampaigns : undefined,
   };
 
   const first = await batchAttempt(body);
@@ -786,8 +821,13 @@ async function displayImpl(): Promise<void> {
     creativeId: p.creativeId,
   }));
 
+  // Frequency capping: which campaigns has this browser seen enough of?
+  // Read-sweeps the impression store like getAllPins does for pins. IDB
+  // unavailable or hung → empty list → uncapped (fail open, never blank).
+  const excludeCampaigns = cappedCampaigns(await getImpressions());
+
   const { results: batchResults, stalePins, needClassify, answered, failReason } =
-    await runBatch(allSlots, pinHints);
+    await runBatch(allSlots, pinHints, excludeCampaigns);
   const servedCount = allSlots.filter((s) => batchResults.get(s.id)?.winner).length;
   hbServe(answered, servedCount, failReason);
 
