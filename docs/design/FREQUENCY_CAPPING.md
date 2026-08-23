@@ -228,6 +228,33 @@ every cookieless cap has; the advertiser UI copy should say "per browser".
    same browser; cap 1/hour → second page load shows a different
    advertiser or no fill).
 
+## Cross-site capping: deliberately deferred, with a trigger
+
+Per-site is the v1 **decision** (2026-08-24), not an oversight. Because the
+network is contextual, a reader browsing a vertical can meet the same
+campaign on several publishers — up to N × sites-visited exposures — and
+that grows with the network. It is accepted for now because the cost of a
+cross-site identifier is not free: it turns the structural "nothing to opt
+out of" posture (`GPC.md`) into a policy promise, needs consent in the EU
+(capping is not "strictly necessary"), only works where third-party cookies
+still do (Chrome; not Safari/Firefox/Brave), and puts per-ID counts on the
+server. Nothing in v1 blocks adding it later — the store, the impression
+event and the `excludeCampaigns` path stay; only *where the count lives*
+changes.
+
+**Revisit trigger:** when ≥ 5 live publishers share a campaign's target
+categories (or an advertiser reports cross-site repetition), decide between:
+
+- **C. cap-only cross-site cookie** on the ads host — opaque counter ID,
+  never used for selection, skipped under `Sec-GPC: 1`, counts kept
+  server-side per ID with a short TTL; Chrome-only in practice; GPC.md
+  rewritten accordingly; publishers told they need consent in the EU.
+- **Reader opt-in account** (passkey) — cross-site and cross-device, keeps
+  the structural story; value limited to readers who opt in (they would get
+  cross-device dog-ears in return).
+- **Chrome Shared Storage** — identity-free cross-site cap, but selects among
+  fenced-frame URLs; a rework of the render model; Chrome-only.
+
 ## Open
 
 - Publisher-level cap (site policy in `ServeRes`) — same mechanism, later.
