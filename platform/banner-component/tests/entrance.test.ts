@@ -40,7 +40,7 @@ describe("entrance helpers", () => {
 
 // End-pose (animationTo) offset resolution: dx/dy ride the CURRENT
 // authored position (drag-safe), absolute left/top win when present.
-import { applyTargetState, resolveTargetValues, targetStartSeconds, transitionFor } from "../src/motion";
+import { applySettledState, applyTargetState, resolveTargetValues, targetStartSeconds, transitionFor } from "../src/motion";
 
 describe("end-pose offsets", () => {
   it("resolveTargetValues: dx/dy add to base, absolutes win over offsets", () => {
@@ -81,5 +81,44 @@ describe("fade easing split", () => {
     expect(t).toContain("opacity 0.7s cubic-bezier(0.37,0,0.63,1)");
     const explicit = transitionFor({ opacity: 0, duration: 1, easing: "linear" }, 0.8);
     expect(explicit).toContain("opacity 1s linear");
+  });
+});
+
+// A page in the expanded reader plays its choreography ONCE, at the
+// moment it opens. Every later re-staging of that page — turned back
+// to, waiting in the pile, landing from a turn — settles it at the end
+// pose instead of replaying, and applySettledState is that pose.
+describe("settled (already-played) pose", () => {
+  it("lands on the end pose with transitions off — no tween on re-entry", () => {
+    const el = document.createElement("div");
+    // Play state: mid-entrance, off-pose and transitioning.
+    applyEntranceStart(el, { dy: 8, opacity: 0 }, base);
+    expect(el.style.top).toBe("28%");
+    applySettledState(el, { dy: -3, opacity: 0.5, duration: 0.7 }, base);
+    expect(el.style.transition).toBe("none");
+    expect(el.style.left).toBe("10%");          // entrance home
+    expect(el.style.top).toBe("17%");           // …then the end-pose offset
+    expect(el.style.opacity).toBe("0.5");
+  });
+
+  it("an entrance-only item settles at its authored resting pose", () => {
+    const el = document.createElement("div");
+    applyEntranceStart(el, { dx: -20, opacity: 0 }, base);
+    applySettledState(el, null, base);
+    expect(el.style.left).toBe("10%");
+    expect(el.style.top).toBe("20%");
+    expect(el.style.scale).toBe("");
+    expect(el.style.opacity).toBe("");          // base opacity 1 → unset
+  });
+
+  it("clears a stale off-pose in every field the base owns", () => {
+    const el = document.createElement("div");
+    applyEntranceStart(el, { dx: 5, dy: 5, rotate: 30, scale: 0.5, opacity: 0 }, base);
+    applySettledState(el, null, { left: 10, top: 20, rotation: 4, opacity: 0.8 });
+    expect(el.style.left).toBe("10%");
+    expect(el.style.top).toBe("20%");
+    expect(el.style.rotate).toBe("4deg");
+    expect(el.style.scale).toBe("");
+    expect(el.style.opacity).toBe("0.8");
   });
 });

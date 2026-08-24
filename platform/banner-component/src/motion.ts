@@ -129,6 +129,29 @@ export function applyTargetState(
   if (target.opacity !== undefined) el.style.opacity = String(values.opacity);
 }
 
+/** Snap an element to the pose its choreography ENDS in: the authored
+  * resting base (where an entrance tweens home to) with the animationTo
+  * end state written on top, transitions off. `to` = null settles an
+  * item that only has an entrance — its end pose IS the base.
+  *
+  * This is what a page that has ALREADY played looks like. The expanded
+  * reader plays a page's motion once, at the moment the page opens;
+  * flipping back to a read page must show it the way the reader left
+  * it, not replay copy they have already read. */
+export function applySettledState(
+  el: HTMLElement,
+  to: MotionTarget | null,
+  base: EntranceBase,
+): void {
+  el.style.transition = "none";
+  el.style.left = `${base.left}%`;
+  el.style.top = `${base.top}%`;
+  el.style.rotate = base.rotation ? `${base.rotation}deg` : "";
+  el.style.scale = "";
+  el.style.opacity = base.opacity !== 1 ? String(base.opacity) : "";
+  if (to) applyTargetState(el, to, resolveTargetValues(to, base));
+}
+
 // Binary-search the font-size until the wrapped text fits inside the
 // item's clip box. The CSS starts as `${fs}cqh`; we measure in px for
 // precision, then write the result back in cqh so it scales

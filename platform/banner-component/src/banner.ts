@@ -2,7 +2,8 @@ import type { BannerConfig, ExpandAnimation, LayoutItem, MotionTarget, Page, Pap
 import { PAPER_FEEL, dealTempo } from "./types";
 import { fontMain, fontUI } from "./fonts";
 import { layoutItemToNode } from "./layout-item";
-import { applyEntranceStart, applyTargetState, autoFitText, harmonizeAutofit, playEntranceHome, prefersReducedMotion, resolveTargetValues, targetStartSeconds, transitionFor } from "./motion";
+import type { EntranceBase } from "./motion";
+import { applyEntranceStart, applySettledState, applyTargetState, autoFitText, harmonizeAutofit, playEntranceHome, prefersReducedMotion, resolveTargetValues, targetStartSeconds, transitionFor } from "./motion";
 import { renderCollapsedItemHtml } from "./render-collapsed";
 import {
   buildCloseButton,
@@ -66,6 +67,18 @@ const DEFAULT_CONFIG: BannerConfig = {
 // clean: all landscape phones below, portrait phones (≥640) and tablets
 // (≥744) above, and the ~60px mobile URL-bar wobble can't flip anyone.
 const MIN_EXPAND_VH = 480;
+
+// The authored resting pose an expanded-reader item's motion is measured
+// against — entrances tween home to it, animationTo offsets ride on it.
+// Read back off the datasets layoutItemToNode stashed on the node.
+function itemBase(item: HTMLElement): EntranceBase {
+  return {
+    left: Number(item.dataset.baseLeft ?? "0"),
+    top: Number(item.dataset.baseTop ?? "0"),
+    rotation: Number(item.dataset.baseRotation ?? "0"),
+    opacity: Number(item.dataset.baseOpacity ?? "1"),
+  };
+}
 
 export class ExpandableMagazineBanner extends HTMLElement {
   private _expanded = false;
@@ -181,6 +194,14 @@ export class ExpandableMagazineBanner extends HTMLElement {
   // starting the next turn so spamming next/prev can't stack
   // half-finished animations.
   private _finishTurn: (() => void) | null = null;
+  // Page indices whose item choreography has ALREADY played, this read.
+  // The reader is paper: a page's motion is the moment it OPENS, and a
+  // page opens once. Flipping BACK to a page (or forward again past one
+  // you turned back from) is navigation, not a re-open — those pages
+  // show their settled end pose instead of replaying copy the reader
+  // has already read. Cleared with the overlay in renderOverlay, so a
+  // fresh expand is a fresh read.
+  private _playedPages = new Set<number>();
 
   constructor() {
     super();
@@ -1811,6 +1832,8 @@ export class ExpandableMagazineBanner extends HTMLElement {
     // Fresh overlay → nothing displayed yet; the first updatePages
     // must place the cover without animating a turn from a stale index.
     this._displayedPage = null;
+    // …and a fresh read: every page's choreography is owed again.
+    this._playedPages.clear();
 
     // Derive the overlay background from the cover page's bg so the
     // reader chrome harmonizes with the creative's authored palette,
@@ -2649,13 +2672,7 @@ export class ExpandableMagazineBanner extends HTMLElement {
   // animationTo end-pose tween. Reads both off dataset (stashed by
   // layoutItemToNode).
   private playItemAnimation(item: HTMLElement): void {
-    const baseValues = {
-      left: Number(item.dataset.baseLeft ?? "0"),
-      top: Number(item.dataset.baseTop ?? "0"),
-      rotation: Number(item.dataset.baseRotation ?? "0"),
-      scale: 1,
-      opacity: Number(item.dataset.baseOpacity ?? "1"),
-    };
+    const baseValues = itemBase(item);
     const from = parseJSON<import("./types").MotionFrom>(item.dataset.animationFrom);
     if (from) this.playEntrance(item, from, baseValues);
     const to = parseJSON<MotionTarget>(item.dataset.animationTo);
@@ -2715,11 +2732,19 @@ export class ExpandableMagazineBanner extends HTMLElement {
       if (!el) return;
       const isActive = i === current;
 
-      if (isActive) {
-        const playAll = (): void =>
+      if (isActive && this._playedPages.has(i)) {
+        // Already read: this page played its choreography when it first
+        // opened. Turning back to it shows the page as the reader left
+        // it — items at their end pose, no replay, no re-posing at the
+        // entrance start.
+        this.settleItemAnimations(el);
+      } else if (isActive) {
+        const playAll = (): void => {
+          this._playedPages.add(i);
           el.querySelectorAll<HTMLElement>("[data-anim-item]").forEach((item) => {
             this.playItemAnimation(item);
           });
+        };
         if (turnFrom !== null) {
           // A clock turn (arrows/keys) is peeling the sheet above this
           // page RIGHT NOW — playing here runs the choreography beneath
@@ -2760,6 +2785,13 @@ export class ExpandableMagazineBanner extends HTMLElement {
         // The outgoing page of a turn keeps its items posed until the
         // sheet has rotated away (reset in onDone) — resetting now
         // would visibly snap them mid-turn.
+        // A read page holds its END pose while it waits off-stage: it
+        // may be flipped back to, and re-opening it must not stage a
+        // replay. Only unread pages reset/pose for their first play.
+        if (this._playedPages.has(i)) {
+          this.settleItemAnimations(el);
+          return;
+        }
         this.resetItemAnimations(el);
         // UPCOMING pages (still in the pile) hold their entrance START
         // pose while they wait — the interactive peel progressively
@@ -2794,21 +2826,30 @@ export class ExpandableMagazineBanner extends HTMLElement {
             // (the .paper-stack transform transition animates the
             // slide while the page is still settling).
             this.applyStackLayout(overlay, pages.length, current, new Set());
-            this.resetItemAnimations(outgoing);
-            // A PREV turn sends the outgoing page back to the pile
-            // (it's upcoming again) — re-pose its entrance start so
-            // its pile sliver doesn't flash read text and its next
-            // open replays cleanly. After a NEXT turn the outgoing
-            // page is read/off-pile and stays at rest.
-            if (turnFrom !== null && turnFrom > current) {
-              this.poseItemAnimationsAtStart(outgoing);
+            // The outgoing page has been READ — it keeps the end pose
+            // it played into, whichever direction it is flipped back
+            // from. Only a page that never played (no motion items,
+            // reduced motion, navigated away mid-hold) resets; a PREV
+            // turn then sends it back to the pile as upcoming, so
+            // re-pose its entrance start — its pile sliver must not
+            // flash the copy, and its first open still plays cleanly.
+            if (turnFrom !== null && this._playedPages.has(turnFrom)) {
+              this.settleItemAnimations(outgoing);
+            } else {
+              this.resetItemAnimations(outgoing);
+              if (turnFrom !== null && turnFrom > current) {
+                this.poseItemAnimationsAtStart(outgoing);
+              }
             }
             // The page is open NOW — play its motion (posed at the
             // entrance start when the turn began). Skipped when
             // navigation already moved on (spamming next/prev settles
             // this turn instantly and the newer updatePages pass owns
             // the newer page's timing).
-            if (this._displayedPage === current) {
+            // An already-read incoming page has nothing to play — it
+            // was settled at its end pose when the turn began.
+            if (this._displayedPage === current && !this._playedPages.has(current)) {
+              this._playedPages.add(current);
               incoming.querySelectorAll<HTMLElement>("[data-anim-item]").forEach((item) => {
                 this.playItemAnimation(item);
               });
@@ -2921,27 +2962,24 @@ export class ExpandableMagazineBanner extends HTMLElement {
     pageEl.querySelectorAll<HTMLElement>("[data-anim-item]").forEach((item) => {
       const from = parseJSON<import("./types").MotionFrom>(item.dataset.animationFrom);
       if (!from) return;
-      applyEntranceStart(item, from, {
-        left: Number(item.dataset.baseLeft ?? "0"),
-        top: Number(item.dataset.baseTop ?? "0"),
-        rotation: Number(item.dataset.baseRotation ?? "0"),
-        opacity: Number(item.dataset.baseOpacity ?? "1"),
-      });
+      applyEntranceStart(item, from, itemBase(item));
     });
   }
 
   private resetItemAnimations(pageEl: HTMLElement): void {
     pageEl.querySelectorAll<HTMLElement>("[data-anim-item]").forEach((item) => {
-      const baseLeft = Number(item.dataset.baseLeft ?? "0");
-      const baseTop = Number(item.dataset.baseTop ?? "0");
-      const baseRotation = Number(item.dataset.baseRotation ?? "0");
-      const baseOpacity = Number(item.dataset.baseOpacity ?? "1");
-      item.style.transition = "none";
-      item.style.left = `${baseLeft}%`;
-      item.style.top = `${baseTop}%`;
-      item.style.rotate = baseRotation ? `${baseRotation}deg` : "";
-      item.style.scale = "";
-      item.style.opacity = baseOpacity !== 1 ? String(baseOpacity) : "";
+      applySettledState(item, null, itemBase(item));
+    });
+  }
+
+  /** Snap a page's motion items to the pose their choreography ENDS in
+    * (resting base + any animationTo end state), transitions off. The
+    * shape of a page that has already been read: used everywhere a
+    * played page is re-staged — turned back to, waiting in the pile
+    * after a back-turn, or landing from a turn it already played. */
+  private settleItemAnimations(pageEl: HTMLElement): void {
+    pageEl.querySelectorAll<HTMLElement>("[data-anim-item]").forEach((item) => {
+      applySettledState(item, parseJSON<MotionTarget>(item.dataset.animationTo), itemBase(item));
     });
   }
 }
