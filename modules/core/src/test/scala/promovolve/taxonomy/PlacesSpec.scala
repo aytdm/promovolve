@@ -153,6 +153,158 @@ class PlacesSpec extends AnyWordSpec with Matchers with OptionValues {
     }
   }
 
+  // Names, not codes. Asking a model for "JP-17" asked it to recall
+  // arbitrary numbering it has no principled grip on, and a wrong-but-
+  // valid code is indistinguishable from a right one once parsed. Asking
+  // for "Ishikawa" asks it for geography, and the table does the rest.
+  "resolveCountry" should {
+
+    "resolve the catalogue's own name" in {
+      Places.resolveCountry("Japan").value.code shouldBe "JP"
+      Places.resolveCountry(" germany ").value.code shouldBe "DE"
+    }
+
+    // iso-codes ships the formal name; nobody writes it. These come from
+    // the hand-maintained aliases_en.tsv.
+    "resolve the everyday English name" in {
+      Places.resolveCountry("South Korea").value.code shouldBe "KR"
+      Places.resolveCountry("Taiwan").value.code shouldBe "TW"
+      Places.resolveCountry("USA").value.code shouldBe "US"
+      Places.resolveCountry("Vietnam").value.code shouldBe "VN"
+    }
+
+    // Derived from the catalogue's own spelling by Places.nameVariants —
+    // no alias row needed for either form.
+    "resolve a comma-inverted formal name" in {
+      Places.resolveCountry("Republic of Korea").value.code shouldBe "KR"
+      Places.resolveCountry("British Virgin Islands").value.code shouldBe "VG"
+    }
+
+    // "Congo" is CG's real name AND a derived head of CD's. Primary wins,
+    // so the derived collision resolves to nothing instead of to the
+    // wrong country.
+    "let a real name outrank a derived one, and refuse an ambiguous derivation" in {
+      Places.resolveCountry("Congo").value.code shouldBe "CG"
+      Places.resolveCountry("Virgin Islands") shouldBe None
+    }
+
+    "refuse a name the table does not carry" in {
+      Places.resolveCountry("Freedonia") shouldBe None
+      Places.resolveCountry("  ") shouldBe None
+    }
+  }
+
+  "resolveSubdivision" should {
+
+    "resolve a region inside its country" in {
+      Places.resolveSubdivision("Ishikawa", "JP").value.code shouldBe "JP-17"
+      Places.resolveSubdivision("California", "US").value.code shouldBe "US-CA"
+    }
+
+    // A model writes the administrative word; the table omits it.
+    "tolerate an English administrative word" in {
+      Places.resolveSubdivision("Ishikawa Prefecture", "JP").value.code shouldBe "JP-17"
+      Places.resolveSubdivision("石川県", "JP").value.code shouldBe "JP-17"
+    }
+
+    // ISO carries the local spelling with the alternate in brackets;
+    // nameVariants makes both reachable.
+    "resolve a bracketed alternate spelling" in {
+      Places.resolveSubdivision("Cataluña", "ES").value.code shouldBe "ES-CT"
+      Places.resolveSubdivision("Catalunya", "ES").value.code shouldBe "ES-CT"
+    }
+
+    // Georgia is a country AND a US state. Kind and scope separate them
+    // with no special case.
+    "keep a country and a same-named subdivision apart" in {
+      Places.resolveSubdivision("Georgia", "US").value.code shouldBe "US-GA"
+      Places.resolveCountry("Georgia").value.code shouldBe "GE"
+    }
+
+    "refuse a region outside the stated country, or a scope that is not a country" in {
+      Places.resolveSubdivision("Ishikawa", "US") shouldBe None
+      Places.resolveSubdivision("Ishikawa", "JP-17") shouldBe None
+      Places.resolveSubdivision("Ishikawa", "XX") shouldBe None
+    }
+  }
+
+  "resolveNamed" should {
+    val Kanazawa = "GN1860243"
+
+    "resolve city, region and country to the city" in {
+      Places.resolveNamed(Some("Kanazawa"), Some("Ishikawa"), Some("Japan")).value.code shouldBe Kanazawa
+    }
+
+    "resolve as far as the model named" in {
+      Places.resolveNamed(None, Some("Ishikawa"), Some("Japan")).value.code shouldBe "JP-17"
+      Places.resolveNamed(None, None, Some("Japan")).value.code shouldBe "JP"
+    }
+
+    // Scope is what makes an ambiguous name mean something — the same
+    // rule resolveCity has always applied, now at every level.
+    "use the region to disambiguate a city name" in {
+      Places.resolveNamed(Some("Springfield"), Some("Illinois"), Some("United States")).value.code shouldBe
+      "GN4250542"
+      Places.resolveNamed(Some("Springfield"), None, Some("United States")).value.code shouldBe "US"
+    }
+
+    // Coarser, never wrong.
+    "degrade level by level, and say what it could not place" in {
+      val town = Places.resolveNamed(Some("Nowhere"), Some("Ishikawa"), Some("Japan")).value
+      town.code shouldBe "JP-17"
+      town.unresolved shouldBe List("Nowhere")
+
+      val region = Places.resolveNamed(None, Some("Nowhere"), Some("Japan")).value
+      region.code shouldBe "JP"
+      region.unresolved shouldBe List("Nowhere")
+    }
+
+    // The build links cities to ISO subdivisions by name and leaves the
+    // link empty when it cannot match confidently, so a correct city can
+    // sit directly under its country. Trying only the region would reject
+    // a right answer for a gap in our own table.
+    "fall back to the country when the region does not contain the city" in {
+      Places.resolveNamed(Some("Kanazawa"), Some("Tokyo"), Some("Japan")).value.code shouldBe Kanazawa
+    }
+
+    // THE hole the code-shaped answer could never report: a wrong region
+    // and a right one both parse. A city that sits in a different region
+    // of its own is a contradiction the table can see.
+    "report a region the city itself contradicts" in {
+      val out = Places.resolveNamed(Some("Kanazawa"), Some("Tokyo"), Some("Japan")).value
+      out.unresolved should have size 1
+      out.unresolved.head should include("Kanazawa is in Ishikawa")
+    }
+
+    // With no country there is no scope to stand on, and the rest cannot
+    // be trusted either — the same refusal "Kanazawa, XX-99" gets.
+    "refuse without a resolvable country" in {
+      Places.resolveNamed(Some("Kanazawa"), Some("Ishikawa"), None) shouldBe None
+      Places.resolveNamed(Some("Kanazawa"), Some("Ishikawa"), Some("Freedonia")) shouldBe None
+      Places.resolveNamed(Some("Kanazawa"), Some("Ishikawa"), Some("  ")) shouldBe None
+    }
+
+    "treat blank parts as absent" in {
+      Places.resolveNamed(Some(""), Some("   "), Some("Japan")).value shouldBe
+      Places.ResolvedPlace("JP", Nil)
+    }
+  }
+
+  "nameVariants" should {
+
+    "derive the comma-inverted and bare forms of a qualified name" in {
+      (Places.nameVariants("Korea, Republic of") should contain).allOf("Korea", "Republic of Korea")
+    }
+
+    "derive the bracketed alternate" in {
+      (Places.nameVariants("Catalunya [Cataluña]") should contain).allOf("Cataluña", "Catalunya")
+    }
+
+    "derive nothing from a plain name" in {
+      Places.nameVariants("Ishikawa") shouldBe empty
+    }
+  }
+
   "resolveEmitted" should {
 
     "pass a plain code through untouched" in {

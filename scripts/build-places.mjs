@@ -25,12 +25,23 @@
 // `aliases_<lang>.tsv` (same shape, many rows per code) carries every
 // OTHER localised name GeoNames knows for a place - the everyday アメリカ
 // next to the catalogue's formal 米国 - and feeds search only, never display.
+//
+// `aliases_en.tsv` is NOT generated here and this script refuses to write
+// it. English colloquial names ("South Korea" for the formal "Korea,
+// Republic of") are exactly what neither source carries, so there is
+// nothing to merge them out of; the file is hand-maintained and reviewed.
 
 import fs from "node:fs";
 import readline from "node:readline";
 
 const [srcDir, outDir, langsArg] = process.argv.slice(2);
+// "en" is refused rather than ignored: passing it would silently overwrite
+// the hand-maintained aliases_en.tsv with an empty generated one.
 const LANGS = (langsArg || "ja").split(",").filter(Boolean);
+if (LANGS.includes("en")) {
+  console.error("build-places: 'en' is not a generated language — aliases_en.tsv is hand-maintained.");
+  process.exit(1);
+}
 
 const read = (f) => fs.readFileSync(`${srcDir}/${f}`, "utf8");
 const lines = (f) => read(f).split("\n");

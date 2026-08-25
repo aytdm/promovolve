@@ -52,6 +52,19 @@ class StaleClassificationSpec extends AnyWordSpec with Matchers {
       s.staleClassifications.map(_._1).toSet shouldBe Set("https://old")
     }
 
+    // v1 asked the model to recall ISO codes. A wrong-but-valid one parses
+    // exactly like a right one, so the entry looks healthy — non-empty
+    // places, current-looking data — and serves the page as somewhere it
+    // is not. Version is the ONLY thing that can tell those apart, which
+    // is why v2 expires v1 despite the field shape being identical.
+    "flag a code-era entry even though it carries places" in {
+      val s = state(
+        "https://code-era" -> entry(ts = Long.MaxValue - 1, version = 1, places = Set("JP-18")),
+        "https://named" -> entry(ts = 1L, version = Current, places = Set("GN1860243"))
+      )
+      s.staleClassifications.map(_._1).toSet shouldBe Set("https://code-era")
+    }
+
     "treat a pre-versioning default as older" in {
       val recovered = SiteEntity.ClassificationEntry(Map.empty, Vector.empty, classifiedAt = 5L)
       recovered.classifierVersion shouldBe 0

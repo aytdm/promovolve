@@ -2242,18 +2242,27 @@ object SiteEntity {
   object ClassificationEntry {
 
     /**
-     * Bump when the classifier's OUTPUT gains something old entries lack
-     * and cannot serve without — not for prompt tweaks that only improve
-     * the same fields. Every entry below it re-classifies on its next
-     * view, one LLM call per page, paced by traffic and single-flighted.
+     * Bump when old entries cannot be trusted for what they already
+     * claim, or lack something they cannot serve without — not for prompt
+     * tweaks that only sharpen the same fields. Every entry below it
+     * re-classifies on its next view, one LLM call per page, paced by
+     * traffic and single-flighted.
      *
      *   1 — 2026-08: places (tier 1 of docs/design/GEOGRAPHIC_CONTEXT.md).
      *       A pre-geo entry carries `places = ∅`, which place-targeted
      *       demand reads as "about nowhere" and refuses — the Kanazawa
      *       article that no Kanazawa campaign could run on until its 48h
      *       window lapsed.
+     *
+     *   2 — 2026-08-25: names, not codes. v1 asked the model to recall ISO
+     *       codes; a wrong-but-valid one is indistinguishable from a right
+     *       one once parsed, so `Places.validate` passed it and the page
+     *       served confidently as somewhere it is not. The field is
+     *       unchanged — this bump is for CORRECTNESS of what is already
+     *       there, which the freshness window alone never repairs: a page
+     *       with live winners keeps its entry until it goes dark.
      */
-    val CurrentClassifierVersion: Int = 1
+    val CurrentClassifierVersion: Int = 2
   }
 
   /**

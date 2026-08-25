@@ -94,24 +94,68 @@ freshness-windowed, demand-gated.
 
 ## Granularity: subdivision, and a named city
 
-The classifier answers in ISO codes (`JP`, `JP-17`) and, when the page is
-specifically about one city or town, in the form **`"Kanazawa, JP-17"`** — the
-English name, a comma, and the ISO code of the subdivision it sits in. The code
-after the comma is the whole point: the disambiguation that made the first cut
-of this design stop at subdivision ("Springfield, MA or IL?") is done by scope,
-in `Places.resolveCity`, never trusted to the model's memory of GeoNames ids.
+**The classifier answers in NAMES; the shipped table supplies every code.**
+(Changed 2026-08-25 — the first two cuts asked for ISO codes; see *Names, not
+codes* below for why that was wrong.) One place is
+`{"city": "Kanazawa", "region": "Ishikawa", "country": "Japan"}`, with `city`
+and `region` left out when the page is not about one or the model is unsure.
 
-Resolution rules (`Places.resolveEmitted`):
+Resolution is outside-in, each level scoped by the one above it
+(`Places.resolveNamed`):
 
-- the city must have the stated code as an ancestor, matched by normalized
-  name in English or any localized name (`金沢市` is tolerated for `金沢`);
-- inside a **subdivision**, several same-named places are small townships and
-  the most populous wins;
-- inside a **country** the same rule would guess, so it resolves only when the
-  name is unique there or the largest is dominant (≥ 5× the runner-up — `Paris,
-  FR`, `Kyoto, JP`); otherwise
-- it **degrades to the stated code** — `"Nowhere, JP-17"` becomes `JP-17`.
-  Coarser, never wrong. A pair with an unknown code is dropped.
+1. `resolveCountry("Japan")` → `JP` — unique-or-nothing, over the catalogue
+   name, every localized name, the derived forms below, and the hand-maintained
+   `places/aliases_en.tsv` ("South Korea" for the formal `Korea, Republic of`);
+2. `resolveSubdivision("Ishikawa", within = "JP")` → `JP-17` — unique-or-
+   nothing, tolerating an administrative word the table omits (`Ishikawa
+   Prefecture`, `石川県`);
+3. `resolveCity("Kanazawa", within = "JP-17")` → `GN1860243` — the rules that
+   have always applied: the city must have the scope as an ancestor, matched by
+   normalized name in English or any localized name (`金沢市` for `金沢`);
+   inside a **subdivision** the most populous of several same-named townships
+   wins; inside a **country** it resolves only when the name is unique there or
+   the largest is dominant (≥ 5× the runner-up — Paris FR, Kyoto JP).
+
+The city is tried inside the region and *then* inside the country, because the
+build leaves a city hanging off its country when it cannot link it to an ISO
+subdivision confidently. Skipping the second try would reject correct answers
+for a gap in our own table.
+
+It **degrades level by level** and returns the finest thing it could place: an
+unresolvable city keeps the region, an unresolvable region keeps the country.
+Coarser, never wrong. An unresolvable **country** is dropped entirely — with no
+scope to stand on, nothing below it can be trusted.
+
+Two spellings are DERIVED from the catalogue's own, so no alias row is needed:
+bracketed alternates (`Catalunya [Cataluña]` → both) and comma-inverted forms
+(`Korea, Republic of` → `Korea`, `Republic of Korea`). They are consulted only
+after real names miss, because a derived form may collide with another place's
+actual name — `Congo, The Democratic Republic of the` derives "Congo", which is
+CG's real name. Primary wins; the collision then resolves to nothing rather
+than to the wrong country.
+
+### Names, not codes
+
+Asking for `JP-17` asked the model to recall arbitrary numbering it has no
+principled grip on, and — the part that mattered — **a wrong-but-valid code is
+indistinguishable from a right one once parsed.** `validate` catches `XX-99`;
+it cannot catch Kanazawa filed under `JP-18`. That answer served silently.
+
+Names fail loudly instead. A region that is not in the named country, or a city
+that sits in a different region of its own, is a contradiction the catalogue
+can see, and it comes back in `ResolvedPlace.unresolved` for `IABTaxonomy` to
+log (`named places it could not place for <url>`). The code still serves; we
+just find out.
+
+The city path always worked this way — a GeoNames id is not something a model
+could produce, so it named the city and the table did the rest. This finishes
+the job for the two levels above it. Nothing in the prompt enumerates the
+vocabulary: the model is asked for geography, which it knows, and the shipped
+table is still the only thing that mints a code.
+
+The pre-2026-08-25 shapes (`"JP-17"`, `"Kanazawa, JP-17"`, `{"code": …}`) are
+still read via `Places.resolveEmitted`, so a model that ignores the schema is
+understood rather than discarded.
 
 A city place carries its ancestors at match time like every other code, so the
 Kamakura example below holds end to end: a campaign targeting `{JP}` runs on a
@@ -130,8 +174,13 @@ stop serving:
   emitted something demand now depends on. Pre-geo entries carry `places = ∅`,
   which place-targeted demand must read as "about nowhere" (see "Empty means
   unknown"), so the Kanazawa article ran no Kanazawa campaign until its 48h
-  window lapsed. Bump the version only when the *output* gains a field old
-  entries cannot serve without.
+  window lapsed. Bump the version when old entries cannot be trusted for what
+  they already claim, or lack something they cannot serve without — never for a
+  prompt tweak that only sharpens the same fields. **v2 (2026-08-25) is a
+  correctness bump of the first kind**: a v1 entry can carry a valid code for
+  the wrong place, which nothing downstream can detect and the freshness window
+  never repairs on its own — a page with live winners keeps its entry until it
+  goes dark.
 - **`State.reclassifyBefore`** — stamped by `UpdateConfig` when the publisher
   changes a setting that feeds the prompt or the geometry it measures (declared
   topics, audience/place declaration, domain, target elements, slots). Every
@@ -263,9 +312,11 @@ confidence, and keep the empty array cheap.
 Anything not in the shipped table is **dropped**. No free-text place ever enters
 the system, which is what makes set intersection meaningful downstream.
 
-Emit-then-validate is the v1 approach — models know ISO 3166 well and the table
-is the guarantee. If accuracy disappoints, fall back to two-stage: country first
-(249 rows, fits in the prompt), then subdivisions within it (Japan 47, US 56).
+Name-then-resolve replaced emit-then-validate on 2026-08-25 (see *Names, not
+codes*). The two-stage fallback — country first (249 rows, fits in the prompt),
+then subdivisions within it (Japan 47, US 56) — remains the next move if
+`scripts/classify-eval` ever shows names underperforming, at the cost of a
+second round trip on the serve-miss path.
 
 ---
 
@@ -867,6 +918,9 @@ for ISO codes with an explicit "empty is correct" instruction, and every code
 is validated against the shipped table (`Places.validate`) before it goes
 anywhere. `analyzeTaxonomy` stays as a categories-only wrapper.
 
+> **Superseded 2026-08-25 (step 11).** The prompt no longer asks for codes at
+> all — see *Names, not codes*. Everything else in this step still holds.
+
 **No place fallback on LLM failure.** A guessed category keeps the auction from
 starving; a guessed *place* would put an advertiser's geographic buy on a page
 nobody established is about that place. The failure path returns
@@ -987,15 +1041,53 @@ and `AutoApproveTrustSpec` (8 tests) pins the default posture, the trust paths,
 the identity guarantee, and that `placeHops` does **not** affect the decision,
 so the non-rule is a recorded choice rather than an oversight.
 
+**11. Names, not codes — DONE (2026-08-25).** The prompt asks for
+`{"city", "region", "country"}` in English and `Places.resolveNamed` mints
+every code from the shipped table, scoped level by level. Motivation and rules
+are under *Names, not codes* above; what it took: `Places` grew
+`resolveCountry` / `resolveSubdivision` / `resolveNamed` over a kind-indexed
+name table, `nameVariants` derives bracketed and comma-inverted spellings from
+the catalogue's own, and `places/aliases_en.tsv` (hand-maintained — the build
+script now refuses to write it) carries the everyday English names no upstream
+source has. `ResolvedPlace.unresolved` reports what could not be placed, which
+is the failure the code-shaped answer could never report.
+
+`CurrentClassifierVersion` goes to **2**. The field shape is unchanged, so this
+is not the "gained a field" case the rule was written for — it is the other
+one: a v1 entry may hold a confidently wrong code, and unlike a missing place,
+a wrong place is invisible to everything downstream and outlives the freshness
+window on any page that keeps winning. The whole corpus re-classifies from
+here, one single-flighted call per page, paced by views.
+
+Not done here: `scripts/classify-eval/pages.tsv` is still 12 pages, all JP/TW,
+so it says nothing about subdivision naming where it is hardest (India,
+Nigeria, Brazil, the UK). Widening it is the next thing worth doing — it is
+also the only way the *names-vs-codes* claim gets measured rather than argued.
+ISO subdivision names are the local spelling (`Bayern`, not `Bavaria`), and the
+region miss is invisible when the city still resolves inside the country, so
+only the eval will show it.
+
 # Tests
 
 - `PlacesSpec` — **written, 19 passing**: ancestor hops, min-hop expansion,
   closed-vocabulary rejection, ja resolution at all three levels, search by
   English and localised name, and a regression pin that `JP-13` is Tokyo
-- `IABTaxonomyPlacesSpec` — **written, 10 passing**: documented and
-  object-wrapped response shapes; empty array and absent key treated alike;
-  malformed input never throws; the closed-vocabulary gate keeps only known
-  codes; and the prompt frames a publisher place hint as an unverified claim
+- `PlacesSpec` — **extended 2026-08-25**: `resolveCountry` (catalogue name,
+  everyday alias, comma-inverted derivation, and that a real name outranks a
+  derived one so "Congo" is CG and "Virgin Islands" is nothing);
+  `resolveSubdivision` (administrative word either language, bracketed
+  alternate, Georgia-the-country vs Georgia-the-state); `resolveNamed`
+  (level-by-level degrade, scope disambiguation, the country fallback for an
+  unlinked city, the contradiction report, and refusal without a country);
+  `nameVariants`
+- `IABTaxonomyPlacesSpec` — **rewritten 2026-08-25, 16 passing**: the named
+  response shape at each granularity; blank fields treated as absent (OpenAI
+  strict mode cannot omit a property); empty array and absent key alike;
+  malformed input never throws; the legacy code shapes still read; resolution
+  through the shipped table, the degrade and its report, and a place whose
+  country the table does not know dropped entirely; and the prompt asking for
+  English names, never a code, while still framing a publisher place hint as
+  an unverified claim
 - Plugin: `tests/topic-test.php` — **extended to 17 passing**, covering place
   taxonomies, the `geo_address` fallback, taxonomy-beats-meta precedence, the
   filter hook, and archives declaring no place

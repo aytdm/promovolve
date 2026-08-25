@@ -1,0 +1,50 @@
+code	name
+# HAND-MAINTAINED — scripts/build-places.sh does NOT write this file.
+# The everyday English name is precisely what no upstream source carries:
+# iso-codes ships the formal "Korea, Republic of" and GeoNames has no
+# country-level English alternates worth merging, so there is nothing to
+# generate this from. Search-only, never displayed.
+#
+# Only names the catalogue cannot already reach. Comma-inverted and
+# bracketed forms ("Republic of Korea", "Cataluna") are DERIVED in
+# Places.nameVariants — do not list them here.
+#
+# Lines without a tab are ignored; the first line is the header.
+AE	UAE
+BN	Brunei
+BO	Bolivia
+CD	Democratic Republic of the Congo
+CD	DR Congo
+CD	DRC
+CI	Ivory Coast
+CV	Cape Verde
+CZ	Czech Republic
+FK	Falkland Islands
+FM	Micronesia
+GB	UK
+GB	Great Britain
+GB	Britain
+IR	Iran
+KP	North Korea
+KR	South Korea
+LA	Laos
+MD	Moldova
+MK	Macedonia
+MM	Burma
+NL	Holland
+PS	Palestine
+RU	Russia
+SY	Syria
+SZ	Swaziland
+TL	East Timor
+TR	Turkey
+TW	Taiwan
+TZ	Tanzania
+US	USA
+US	United States of America
+US	America
+VA	Vatican City
+VE	Venezuela
+VG	British Virgin Islands
+VI	US Virgin Islands
+VN	Vietnam

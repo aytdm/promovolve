@@ -15,7 +15,7 @@ import scala.util.Try
  * Classifier eval harness — scripts/classify-eval/run.sh drives this.
  *
  * Runs the REAL classifier (IABTaxonomy.analyze: same prompt, same
- * provider, same Places.resolveEmitted post-processing the serve path
+ * provider, same Places.resolveNamed post-processing the serve path
  * uses) over scripts/classify-eval/pages.tsv, using page text captured
  * by extract.mjs exactly as the ad tag captures it, and scores each
  * answer against the expectation written in the TSV.

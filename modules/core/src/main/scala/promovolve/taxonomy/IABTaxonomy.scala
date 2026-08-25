@@ -132,24 +132,32 @@ class IABTaxonomy(
                   s"${provider.name} returned category IDs not in candidate set for $url: ${invalid.map(_.id).mkString(", ")} — filtered out")
               }
               // Places go through the SAME closed-vocabulary gate the
-              // categories do: the model emits ISO-shaped codes from its own
-              // knowledge (the table is far too large to list in the prompt),
-              // so the shipped table — not the prompt — is the guarantee.
-              // Anything unrecognised is dropped, never coerced.
-              //
-              // A city arrives as "Name, CODE" and is resolved IN SCOPE by
-              // Places.resolveEmitted — the disambiguation lives in the
-              // table lookup, not in the model's answer. An unresolvable
-              // city degrades to its stated subdivision/country.
+              // categories do, but from the other end: the model NAMES a
+              // place and the shipped table supplies the code, scoped
+              // level by level (Ishikawa inside Japan, Kanazawa inside
+              // Ishikawa). Nothing here trusts the model to recall a code.
+              // Anything the table cannot place is dropped, never coerced.
               val rawPlaces = parsePlaces(responseBody, provider)
-              val resolvedPlaces = rawPlaces.map(r => r -> promovolve.taxonomy.Places.resolveEmitted(r))
-              val places = promovolve.taxonomy.Places.validate(resolvedPlaces.flatMap(_._2)).toList.sorted
+              val resolvedPlaces = rawPlaces.map(p => p -> resolvePlace(p))
+              val places = promovolve.taxonomy.Places
+                .validate(resolvedPlaces.flatMap(_._2.map(_.code))).toList.sorted
               val droppedPlaces = resolvedPlaces.collect {
-                case (raw, resolved) if !resolved.exists(places.contains) => raw
+                case (raw, resolved) if !resolved.exists(r => places.contains(r.code)) => raw.describe
               }
               if (droppedPlaces.nonEmpty) {
                 logger.warn(
-                  s"${provider.name} returned unknown place codes for $url: ${droppedPlaces.mkString(", ")} — filtered out")
+                  s"${provider.name} returned unplaceable places for $url: ${droppedPlaces.mkString("; ")} — filtered out")
+              }
+              // A place that resolved only PARTLY is the signal the old
+              // code-shaped answer could never give: a wrong code and a
+              // right one both parse, but a region that is not in the
+              // named country is a contradiction the table can see. The
+              // coarser code still serves; this is how we find out the
+              // classifier is drifting.
+              val partial = resolvedPlaces.flatMap(_._2.toList.flatMap(_.unresolved))
+              if (partial.nonEmpty) {
+                logger.warn(
+                  s"${provider.name} named places it could not place for $url: ${partial.mkString("; ")} — degraded")
               }
               logger.info(
                 s"${provider.name} classified $url: ${valid.map(s => s"${s.id}(${s.confidence})").mkString(", ")}" +
@@ -253,7 +261,22 @@ class IABTaxonomy(
             ),
             "places" -> JsObject(
               "type" -> JsString("array"),
-              "items" -> JsObject("type" -> JsString("string"))
+              "items" -> JsObject(
+                "type" -> JsString("object"),
+                "properties" -> JsObject(
+                  "city" -> JsObject("type" -> JsString("string"),
+                    "description" -> JsString("City or town in English, or \"\" if the page is not about one")),
+                  "region" -> JsObject("type" -> JsString("string"),
+                    "description" -> JsString("First-level region/state/province in English, or \"\"")),
+                  "country" -> JsObject("type" -> JsString("string"),
+                    "description" -> JsString("Country in English — required"))
+                ),
+                // strict mode requires every property in `required`, so
+                // "not applicable" has to be sayable IN a value: empty
+                // string. The resolver treats blank as absent.
+                "required" -> JsArray(JsString("city"), JsString("region"), JsString("country")),
+                "additionalProperties" -> JsFalse
+              )
             )
           ),
           // strict mode requires EVERY property to appear in `required`;
@@ -304,9 +327,19 @@ class IABTaxonomy(
           ),
           "places" -> JsObject(
             "type" -> JsString("array"),
-            "items" -> JsObject("type" -> JsString("string"),
-              "description" -> JsString(
-                "ISO 3166-1 or 3166-2 code the page is about, or \"City, ISO-code\" for a city"))
+            "items" -> JsObject(
+              "type" -> JsString("object"),
+              "description" -> JsString("A place the page is about, named in English — never a code"),
+              "properties" -> JsObject(
+                "city" -> JsObject("type" -> JsString("string"),
+                  "description" -> JsString("City or town, omitted when the page is not about one")),
+                "region" -> JsObject("type" -> JsString("string"),
+                  "description" -> JsString("First-level region/state/province, omitted when unknown")),
+                "country" -> JsObject("type" -> JsString("string"),
+                  "description" -> JsString("Country"))
+              ),
+              "required" -> JsArray(JsString("country"))
+            )
           )
         ),
         // NOT required: an empty list and an absent key mean the same thing
@@ -497,14 +530,14 @@ class IABTaxonomy(
     }.get
 
   /**
-   * Place codes from a provider response.
+   * Places from a provider response, as the model NAMED them.
    *
    * Tolerant on shape and strict on content: the wrapper key may be absent
    * (an older prompt, a model that ignored it) and that is not an error —
-   * a page about nowhere in particular is the common case. Validation
+   * a page about nowhere in particular is the common case. Resolution
    * against the shipped table happens at the call site.
    */
-  private[taxonomy] def parsePlaces(body: String, provider: Provider): List[String] = {
+  private[taxonomy] def parsePlaces(body: String, provider: Provider): List[IABTaxonomy.EmittedPlace] = {
     val content = provider match {
       case _: Provider.OpenAI    => extractOpenAIContent(body)
       case _: Provider.Anthropic => extractAnthropicContent(body)
@@ -512,6 +545,17 @@ class IABTaxonomy(
     }
     content.map(IABTaxonomy.placesFrom).getOrElse(Nil)
   }
+
+  /**
+   * One emitted place -> a catalogue code, by whichever route it arrived.
+   * The named form is the one the prompt asks for; the legacy code form
+   * is still read so a model that answers the old way is understood.
+   */
+  private def resolvePlace(place: IABTaxonomy.EmittedPlace): Option[Places.ResolvedPlace] =
+    place.legacy match {
+      case Some(raw) => Places.resolveEmitted(raw).map(code => Places.ResolvedPlace(code, Nil))
+      case None      => Places.resolveNamed(place.city, place.region, place.country)
+    }
 
   private def parseSelection(item: JsValue): Option[Selection] =
     Try {
@@ -596,26 +640,32 @@ $categoryList
 $hintBlock
 Also: which real-world PLACES is this page about?
 $placeHintBlock
-Answer with ISO codes — ISO 3166-1 alpha-2 for a country ("JP"), ISO 3166-2 for
-a first-level subdivision ("JP-13" for Tokyo, "US-CA" for California). When the
-page is specifically about one city or town, name it as its English name, a
-comma, and the ISO code of the subdivision it is in ("Kanazawa, JP-17",
-"Springfield, US-IL") — the code after the comma is what makes the name
-unambiguous, so never omit it. A place smaller than a city — a district, an
-onsen town, a village, a landmark — is named by the city or subdivision that
-contains it ("Toyooka, JP-28" for Kinosaki Onsen, or simply "JP-28"): a small
-spot is still somewhere, and the enclosing place is the right answer, not an
-empty list. At most 3, and only places the page is genuinely
-ABOUT — not every place it mentions. An article about Tokyo that name-drops
-Paris once is about Tokyo. A page that is not about anywhere in particular must
-return an empty list; that is the common case and it is a correct answer, not a
-failure. Never guess a place from the language the page is written in.
+Name each one in ENGLISH — never a code, never an abbreviation. Give the
+country always, the first-level region (state, province, prefecture) when you
+know it, and the city or town only when the page is specifically about one.
+Write each part as the plain name on its own: "Ishikawa", not "Ishikawa
+Prefecture, Japan". A place smaller than a city — a district, an onsen town, a
+village, a landmark — is named by the city or region that contains it (Kinosaki
+Onsen is city "Toyooka", region "Hyogo", country "Japan"): a small spot is
+still somewhere, and the enclosing place is the right answer, not an empty
+list. Leave city or region out when you are not sure rather than guessing; a
+country alone is a good answer. At most 3, and only places the page is
+genuinely ABOUT — not every place it mentions. An article about Tokyo that
+name-drops Paris once is about Tokyo. A page that is not about anywhere in
+particular must return an empty list; that is the common case and it is a
+correct answer, not a failure. Never guess a place from the language the page
+is written in.
 
 ### Page ($url):
 $truncatedText
 
 ### Respond with a single JSON object in this exact shape:
-{"selected_taxonomy_ids": [{"id": "545", "confidence": 0.92}], "places": ["Kanazawa, JP-17"]}
+{"selected_taxonomy_ids": [{"id": "545", "confidence": 0.92}],
+ "places": [{"city": "Kanazawa", "region": "Ishikawa", "country": "Japan"}]}
+
+A page about a whole country or region leaves the finer parts out:
+{"selected_taxonomy_ids": [{"id": "653", "confidence": 0.88}],
+ "places": [{"region": "Hyogo", "country": "Japan"}, {"country": "Taiwan"}]}
 
 If nothing matches:
 {"selected_taxonomy_ids": [], "places": []}"""
@@ -630,35 +680,74 @@ object IABTaxonomy extends DefaultJsonProtocol {
    * One classification: what the page is about, and where it is about.
    *
    * `places` are `Places` codes (country, first-level subdivision, or a
-   * city the text named — resolved in scope by `Places.resolveEmitted`),
-   * already validated against the shipped table. Empty is the common and
-   * correct answer — most pages are not about anywhere.
+   * city), resolved from the NAMES the model gave by
+   * `Places.resolveNamed` and already validated against the shipped
+   * table. Empty is the common and correct answer — most pages are not
+   * about anywhere.
    */
   final case class Analysis(categories: List[Selection], places: List[String])
 
   /**
-   * Place codes out of the model's own JSON.
+   * One place as the model NAMED it — never as a code.
    *
-   * Tolerant on shape, because models drift between a bare string and
-   * `{"code": ...}` and both carry everything needed; strict on content is
-   * someone else's job — `Places.validate` at the call site is the gate.
-   * A missing key is not an error: a page about nowhere in particular is
-   * the common case and the correct answer.
+   * Asking for names is the whole design: a model recalls that Kanazawa
+   * is in Ishikawa, Japan far more reliably than it recalls that Ishikawa
+   * is JP-17, and the code for a city (a GeoNames id) is not something it
+   * could ever produce. Every code comes from the shipped table instead,
+   * scoped level by level — see `Places.resolveNamed`.
+   *
+   * `legacy` carries the older code-shaped answer ("JP-17", "Kanazawa,
+   * JP-17") for a model that ignored the schema; it resolves through
+   * `Places.resolveEmitted`.
    */
-  private[taxonomy] def placesFrom(content: String): List[String] =
+  final case class EmittedPlace(
+      city: Option[String] = None,
+      region: Option[String] = None,
+      country: Option[String] = None,
+      legacy: Option[String] = None
+  ) {
+    def isEmpty: Boolean = legacy.isEmpty && city.isEmpty && region.isEmpty && country.isEmpty
+
+    /** What the model actually said, for a log line. */
+    def describe: String = legacy.getOrElse(List(city, region, country).flatten.mkString(", "))
+  }
+
+  /**
+   * Places out of the model's own JSON.
+   *
+   * Tolerant on shape, because models drift between the named object and
+   * a bare string and both carry an answer worth reading; strict on
+   * content is someone else's job — resolution against the shipped table
+   * at the call site is the gate. A missing key is not an error: a page
+   * about nowhere in particular is the common case and the correct
+   * answer.
+   */
+  private[taxonomy] def placesFrom(content: String): List[EmittedPlace] =
     Try {
       content.parseJson match {
         case obj: JsObject =>
           obj.fields.get("places").collect {
-            case JsArray(items) => items.flatMap {
-                case JsString(code) => Some(code.trim)
-                case o: JsObject    => o.fields.get("code").collect { case JsString(c) => c.trim }
-                case _              => None
-              }.filter(_.nonEmpty).toList
+            case JsArray(items) => items.flatMap(placeFrom).toList
           }.getOrElse(Nil)
         case _ => Nil
       }
     }.getOrElse(Nil)
+
+  private def placeFrom(item: JsValue): Option[EmittedPlace] = item match {
+    case JsString(raw) => Option(raw.trim).filter(_.nonEmpty).map(v => EmittedPlace(legacy = Some(v)))
+    case obj: JsObject =>
+      def str(key: String): Option[String] =
+        obj.fields.get(key).collect { case JsString(v) if v.trim.nonEmpty => v.trim }
+      // `code` is the pre-2026-08-25 shape. Reading it costs one branch
+      // and means a model that answered the old way is still understood.
+      str("code") match {
+        case Some(code) => Some(EmittedPlace(legacy = Some(code)))
+        case None       =>
+          val named = EmittedPlace(city = str("city"), region = str("region"), country = str("country"))
+          Option.when(!named.isEmpty)(named)
+      }
+    case _ => None
+  }
 
   private val MaxContentLength = 8000
 

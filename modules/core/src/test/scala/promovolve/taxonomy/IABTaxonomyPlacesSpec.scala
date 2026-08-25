@@ -3,25 +3,44 @@ package promovolve.taxonomy
 import org.scalatest.matchers.should.Matchers
 import org.scalatest.wordspec.AnyWordSpec
 
+import promovolve.taxonomy.IABTaxonomy.EmittedPlace
+
 /**
  * Tier 1 of docs/design/GEOGRAPHIC_CONTEXT.md — the classifier answering
  * "where is this page about?" alongside "what is it about?".
  *
- * The parsing is deliberately tolerant on shape and the VALIDATION is
- * deliberately strict: the model emits ISO-shaped codes from its own
- * knowledge because the table is far too large to list in a prompt, so the
- * shipped table is the guarantee, not the prompt.
+ * The model NAMES places; the shipped table supplies every code. Parsing
+ * stays deliberately tolerant on shape and resolution deliberately strict
+ * on content: a name the table cannot place is dropped or degraded, never
+ * coerced.
  */
 class IABTaxonomyPlacesSpec extends AnyWordSpec with Matchers {
+
+  private def named(city: String = "", region: String = "", country: String = "") =
+    EmittedPlace(
+      city = Option(city).filter(_.nonEmpty),
+      region = Option(region).filter(_.nonEmpty),
+      country = Option(country).filter(_.nonEmpty))
 
   "placesFrom" should {
 
     "read the documented shape" in {
-      IABTaxonomy.placesFrom("""{"selected_taxonomy_ids": [], "places": ["JP-13"]}""") shouldBe List("JP-13")
+      IABTaxonomy.placesFrom(
+        """{"selected_taxonomy_ids": [], "places": [{"city": "Kanazawa", "region": "Ishikawa", "country": "Japan"}]}"""
+      ) shouldBe List(named("Kanazawa", "Ishikawa", "Japan"))
     }
 
-    "read several places" in {
-      IABTaxonomy.placesFrom("""{"places": ["JP", "FR"]}""") shouldBe List("JP", "FR")
+    "read several places, each as coarse as the model left it" in {
+      IABTaxonomy.placesFrom("""{"places": [{"region": "Hyogo", "country": "Japan"}, {"country": "Taiwan"}]}""")
+        .shouldBe(List(named(region = "Hyogo", country = "Japan"), named(country = "Taiwan")))
+    }
+
+    // OpenAI strict mode requires every property in `required`, so "not
+    // applicable" can only be said IN a value. Blank must mean absent or
+    // every country-level answer would carry two empty strings.
+    "treat a blank field as absent" in {
+      IABTaxonomy.placesFrom("""{"places": [{"city": "", "region": "  ", "country": "Japan"}]}""")
+        .shouldBe(List(named(country = "Japan")))
     }
 
     // A page about nowhere in particular is the COMMON case, and both the
@@ -31,11 +50,13 @@ class IABTaxonomyPlacesSpec extends AnyWordSpec with Matchers {
       IABTaxonomy.placesFrom("""{"selected_taxonomy_ids": []}""") shouldBe Nil
     }
 
-    // Models drift between a bare string and {"code": ...}; both carry
-    // everything we need, so neither is worth discarding a classification
-    // over.
-    "accept an object-wrapped code" in {
-      IABTaxonomy.placesFrom("""{"places": [{"code": "JP-13"}]}""") shouldBe List("JP-13")
+    // The pre-2026-08-25 code shapes. A model that ignored the schema and
+    // answered the old way is still understood — reading it costs one
+    // branch and saves the whole classification.
+    "still read the legacy code shapes" in {
+      IABTaxonomy.placesFrom("""{"places": ["JP-13"]}""") shouldBe List(EmittedPlace(legacy = Some("JP-13")))
+      IABTaxonomy.placesFrom("""{"places": [{"code": "JP-13"}]}""") shouldBe
+      List(EmittedPlace(legacy = Some("JP-13")))
     }
 
     "survive malformed input without throwing" in {
@@ -44,33 +65,49 @@ class IABTaxonomyPlacesSpec extends AnyWordSpec with Matchers {
       IABTaxonomy.placesFrom("[]") shouldBe Nil
     }
 
-    "drop blank entries" in {
-      IABTaxonomy.placesFrom("""{"places": ["", "  ", "JP"]}""") shouldBe List("JP")
+    "drop entries carrying nothing" in {
+      IABTaxonomy.placesFrom("""{"places": ["", "  ", {}, {"city": ""}, {"country": "Japan"}]}""")
+        .shouldBe(List(named(country = "Japan")))
     }
   }
 
   "the closed-vocabulary gate" should {
 
-    // This is the pairing that matters: parsing is permissive, Places.validate
-    // is not. A hallucinated or mis-cased code must never reach the auction,
-    // because downstream matching is plain set intersection and a bogus code
-    // would simply never match anything while looking like real targeting.
-    "keep only codes the shipped table knows" in {
-      val parsed = IABTaxonomy.placesFrom("""{"places": ["JP-13", "XX-99", "Tokyo", "JP"]}""")
-      Places.validate(parsed) shouldBe Set("JP-13", "JP")
+    // The pairing that matters: parsing is permissive, the table is not.
+    // Nothing the model says becomes a code unless the table already has
+    // it, because downstream matching is plain set intersection and a
+    // bogus code would never match while looking like real targeting.
+    "resolve names through the shipped table, level by level" in {
+      val parsed = IABTaxonomy.placesFrom(
+        """{"places": [{"city": "Kanazawa", "region": "Ishikawa", "country": "Japan"},
+           |            {"region": "Hyogo", "country": "Japan"},
+           |            {"country": "Japan"}]}""".stripMargin)
+      val codes = parsed.flatMap(p => Places.resolveNamed(p.city, p.region, p.country)).map(_.code)
+      Places.validate(codes) shouldBe Set("GN1860243", "JP-28", "JP")
+    }
+
+    "drop a place whose country the table does not know" in {
+      val parsed = IABTaxonomy.placesFrom("""{"places": [{"city": "Springfield", "country": "Freedonia"}]}""")
+      parsed.flatMap(p => Places.resolveNamed(p.city, p.region, p.country)) shouldBe Nil
+    }
+
+    "degrade an unknown town to the region it was said to be in" in {
+      val parsed = IABTaxonomy.placesFrom(
+        """{"places": [{"city": "Nowhere", "region": "Ishikawa", "country": "Japan"}]}""")
+      val resolved = parsed.flatMap(p => Places.resolveNamed(p.city, p.region, p.country))
+      resolved.map(_.code) shouldBe List("JP-17")
+      // and says so, rather than passing a coarser answer off as a clean one
+      resolved.flatMap(_.unresolved) shouldBe List("Nowhere")
+    }
+
+    "still resolve a legacy 'City, CODE' answer" in {
+      val parsed = IABTaxonomy.placesFrom("""{"places": ["Kanazawa, JP-17", "Nowhere, JP-20", "JP"]}""")
+      Places.validate(parsed.flatMap(_.legacy).flatMap(Places.resolveEmitted)) shouldBe
+      Set("GN1860243", "JP-20", "JP")
     }
 
     "resolve a validated subdivision to the expected place" in {
       Places.get("JP-13").map(_.name) shouldBe Some("Tokyo")
-    }
-
-    // The analyze() pairing for a named city: parse the "City, CODE" string
-    // as-is, resolve it in scope, then validate. The Kanazawa article
-    // classifies to the city, and a made-up town degrades to its prefecture.
-    "resolve a 'City, CODE' answer to the city and degrade the unknown town" in {
-      val parsed = IABTaxonomy.placesFrom("""{"places": ["Kanazawa, JP-17", "Nowhere, JP-20", "JP"]}""")
-      parsed shouldBe List("Kanazawa, JP-17", "Nowhere, JP-20", "JP")
-      Places.validate(parsed.flatMap(Places.resolveEmitted)) shouldBe Set("GN1860243", "JP-20", "JP")
     }
   }
 
@@ -90,17 +127,20 @@ class IABTaxonomyPlacesSpec extends AnyWordSpec with Matchers {
 
     "ask for places and show the response shape" in {
       val prompt = promptWith(None)
-      prompt should include("ISO 3166-1")
       prompt should include("\"places\"")
       prompt should include("empty list")
     }
 
-    // A city is asked for as "Name, CODE" — the code is what makes it
-    // resolvable in scope, so the prompt must show the form and insist on it.
-    "ask for a city as 'Name, CODE' with the code never omitted" in {
+    // The point of the whole design: a model recalls that Kanazawa is in
+    // Ishikawa far more reliably than it recalls that Ishikawa is JP-17,
+    // and could never produce a GeoNames city id at all. Asking for a code
+    // is what invited a confident wrong one.
+    "ask for English names and never for a code" in {
       val prompt = promptWith(None)
-      prompt should include("\"Kanazawa, JP-17\"")
-      prompt should include("never omit it")
+      prompt should include("Name each one in ENGLISH")
+      prompt should include("never a code")
+      prompt should include("""{"city": "Kanazawa", "region": "Ishikawa", "country": "Japan"}""")
+      (prompt should not).include("ISO 3166")
     }
 
     // Live 2026-08-22: an article about Kinosaki Onsen (a district of
@@ -109,8 +149,15 @@ class IABTaxonomyPlacesSpec extends AnyWordSpec with Matchers {
     // fall back to its enclosing city or subdivision, not to nothing.
     "tell the model to name the enclosing place for somewhere smaller than a city" in {
       val prompt = promptWith(None)
-      prompt should include("\"Toyooka, JP-28\"")
-      prompt should include("not an\nempty list")
+      prompt should include("\"Toyooka\"")
+      prompt should include("the enclosing place is the right answer")
+    }
+
+    // Guessing a region to fill the field is the failure this design is
+    // meant to remove; a country alone must read as a good answer.
+    "invite the model to leave the finer parts out" in {
+      val prompt = promptWith(None)
+      prompt should include("country alone is a good answer")
     }
 
     // The place hint is publisher-controlled text entering a prompt and the
