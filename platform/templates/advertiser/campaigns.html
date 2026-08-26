@@ -279,8 +279,14 @@
     </div>
     <div class="mb-4">
       <label class="form-label">{{t "Frequency cap"}} <span class="font-normal text-gray-500">{{t "(optional)"}}</span></label>
-      <div class="flex items-center gap-2">
-        <select name="freqCapN" class="form-input w-28">
+      {{/* The window only means something when there IS a cap: "no cap per
+           week" is not a policy. Disabled rather than hidden so the control
+           stays where the eye expects it. A disabled select is not submitted,
+           which is harmless — the server ignores the window when impressions
+           is 0 (FrequencyCap.fromApi), and the edit path keys "was this
+           field present?" on freqCapN, which is never disabled. */}}
+      <div class="flex items-center gap-2" x-data="{ freqN: '0' }">
+        <select name="freqCapN" class="form-input w-28" @change="freqN = $event.target.value">
           <option value="0">{{t "No cap"}}</option>
           <option value="1">1</option>
           <option value="2">2</option>
@@ -288,8 +294,9 @@
           <option value="5">5</option>
           <option value="10">10</option>
         </select>
-        <span class="text-sm text-gray-600">{{t "impressions"}}</span>
-        <select name="freqCapWindow" class="form-input w-32">
+        <span class="text-sm text-gray-600" :class="freqN === '0' && 'opacity-50'">{{t "impressions"}}</span>
+        <select name="freqCapWindow" class="form-input w-32 disabled:opacity-50 disabled:cursor-not-allowed"
+                :disabled="freqN === '0'">
           <option value="hour">{{t "per hour"}}</option>
           <option value="day" selected>{{t "per day"}}</option>
           <option value="week">{{t "per week"}}</option>
@@ -877,8 +884,11 @@
           </div>
           <div class="mb-4">
             <label class="form-label">{{t "Frequency cap"}} <span class="font-normal text-gray-500">{{t "(optional)"}}</span></label>
-            <div class="flex items-center gap-2">
-              <select name="freqCapN" class="form-input w-28">
+            {{/* See the create form above: the window is disabled while the
+                 cap is "No cap". Seeded from the campaign's stored value so
+                 an already-uncapped campaign opens with it greyed out. */}}
+            <div class="flex items-center gap-2" x-data="{ freqN: '{{.FrequencyCapN}}' }">
+              <select name="freqCapN" class="form-input w-28" @change="freqN = $event.target.value">
                 <option value="0" {{if eq .FrequencyCapN 0}}selected{{end}}>{{t "No cap"}}</option>
                 <option value="1" {{if eq .FrequencyCapN 1}}selected{{end}}>1</option>
                 <option value="2" {{if eq .FrequencyCapN 2}}selected{{end}}>2</option>
@@ -886,8 +896,9 @@
                 <option value="5" {{if eq .FrequencyCapN 5}}selected{{end}}>5</option>
                 <option value="10" {{if eq .FrequencyCapN 10}}selected{{end}}>10</option>
               </select>
-              <span class="text-sm text-gray-600">{{t "impressions"}}</span>
-              <select name="freqCapWindow" class="form-input w-32">
+              <span class="text-sm text-gray-600" :class="freqN === '0' && 'opacity-50'">{{t "impressions"}}</span>
+              <select name="freqCapWindow" class="form-input w-32 disabled:opacity-50 disabled:cursor-not-allowed"
+                      :disabled="freqN === '0'">
                 <option value="hour" {{if eq .FrequencyCapWindow "hour"}}selected{{end}}>{{t "per hour"}}</option>
                 <option value="day" {{if eq .FrequencyCapWindow "day"}}selected{{end}}>{{t "per day"}}</option>
                 <option value="week" {{if eq .FrequencyCapWindow "week"}}selected{{end}}>{{t "per week"}}</option>

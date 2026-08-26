@@ -56,5 +56,21 @@ func TestCampaignsTemplateRendersFrequencyCap(t *testing.T) {
 		if !strings.Contains(html, `<option value="day" selected>`) {
 			t.Errorf("[%s] uncapped campaign should pre-select the day window", tlang)
 		}
+		// "No cap per week" is not a policy: the window select is disabled
+		// while the cap is 0, and seeded from the campaign's stored value so
+		// an already-uncapped campaign opens with it greyed out rather than
+		// waiting for a change event that never comes.
+		if got := strings.Count(html, `:disabled="freqN === '0'"`); got != 3 {
+			t.Errorf("[%s] expected 3 window selects bound to the No-cap state, got %d", tlang, got)
+		}
+		// Create form + the uncapped campaign's panel both seed 0; the
+		// capped one seeds its stored 3. Counting is what distinguishes
+		// "seeded from the campaign" from "always 0".
+		if got := strings.Count(html, `x-data="{ freqN: '0' }"`); got != 2 {
+			t.Errorf("[%s] expected 2 panels seeded at No cap (create + uncapped), got %d", tlang, got)
+		}
+		if got := strings.Count(html, `x-data="{ freqN: '3' }"`); got != 1 {
+			t.Errorf("[%s] the capped campaign's panel should seed freqN at its stored cap, got %d", tlang, got)
+		}
 	}
 }
