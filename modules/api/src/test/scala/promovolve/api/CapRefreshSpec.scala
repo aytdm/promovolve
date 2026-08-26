@@ -19,7 +19,7 @@ class CapRefreshSpec extends AnyWordSpec with Matchers {
 
     "pass through well-formed entries" in {
       CapRefresh.wanted(Some(Vector(CapCheck("camp-1", "cre-1")))) shouldBe
-        Vector(CapCheck("camp-1", "cre-1"))
+      Vector(CapCheck("camp-1", "cre-1"))
     }
 
     "be empty for an absent or empty list" in {
