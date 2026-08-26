@@ -1406,8 +1406,21 @@ object CampaignEntity {
               spendTotal.toDouble
             )
 
-            // Reject if new budget doesn't exceed current spend
-            if (newBudget.value <= spendTotal.value) {
+            // Asking for the budget it ALREADY has is not a request for
+            // anything, and must not be refused. The campaign edit form
+            // resubmits every field, budget included, so an untouched budget
+            // reaches here on every save — and once the day's spend has
+            // caught up with it, the check below would refuse it. That
+            // refusal is not local: the API applies the patch in sequence
+            // and a budget rejection aborts it, so an exhausted budget
+            // silently vetoed every OTHER edit on the panel (the frequency
+            // cap that would not clear, the rename that did not stick).
+            // Nothing changes here, so nothing is published either.
+            if (newBudget.value.compare(state.dailyBudget.value) == 0) {
+              Effect.reply(replyTo)(BudgetReplenished(campaignId, state.dailyBudget))
+            }
+            // Reject if a NEW budget doesn't exceed current spend
+            else if (newBudget.value <= spendTotal.value) {
               ctx.log.warn(
                 "ReplenishBudget rejected: campaign={} newBudget={} <= totalSpend={}",
                 campaignId.value,

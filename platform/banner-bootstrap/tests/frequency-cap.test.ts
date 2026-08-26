@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { cappedCampaigns, MAX_EXCLUDE } from "../src/frequency-cap";
+import { capChecks, cappedCampaigns, MAX_EXCLUDE, withPolicies } from "../src/frequency-cap";
 import type { Impression } from "../src/dogear-storage";
 
 // The browser-side half of docs/design/FREQUENCY_CAPPING.md: impression
@@ -47,5 +47,61 @@ describe("cappedCampaigns", () => {
   it("ignores records stamped in the future (clock skew) and is empty for no records", () => {
     expect(cappedCampaigns([], now)).toEqual([]);
     expect(cappedCampaigns([rec("A", now + 5000), rec("A", now + 6000)], now)).toEqual([]);
+  });
+});
+
+// A capped campaign is excluded from the auction, so it can never win, so it
+// can never carry a changed policy back on a winner. Without asking the
+// server outright, a cap the advertiser REMOVED would keep declining the ad
+// until the old records aged out — up to a week. These two functions are the
+// question and the answer.
+describe("cap refresh", () => {
+  const now = 1_700_000_000_000;
+
+  it("asks only about campaigns it is actually declining", () => {
+    const rows = [rec("A", now - 1000), rec("A", now - 2000), rec("B", now - 1000)];
+    expect(capChecks(rows, now)).toEqual([{ campaignId: "A", creativeId: "c" }]);
+  });
+
+  it("asks with the newest creative it saw from that campaign", () => {
+    const rows: Impression[] = [
+      { campaignId: "A", creativeId: "old", at: now - 5000, n: 2, windowMs: DAY },
+      { campaignId: "A", creativeId: "new", at: now - 1000, n: 2, windowMs: DAY },
+    ];
+    expect(capChecks(rows, now)).toEqual([{ campaignId: "A", creativeId: "new" }]);
+  });
+
+  it("has nothing to ask when nothing is capped", () => {
+    expect(capChecks([rec("A", now - 1000)], now)).toEqual([]);
+  });
+
+  // THE case this exists for: 上限なし in the dashboard reaches a browser
+  // that is already at the cap, and takes effect on the next page load.
+  it("stops declining a campaign once the server reports the cap removed", () => {
+    const rows = [rec("A", now - 1000), rec("A", now - 2000)];
+    expect(cappedCampaigns(rows, now)).toEqual(["A"]);
+
+    const refreshed = withPolicies(rows, [{ campaignId: "A", n: 0, windowMs: 0 }]);
+    expect(cappedCampaigns(refreshed, now)).toEqual([]);
+  });
+
+  it("applies a tightened cap just as readily", () => {
+    const rows = [rec("A", now - 1000, 5), rec("A", now - 2000, 5)];
+    expect(cappedCampaigns(rows, now)).toEqual([]);
+
+    const refreshed = withPolicies(rows, [{ campaignId: "A", n: 2, windowMs: DAY }]);
+    expect(cappedCampaigns(refreshed, now)).toEqual(["A"]);
+  });
+
+  it("leaves campaigns the server said nothing about alone", () => {
+    const rows = [rec("A", now - 1000), rec("B", now - 1000)];
+    const refreshed = withPolicies(rows, [{ campaignId: "A", n: 0, windowMs: 0 }]);
+    expect(refreshed.find((r) => r.campaignId === "B")?.n).toBe(2);
+    expect(refreshed).toHaveLength(2);
+  });
+
+  it("is a no-op with no policies", () => {
+    const rows = [rec("A", now - 1000)];
+    expect(withPolicies(rows, [])).toBe(rows);
   });
 });

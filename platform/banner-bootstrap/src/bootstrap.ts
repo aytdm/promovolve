@@ -35,12 +35,12 @@
 //      display:none so they don't leave reserved space.
 
 import {
-  claimUnfoldReport, clearPin, clearPinsByCreativeIds, getAllPins, getImpressions, markCounted,
+  applyCapPolicies, claimUnfoldReport, clearPin, clearPinsByCreativeIds, getAllPins, getImpressions, markCounted,
   pinExpiresAt, recordImpression, setPin, wasCounted,
   type Pin,
 } from "./dogear-storage.js";
 import { attachLpPrefetch } from "./lp-prefetch.js";
-import { cappedCampaigns } from "./frequency-cap.js";
+import { capChecks, cappedCampaigns, type CapCheck } from "./frequency-cap.js";
 import { clearRemovedPin, isCreativeRemoved, processDogearResponse } from "./dogear-response.js";
 import { hbArmFlush, hbInit, hbMounted, hbSend, hbServe, hbSlots } from "./heartbeat.js";
 
@@ -65,6 +65,11 @@ interface BatchServeReq {
   // Campaigns this browser declines — at/over their frequency cap per its
   // own impression records (frequency-cap.ts). Only present when non-empty.
   excludeCampaigns?: string[];
+  // The same campaigns, each with a creative of its own this browser saw, so
+  // the server can report the CURRENT policy. A declined campaign can never
+  // win, so it can never carry a changed cap back on a winner — asking is the
+  // only way a removed cap ever arrives.
+  capCheck?: CapCheck[];
 }
 
 // Per-winner frequency-cap policy (docs/design/FREQUENCY_CAPPING.md): at
@@ -129,6 +134,10 @@ interface BatchServeRes {
   // forever, excluding its campaign in this browser with no recovery
   // path. Absent/empty = nothing to clean.
   stalePins?: string[];
+  // Current policy for the campaigns `capCheck` asked about. `n = 0` means
+  // the cap is gone. A campaign the server could not establish a policy for
+  // is absent, and its stored stamp stands — silence never lifts a cap.
+  capPolicies?: Array<{ campaignId: string; n: number; windowMs: number }>;
   // Legacy cold flag (= reclassifyInMs <= 0). Kept for back-compat.
   needText?: boolean;
   // Freshness token: ms until this page's classification should be refreshed.
@@ -502,6 +511,8 @@ interface BatchOutcome {
   // (broken integration) must not look alike to the health panel.
   answered: boolean;
   failReason?: string;
+  // Policies to re-stamp onto stored impressions (see applyCapPolicies).
+  capPolicies?: Array<{ campaignId: string; n: number; windowMs: number }>;
 }
 
 /**
@@ -525,6 +536,7 @@ export async function runBatch(
   slotsToServe: Slot[],
   pinHints: PinHint[],
   excludeCampaigns: string[] = [],
+  capCheck: CapCheck[] = [],
 ): Promise<BatchOutcome> {
   const body: BatchServeReq = {
     pub: config.pub,
@@ -532,6 +544,7 @@ export async function runBatch(
     imp: slotsToServe.map((s) => ({ id: s.id, w: s.w, h: s.h })),
     pins: pinHints.length > 0 ? pinHints : undefined,
     excludeCampaigns: excludeCampaigns.length > 0 ? excludeCampaigns : undefined,
+    capCheck: capCheck.length > 0 ? capCheck : undefined,
   };
 
   const first = await batchAttempt(body);
@@ -580,7 +593,10 @@ async function batchAttempt(body: BatchServeReq): Promise<BatchOutcome> {
     // legacy needText flag if an older server omits reclassifyInMs.
     const needClassify =
       data.reclassifyInMs !== undefined ? data.reclassifyInMs <= 0 : data.needText === true;
-    return { results: out, stalePins: data.stalePins ?? [], needClassify, answered: true };
+    return {
+      results: out, stalePins: data.stalePins ?? [], needClassify, answered: true,
+      capPolicies: data.capPolicies,
+    };
   } catch (e) {
     console.warn("[promovolve] batch request error", e);
     const aborted = e instanceof DOMException && e.name === "AbortError";
@@ -824,10 +840,15 @@ async function displayImpl(): Promise<void> {
   // Frequency capping: which campaigns has this browser seen enough of?
   // Read-sweeps the impression store like getAllPins does for pins. IDB
   // unavailable or hung → empty list → uncapped (fail open, never blank).
-  const excludeCampaigns = cappedCampaigns(await getImpressions());
+  const impressions = await getImpressions();
+  const excludeCampaigns = cappedCampaigns(impressions);
 
-  const { results: batchResults, stalePins, needClassify, answered, failReason } =
-    await runBatch(allSlots, pinHints, excludeCampaigns);
+  const { results: batchResults, stalePins, needClassify, answered, failReason, capPolicies } =
+    await runBatch(allSlots, pinHints, excludeCampaigns, capChecks(impressions));
+  // Re-stamp before the next page load reads the store. Off the render path:
+  // this batch already used the policy it had, and the point is that the
+  // NEXT decision uses the server's.
+  if (capPolicies?.length) void applyCapPolicies(capPolicies);
   const servedCount = allSlots.filter((s) => batchResults.get(s.id)?.winner).length;
   hbServe(answered, servedCount, failReason);
 

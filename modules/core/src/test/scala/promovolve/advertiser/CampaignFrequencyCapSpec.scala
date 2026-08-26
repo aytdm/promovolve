@@ -158,4 +158,64 @@ class CampaignFrequencyCapSpec extends AnyWordSpec with Matchers with BeforeAndA
       info(c).frequencyCap shouldBe None
     }
   }
+
+  // The cap edit did not fail on its own — it never ran. The campaign edit
+  // form resubmits EVERY field, so an untouched budget arrives as a
+  // ReplenishBudget on every save; the API applies the patch in sequence and
+  // a budget rejection aborts it before the config update (which is where
+  // the cap lives) is ever reached. Once the day's spend caught up with the
+  // budget, that made the whole panel unsaveable — the cap being the part
+  // the advertiser noticed.
+  "CampaignEntity.ReplenishBudget" should {
+
+    def replenish(c: ActorRef[CampaignEntity.Command], amount: BigDecimal): CampaignEntity.ReplenishResult = {
+      val probe = testKit.createTestProbe[CampaignEntity.ReplenishResult]()
+      c ! CampaignEntity.ReplenishBudget(Budget(amount), probe.ref)
+      probe.receiveMessage(5.seconds)
+    }
+
+    def spend(c: ActorRef[CampaignEntity.Command], requestId: String, amount: BigDecimal): Unit = {
+      val probe = testKit.createTestProbe[CampaignEntity.SpendRecorded]()
+      c ! CampaignEntity.RecordSpend(requestId, Spend(amount), java.time.Instant.now(), probe.ref)
+      probe.receiveMessage(5.seconds)
+    }
+
+    "accept the budget the campaign already has, even when the day's spend has reached it" in {
+      val c = spawnCampaign("camp-budget-unchanged")
+      replenish(c, BigDecimal(10)) shouldBe a[CampaignEntity.BudgetReplenished]
+      spend(c, "req-exhaust", BigDecimal(10))
+
+      // The exact value the edit form re-renders. Nothing is being asked
+      // for, so there is nothing to refuse.
+      replenish(c, BigDecimal(10)) shouldBe a[CampaignEntity.BudgetReplenished]
+      info(c).dailyBudget shouldBe Budget(BigDecimal(10))
+    }
+
+    // Scale, not identity: the form renders "10" and may submit "10.00".
+    "treat a differently-scaled but equal amount as unchanged" in {
+      val c = spawnCampaign("camp-budget-scale")
+      replenish(c, BigDecimal(10)) shouldBe a[CampaignEntity.BudgetReplenished]
+      spend(c, "req-exhaust-scale", BigDecimal(10))
+      replenish(c, BigDecimal("10.00")) shouldBe a[CampaignEntity.BudgetReplenished]
+    }
+
+    // The guard still has a job: a genuinely NEW budget that the campaign has
+    // already spent past is a real mistake and must still be refused.
+    "still refuse a new budget that today's spend has already passed" in {
+      val c = spawnCampaign("camp-budget-lowered")
+      replenish(c, BigDecimal(10)) shouldBe a[CampaignEntity.BudgetReplenished]
+      spend(c, "req-exhaust-lower", BigDecimal(8))
+
+      replenish(c, BigDecimal(5)) shouldBe a[CampaignEntity.ReplenishRejected]
+      info(c).dailyBudget shouldBe Budget(BigDecimal(10))
+    }
+
+    "still accept a raise" in {
+      val c = spawnCampaign("camp-budget-raise")
+      replenish(c, BigDecimal(10)) shouldBe a[CampaignEntity.BudgetReplenished]
+      spend(c, "req-exhaust-raise", BigDecimal(10))
+      replenish(c, BigDecimal(20)) shouldBe a[CampaignEntity.BudgetReplenished]
+      info(c).dailyBudget shouldBe Budget(BigDecimal(20))
+    }
+  }
 }

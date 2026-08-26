@@ -518,6 +518,38 @@ export function recordImpression(rec: Impression): Promise<void> {
   });
 }
 
+/** Re-stamp stored impressions of these campaigns with the policy the
+ *  server just reported.
+ *
+ *  A campaign the browser is declining can never win, so it can never carry
+ *  a fresh policy back on a winner — this is the only way a REMOVED cap ever
+ *  reaches storage. The policy is a property of the campaign, so every one of
+ *  its rows is updated; `n = 0` then means those rows never cap again.
+ *  Best-effort, like every write here: a failure just leaves the old stamp
+ *  and the next page load asks again. */
+export function applyCapPolicies(
+  policies: Array<{ campaignId: string; n: number; windowMs: number }>,
+): Promise<void> {
+  if (policies.length === 0) return Promise.resolve();
+  const byCampaign = new Map(policies.map((p) => [p.campaignId, p]));
+  return idb<void>(undefined, (db, resolve) => {
+    const tx = db.transaction(IMPRESSIONS_STORE, "readwrite");
+    const store = tx.objectStore(IMPRESSIONS_STORE);
+    const req = store.getAll();
+    req.onsuccess = () => {
+      for (const row of (req.result as Impression[]) ?? []) {
+        const p = byCampaign.get(row.campaignId);
+        if (!p || row.id === undefined) continue;
+        if (p.n === row.n && p.windowMs === row.windowMs) continue;
+        store.put({ ...row, n: p.n, windowMs: p.windowMs });
+      }
+    };
+    tx.oncomplete = () => resolve(undefined);
+    tx.onerror = () => resolve(undefined);
+    tx.onabort = () => resolve(undefined);
+  });
+}
+
 /** All impressions inside the retention window; older rows are deleted
  *  in the same pass (read-time sweep, like getAllPins). */
 export function getImpressions(now: number = Date.now()): Promise<Impression[]> {

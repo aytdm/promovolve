@@ -224,9 +224,63 @@ reader".
 
 Per browser, not per person. Resets when site data is cleared; absent in
 private windows after close; a phone and a laptop are two readers. A reader
-who blocks storage is uncapped. A loosened cap takes up to the old window
-to apply; a tightened one can overshoot by one. These are the same limits
-every cookieless cap has; the advertiser UI copy should say "per browser".
+who blocks storage is uncapped. A tightened cap can overshoot by one. These
+are the same limits every cookieless cap has; the advertiser UI copy should
+say "per browser".
+
+## The cap refresh — why a removed cap needs a back channel
+
+**Found live 2026-08-26.** The first cut said "a loosened or removed cap
+takes effect as soon as one more ad from that campaign is seen", reading the
+policy stamped on the browser's most recent impression record. That premise
+cannot hold, and the loop is closed:
+
+> at the cap → the campaign is in `excludeCampaigns` → the auction excludes
+> it → it never wins → **no newer record is ever written** → the stamped
+> policy never changes → still at the cap.
+
+Winning once is the only way a new policy could arrive, and being capped is
+exactly what prevents it. Turning the cap off in the dashboard therefore did
+nothing a reader could see until the old records aged out of the *stamped*
+window — up to a week on `per week`. The unit test passed only because it
+hand-wrote a newer record; nothing in the running system could produce one.
+
+So the browser asks. Alongside `excludeCampaigns` it sends `capCheck` — the
+same campaigns, each paired with a creative of its own it actually saw — and
+the response carries `capPolicies`, the CURRENT policy for each. `n = 0`
+means the cap is gone. `applyCapPolicies` re-stamps every stored record of
+that campaign, so the next `cappedCampaigns` call reaches the right answer.
+No extra impression is served to learn this.
+
+Three properties worth keeping:
+
+- **The creative is the key AND the authorization.** Campaign entities are
+  keyed `advertiserId|campaignId` and the serve path has no campaign→owner
+  index, so the creative names its own owner (`creativeRepo`). It also means
+  a policy is answered only when the creative really belongs to the campaign
+  asked about — a client cannot enumerate caps it was never served.
+- **Silence never lifts a cap.** A campaign whose policy could not be
+  established — creative gone, mismatched, entity ask failed, unknown window
+  — is *omitted* from `capPolicies`, and the browser's own stamp stands. A
+  timeout must not hand an advertiser unlimited delivery.
+- **Same bound as the exclusions it mirrors** (`CapRefresh.MaxEntries` =
+  `ExcludeCampaigns.MaxEntries`): the two lists carry the same ids, so a
+  client that cannot blank its auction with thousands of exclusions cannot
+  spend the server's lookups either.
+
+### The other half: an untouched budget vetoed the whole edit
+
+Same report, different cause, and it is what actually kept the cap set. The
+campaign edit form resubmits **every** field, so an untouched daily budget
+arrives as a `ReplenishBudget` on every save. `CampaignEntity` refused any
+budget that no longer exceeded the day's spend — including one that had not
+changed — and the API applies the patch in sequence, so a budget rejection
+aborted it *before* `configUpdateF`, which is where the frequency cap lives.
+An exhausted budget therefore silently vetoed every other edit on the panel.
+
+Asking for the budget a campaign already has is not a request for anything,
+and is now a no-op success: nothing persisted, nothing published. The guard
+still refuses a genuinely NEW budget that today's spend has passed.
 
 ## Tests
 
@@ -243,6 +297,16 @@ every cookieless cap has; the advertiser UI copy should say "per browser".
   body carries `excludeCampaigns` only when non-empty.
 - Hostile-env suite: a browser with IndexedDB blocked still serves (the cap
   fails **open**, never blank).
+- `CapRefreshSpec`: the back channel is trimmed, deduped per campaign, and
+  bounded at the exclusion limit.
+- Bootstrap `cap refresh` tests: it asks only about campaigns it is actually
+  declining, and with the newest creative it saw; a reported `n = 0` stops
+  the decline on the next call; a tightened cap applies just as readily;
+  campaigns the server said nothing about are left alone.
+- `CampaignFrequencyCapSpec` (`ReplenishBudget` block): the budget a campaign
+  already has is accepted even when the day's spend has reached it — equal
+  amounts at different scales included — while a genuinely lowered budget
+  below today's spend is still refused.
 
 ## Rollout
 

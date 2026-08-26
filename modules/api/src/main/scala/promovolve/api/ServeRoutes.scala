@@ -63,6 +63,20 @@ final case class FrequencyCapWire(campaignId: String, n: Int, windowMs: Long)
 final case class PinHint(slotId: String, creativeId: String)
 
 /**
+ * "Is this campaign still capped?" — one campaign the browser is currently
+ * declining, paired with a creative it actually saw from that campaign.
+ *
+ * The pairing is what makes this answerable AND safe. The server has no
+ * campaignId → owner index on the serve path (campaign entities are keyed
+ * `advertiserId|campaignId`), but it does have the creative store, so the
+ * creative names its own campaign's owner. It is also the authorization:
+ * a policy is returned only when the creative really belongs to the
+ * campaign asked about, so a client cannot enumerate caps it was never
+ * served. See docs/design/FREQUENCY_CAPPING.md.
+ */
+final case class CapCheck(campaignId: String, creativeId: String)
+
+/**
  * One impression opportunity in a batch serve request. Shape mirrors
  * the `imp` entry of an OpenRTB BidRequest, pared down to the fields
  * we actually act on today. `id` is the publisher's slot identifier,
@@ -92,7 +106,13 @@ final case class BatchServeReq(
     // cap (computed client-side from its own impression records). Option —
     // spray ignores defaults, and older tags omit it. Bounded server-side
     // (ExcludeCampaigns.MaxEntries); never logged by value.
-    excludeCampaigns: Option[Vector[String]] = None
+    excludeCampaigns: Option[Vector[String]] = None,
+    // The same campaigns, each with a creative the browser saw from it, so
+    // the server can answer with the CURRENT policy. Without this a removed
+    // cap could never reach a browser already at it: being excluded is
+    // exactly what prevents the impression that would carry the new policy
+    // back. Option — older tags omit it.
+    capCheck: Option[Vector[CapCheck]] = None
 )
 
 /**
@@ -172,7 +192,13 @@ final case class BatchServeRes(
     // Freshness token: ms until this page's classification should be refreshed.
     // <= 0 → the ad tag (re)classifies (cold OR stale); > 0 → fresh, do nothing.
     // Preferred over needText. See docs/design/ON_DEMAND_CLASSIFICATION.md.
-    reclassifyInMs: Long = Long.MaxValue
+    reclassifyInMs: Long = Long.MaxValue,
+    // Current policy for campaigns the request asked about via `capCheck`.
+    // `n = 0` means the cap was removed — the browser stops declining it.
+    // A campaign whose policy could NOT be established is absent rather
+    // than reported as uncapped: silence leaves the browser's own record
+    // standing, which keeps a cap the advertiser is paying for.
+    capPolicies: Option[Vector[FrequencyCapWire]] = None
 )
 
 /**
@@ -202,6 +228,30 @@ private[api] object ExcludeCampaigns {
       .distinct
       .take(MaxEntries)
       .map(promovolve.CampaignId.apply)
+}
+
+/**
+ * Pure half of the cap-refresh answer: which `capCheck` entries the server
+ * will bother looking up.
+ *
+ * Bounded by the same MaxEntries as the exclusion list it mirrors — the two
+ * carry the same ids, so a client that cannot blank its auction with
+ * thousands of exclusions must not be able to spend the server's lookups
+ * either. Blanks dropped, order-preserving dedupe by campaign: one answer
+ * per campaign is all the browser can use.
+ */
+private[api] object CapRefresh {
+  val MaxEntries: Int = ExcludeCampaigns.MaxEntries
+
+  def wanted(fromRequest: Option[Vector[CapCheck]]): Vector[CapCheck] =
+    fromRequest
+      .getOrElse(Vector.empty)
+      .iterator
+      .map(c => CapCheck(c.campaignId.trim, c.creativeId.trim))
+      .filter(c => c.campaignId.nonEmpty && c.creativeId.nonEmpty)
+      .distinctBy(_.campaignId)
+      .take(MaxEntries)
+      .toVector
 }
 
 private[api] object StalePins {
@@ -240,14 +290,15 @@ private[api] object StalePins {
 trait ServeJson extends DefaultJsonProtocol {
   given RootJsonFormat[DogearInfo] = jsonFormat2(DogearInfo.apply)
   given RootJsonFormat[PinHint] = jsonFormat2(PinHint.apply)
+  given RootJsonFormat[CapCheck] = jsonFormat2(CapCheck.apply)
   given RootJsonFormat[FrequencyCapWire] = jsonFormat3(FrequencyCapWire.apply)
   given RootJsonFormat[ServeRes] = jsonFormat17(ServeRes.apply)
   given RootJsonFormat[BatchImp] = jsonFormat4(BatchImp.apply)
-  given RootJsonFormat[BatchServeReq] = jsonFormat6(BatchServeReq.apply)
+  given RootJsonFormat[BatchServeReq] = jsonFormat7(BatchServeReq.apply)
   given RootJsonFormat[ClassifyImp] = jsonFormat7(ClassifyImp.apply)
   given RootJsonFormat[ClassifyPageTextReq] = jsonFormat6(ClassifyPageTextReq.apply)
   given RootJsonFormat[BatchImpResult] = jsonFormat3(BatchImpResult.apply)
-  given RootJsonFormat[BatchServeRes] = jsonFormat4(BatchServeRes.apply)
+  given RootJsonFormat[BatchServeRes] = jsonFormat5(BatchServeRes.apply)
 }
 
 /** Hot-path JSON responder: AdServer handles selection, freshness filtering, and DData. */
@@ -497,12 +548,18 @@ final class ServeRoutes(
                         }
                     }
                   }
-                  onSuccess(Future.sequence(resFutures)) { results =>
+                  // Answered alongside the auction, not inside it: the
+                  // browser asked what the CURRENT policy is for campaigns it
+                  // is declining, and none of them can win this batch to be
+                  // told the normal way.
+                  val capPoliciesF = capPoliciesFor(CapRefresh.wanted(req.capCheck))
+                  onSuccess(Future.sequence(resFutures).zip(capPoliciesF)) { (results, capPolicies) =>
                     complete(BatchServeRes(
                       results,
                       stalePins = if (stalePins.nonEmpty) Some(stalePins) else None,
                       needText = needText,
-                      reclassifyInMs = reclassifyInMs
+                      reclassifyInMs = reclassifyInMs,
+                      capPolicies = if (capPolicies.nonEmpty) Some(capPolicies) else None
                     ))
                   }
               }
@@ -692,6 +749,57 @@ final class ServeRoutes(
               .map(ms => FrequencyCapWire(campaignId, cap.impressions, ms)))
         ))
       .recover { case _ => (None, None) }
+  }
+
+  /**
+   * Current cap policy for the campaigns the browser asked about.
+   *
+   * The browser cannot learn that a cap was REMOVED on its own: it stamps
+   * each impression with the policy in force at the time and reads the most
+   * recent stamp, but being at the cap is exactly what stops the campaign
+   * winning again, so no newer stamp can ever arrive. This answers without
+   * serving anything.
+   *
+   * `n = 0` means uncapped. A campaign whose policy could not be
+   * established is OMITTED rather than reported uncapped — a lookup
+   * failure must never lift a cap the advertiser is paying for.
+   */
+  private def capPoliciesFor(wanted: Vector[CapCheck]): Future[Vector[FrequencyCapWire]] =
+    if (wanted.isEmpty) Future.successful(Vector.empty)
+    else
+      Future
+        .sequence(wanted.map { ask =>
+          creativeRepo
+            .map(_.get(ask.creativeId))
+            .getOrElse(Future.successful(None))
+            .flatMap {
+              // The creative must really belong to the campaign asked
+              // about: that is what makes the owner lookup possible AND
+              // stops a client reading caps it was never served.
+              case Some(cr) if cr.campaignId == ask.campaignId => currentCap(cr.advertiserId, ask.campaignId)
+              case _                                           => Future.successful(None)
+            }
+            .recover { case _ => None }
+        })
+        .map(_.flatten)
+
+  private def currentCap(advertiserId: String, campaignId: String): Future[Option[FrequencyCapWire]] = {
+    given Timeout = Timeout(300.millis)
+    sharding
+      .entityRefFor(promovolve.advertiser.CampaignEntity.TypeKey, s"$advertiserId|$campaignId")
+      .ask[promovolve.advertiser.CampaignEntity.CampaignInfo](
+        promovolve.advertiser.CampaignEntity.GetCampaign(_)
+      )
+      .map(_.frequencyCap match {
+        case None      => Some(FrequencyCapWire(campaignId, 0, 0L))
+        case Some(cap) =>
+          // An unrecognised window is not an answer either — say nothing
+          // rather than flatten it into "uncapped".
+          promovolve.advertiser.CampaignEntity.FrequencyCap
+            .windowMs(cap.window)
+            .map(ms => FrequencyCapWire(campaignId, cap.impressions, ms))
+      })
+      .recover { case _ => None }
   }
 
   private def impUrl(
