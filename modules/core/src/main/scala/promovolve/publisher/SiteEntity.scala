@@ -2261,8 +2261,19 @@ object SiteEntity {
      *       unchanged — this bump is for CORRECTNESS of what is already
      *       there, which the freshness window alone never repairs: a page
      *       with live winners keeps its entry until it goes dark.
+     *
+     *   REVERTED to 1 on 2026-08-26, before any page re-classified. The
+     *       bump traded known-good v1 place data for output of a prompt
+     *       with NO production evidence — the classify-eval was never run
+     *       on it. Migrate-then-measure was the wrong order: if the new
+     *       prompt returns fewer places on a page, that page's place data
+     *       is gone and no version revert brings it back. Re-raise to 2
+     *       ONLY after scripts/classify-eval shows the named-place prompt
+     *       matching the 2026-08-24 baseline (which scored 5/5 place
+     *       cells). Nothing was lost by the round-trip: re-classification
+     *       fires on page views, and none occurred while this was 2.
      */
-    val CurrentClassifierVersion: Int = 2
+    val CurrentClassifierVersion: Int = 1
   }
 
   /**

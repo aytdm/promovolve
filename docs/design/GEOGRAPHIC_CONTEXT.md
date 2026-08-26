@@ -1052,12 +1052,17 @@ script now refuses to write it) carries the everyday English names no upstream
 source has. `ResolvedPlace.unresolved` reports what could not be placed, which
 is the failure the code-shaped answer could never report.
 
-`CurrentClassifierVersion` goes to **2**. The field shape is unchanged, so this
-is not the "gained a field" case the rule was written for — it is the other
-one: a v1 entry may hold a confidently wrong code, and unlike a missing place,
-a wrong place is invisible to everything downstream and outlives the freshness
-window on any page that keeps winning. The whole corpus re-classifies from
-here, one single-flighted call per page, paced by views.
+`CurrentClassifierVersion` went to **2** with this change — and was **reverted
+to 1 on 2026-08-26**, before any page re-classified. The bump was the right
+idea in the wrong order: it scheduled a whole-corpus rewrite under a prompt
+that had never once been sent to Gemini — the classify-eval was not run on it,
+and no production classification had exercised it. Migrate-then-measure risks
+the only evidence-backed place data we have: if the new prompt returns fewer
+places on a page, that page's data is gone and no version revert restores it.
+The bump returns ONLY after `scripts/classify-eval` shows the named-place
+prompt matching the 2026-08-24 baseline (5/5 place cells). The v2 rationale —
+a v1 entry may hold a confidently wrong code, invisible downstream and
+unrepaired by age — still stands; it is the *sequencing* that was wrong.
 
 Not done here: `scripts/classify-eval/pages.tsv` is still 12 pages, all JP/TW,
 so it says nothing about subdivision naming where it is hardest (India,
