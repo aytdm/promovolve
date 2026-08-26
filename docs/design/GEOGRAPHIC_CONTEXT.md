@@ -577,11 +577,31 @@ So place targeting is applied **twice**, once on each side of the key:
   `placeTargeting` (`Candidate` → `CandidateView`), the AdServer caches each
   URL's places from `CandidatesCollected.pagePlaces`, and at selection it
   drops any candidate whose targeting does not admit the page actually being
-  served. Untargeted candidates pass. A page with no known places — classified
-  that way, or never auctioned on this AdServer incarnation — drops targeted
-  candidates, exactly as the campaign would have declined to bid: a wrong
-  drop costs one impression, a wrong keep costs a billed impression the
+  served. Untargeted candidates pass. A page with no known places drops
+  targeted candidates, exactly as the campaign would have declined to bid: a
+  wrong drop costs one impression, a wrong keep costs a billed impression the
   advertiser never asked for.
+
+**"No known places" originally conflated two different things** — "classified
+as about nowhere" and "this AdServer incarnation hasn't seen an auction for
+the page yet" — and the second one was an outage (2026-08-26): the cache is
+actor memory, a pod roll empties it, and with re-auctions stalled (stranded
+category-bidder registries) every place-targeted campaign was silently
+dropped at serve, sitewide, indefinitely. Clearing the campaign's place
+targeting "fixed" it, which is how it was found.
+
+Since 2026-08-27, `MarkClassified` carries the page's places, and the
+auctioneer holds them at every point it already sends that message: fresh
+classification, SiteEntity's recovery restore, its 5-minute resend, and the
+lost-announce recovery. So the same channel that repopulates the freshness
+token repopulates the place cache — within one resend cycle of a restart at
+worst, without waiting for any auction to complete. The write rule
+(`AdServer.warmPlaces`, tested) is that **empty never clobbers**: an empty
+`places` means "sender doesn't know" (SiteEntity's slot-added EPOCH nudge,
+an old-image node mid-rolling-deploy), never "about nowhere";
+`CandidatesCollected` remains the authoritative writer, shrink-to-empty
+included. The fail-closed read stands — it is only correct because the cache
+is now actually warm.
 
 The relevance decay (`0.7^hops`) moved with it. It used to be baked into the
 view's `categoryScore` at auction, using the distance for the page that

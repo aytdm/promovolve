@@ -99,6 +99,40 @@ class AdServerServeAccountingSpec extends AnyWordSpec with Matchers {
     }
   }
 
+  // The place cache is actor memory, and the serve path reads an absent
+  // entry as "page is about nowhere" — which drops every place-targeted
+  // candidate. That made every pod restart a silent place-targeting
+  // blackout until an auction happened to complete (outage 2026-08-26:
+  // re-auctions stalled and it never did). MarkClassified now carries the
+  // places the auctioneer already holds, and this is the write rule.
+  "AdServer.warmPlaces" should {
+    val warm = Map("https://a" -> Set("JP-28"))
+
+    "add knowledge" in {
+      AdServer.warmPlaces(Map.empty, "https://a", Set("JP-28", "JP"), cap = 10) shouldBe
+      Map("https://a" -> Set("JP-28", "JP"))
+    }
+
+    // THE invariant: empty means "sender doesn't know" (an EPOCH nudge, an
+    // old-image node mid-deploy), never "about nowhere". If empty could
+    // clobber, the slot-added nudge would re-blind a page the restore had
+    // just warmed.
+    "never let empty clobber a warm entry" in {
+      AdServer.warmPlaces(warm, "https://a", Set.empty, cap = 10) shouldBe warm
+      AdServer.warmPlaces(Map.empty, "https://x", Set.empty, cap = 10) shouldBe empty
+    }
+
+    "replace an existing entry with newer knowledge" in {
+      AdServer.warmPlaces(warm, "https://a", Set("GN1849831"), cap = 10) shouldBe
+      Map("https://a" -> Set("GN1849831"))
+    }
+
+    "stay bounded" in {
+      val big = (1 to 5).map(i => s"https://$i" -> Set("JP")).toMap
+      AdServer.warmPlaces(big, "https://new", Set("JP-17"), cap = 3).size shouldBe 3
+    }
+  }
+
   "AdServer.reclassifyInMs" should {
     val now = 1_000_000_000_000L
     val oneHour = 3600000L

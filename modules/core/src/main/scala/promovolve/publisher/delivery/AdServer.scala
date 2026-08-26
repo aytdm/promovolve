@@ -179,6 +179,29 @@ object AdServer {
    * another road (re-auction, restore) and must not revive the token. Only
    * a strictly newer classification is accepted. No expiry → accept all.
    */
+  /**
+   * Warm the page→places cache from a MarkClassified.
+   *
+   * The one rule that matters: EMPTY NEVER CLOBBERS. An empty `places`
+   * on this path means "the sender doesn't know" (SiteEntity's slot-added
+   * EPOCH nudge, an old-image node mid-rolling-deploy) — never "the page
+   * is about nowhere" — so it must not erase knowledge the cache already
+   * holds. CandidatesCollected is the authoritative writer and keeps its
+   * unconditional overwrite, shrink-to-empty included. Capped like every
+   * other per-URL map here.
+   */
+  private[delivery] def warmPlaces(
+      cache: Map[String, Set[String]],
+      url: String,
+      places: Set[String],
+      cap: Int
+  ): Map[String, Set[String]] =
+    if (places.isEmpty) cache
+    else {
+      val updated = cache + (url -> places)
+      if (updated.size > cap) updated.drop(updated.size - cap) else updated
+    }
+
   private[delivery] def acceptsClassifiedAt(expiredAtMs: Option[Long], ts: Long): Boolean =
     expiredAtMs.forall(ts > _)
 
@@ -2080,10 +2103,15 @@ private[delivery] class AdServer(
         }
         Behaviors.same
 
-      case MarkClassified(url, classifiedAt) =>
+      case MarkClassified(url, classifiedAt, places) =>
         // A page was classified (matched OR filler), regardless of bidders.
         // Record classifiedAt so reclassifyInMs/needText treat it as known.
         recordClassified(url.value, classifiedAt.toEpochMilli)
+        // Warm the place cache from the same message (see Protocol note) —
+        // regardless of the freshness pin: even an expired-but-serving
+        // page's places are the best known, and expiry deliberately leaves
+        // serving untouched.
+        pagePlacesCache = AdServer.warmPlaces(pagePlacesCache, url.value, places, AdServer.MaxPageCategoriesCache)
         Behaviors.same
 
       case InvalidateClassification(url) =>

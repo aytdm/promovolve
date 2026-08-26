@@ -448,7 +448,9 @@ private final class AuctioneerEntity private (
       // Tell AdServer the page is classified NOW (before/independent of the
       // auction outcome) so its freshness token is set even if no campaign
       // bids — otherwise a no-bidder page re-classifies on every serve.
-      adServer ! AdServer.MarkClassified(url, ts)
+      // Places ride along so the serve-time place re-check has them even
+      // if this auction never completes (see Protocol.MarkClassified).
+      adServer ! AdServer.MarkClassified(url, ts, places)
       ctx.log.debug(
         "🏁 Auction START: site={} url={} categories={} slots={}",
         siteId,
@@ -566,9 +568,11 @@ private final class AuctioneerEntity private (
             val slots = entry.slots.iterator.map(_.toAdSlotSpec).toList
             lastPage = lastPage.updated(url, (entry.categories, slots, tsInst))
             lastPagePlaces = lastPagePlaces.updated(url, entry.places)
-            // Repopulate AdServer's freshness token after a restart so restored
-            // pages (incl. no-bidder ones) aren't treated as cold on first serve.
-            adServer ! AdServer.MarkClassified(url, tsInst)
+            // Repopulate AdServer's freshness token AND its place cache
+            // after a restart so restored pages (incl. no-bidder ones)
+            // aren't treated as cold — or as "about nowhere" — on first
+            // serve (see Protocol.MarkClassified).
+            adServer ! AdServer.MarkClassified(url, tsInst, entry.places)
             restored += 1
           }
         }
@@ -711,8 +715,10 @@ private final class AuctioneerEntity private (
 
     case FillerAuctionRequested(url, slots, ts) =>
       // Mark classified even for a filler (no-category) page, so its freshness
-      // token is set and it isn't re-classified every serve.
-      adServer ! AdServer.MarkClassified(url, ts)
+      // token is set and it isn't re-classified every serve. Places may
+      // still be known (a page can be about somewhere yet match no
+      // category); pass whatever this entity holds.
+      adServer ! AdServer.MarkClassified(url, ts, placesFor(url))
       // Gemini honestly said "no category matches this page." Route
       // to the filler auction: ask CampaignDirectory for opted-in
       // campaigns, fan out CampaignBidRequest with CategoryId.Filler
@@ -1856,7 +1862,7 @@ private final class AuctioneerEntity private (
                 val ts = Instant.ofEpochMilli(entry.classifiedAt)
                 lastPage = lastPage.updated(url, (entry.categories, slots, ts))
                 lastPagePlaces = lastPagePlaces.updated(url, entry.places)
-                adServer ! AdServer.MarkClassified(url, ts)
+                adServer ! AdServer.MarkClassified(url, ts, entry.places)
                 ctx.log.info(
                   "Recovered persisted classification for {} from SiteEntity (lost announce) — re-auctioning",
                   url

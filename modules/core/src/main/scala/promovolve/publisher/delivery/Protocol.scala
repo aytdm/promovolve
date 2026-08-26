@@ -91,7 +91,26 @@ object Protocol {
    * classifiedAt for no-bidder pages and not treat them as cold. Drives the
    * reclassifyInMs freshness token. See docs/design/ON_DEMAND_CLASSIFICATION.md.
    */
-  final case class MarkClassified(url: URL, classifiedAt: Instant) extends Command
+  /**
+   * A page is classified. Sets the freshness token, and — when the sender
+   * knows them — carries the page's content places so `pagePlacesCache`
+   * warms WITHOUT waiting for an auction to complete. That wait was an
+   * outage (2026-08-26): the cache is actor memory, a restart empties it,
+   * an empty entry reads as "page is about nowhere", and that DROPS every
+   * place-targeted candidate at serve — so a stalled re-auction turned a
+   * routine pod roll into a sitewide place-targeting blackout. The
+   * auctioneer holds the places at every point it sends this (fresh
+   * classification, SiteEntity recovery restore, the 5-minute resend), so
+   * the same message that repopulates the token now repopulates the
+   * places.
+   *
+   * Default-empty for senders that genuinely don't know (SiteEntity's
+   * slot-added EPOCH nudge, an old-image node during a rolling deploy);
+   * empty NEVER overwrites a warm entry — CandidatesCollected remains the
+   * authoritative writer, including shrink-to-empty.
+   */
+  final case class MarkClassified(url: URL, classifiedAt: Instant, places: Set[String] = Set.empty)
+      extends Command
 
   /**
    * Drop the freshness token for a url so the NEXT visitor's ad tag
