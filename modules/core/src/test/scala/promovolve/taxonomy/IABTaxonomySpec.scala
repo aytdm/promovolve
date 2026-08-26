@@ -125,7 +125,11 @@ class IABTaxonomySpec extends AnyWordSpec with Matchers with OptionValues {
       val provider = Provider.Gemini("gemini-key")
 
       provider.name shouldBe "Gemini"
-      provider.model shouldBe "gemini-2.5-flash"
+      // The shared default (Provider.DefaultGeminiModel), not a literal:
+      // Google retires model names, and this test asserting a stale one
+      // is exactly the lag the shared constant exists to prevent.
+      provider.model shouldBe Provider.DefaultGeminiModel
+      Provider.DefaultGeminiModel shouldBe "gemini-3.5-flash-lite"
     }
 
     "fromEnv should throw when no API keys are set" in {

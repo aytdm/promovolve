@@ -371,24 +371,34 @@ class IABTaxonomy(
   }
 
   private def buildGeminiRequest(p: Provider.Gemini, prompt: String): (String, List[HttpHeader], String) = {
+    // 2.5-family models include "thinking" tokens in the output budget;
+    // classification doesn't benefit from chain-of-thought (the answer is
+    // a short list of IDs), so thinking is disabled via thinkingBudget=0.
+    // The 3.5 generation RETIRED that field — sending it is a hard 400
+    // ("Request contains an invalid argument", found 2026-08-27 probing
+    // gemini-3.5-flash-lite) — and replaced it with thinkingLevel, which
+    // the 2.5 family in turn does not accept. So the config is chosen by
+    // model generation, and an unknown future generation gets NEITHER:
+    // a model's own default thinking beats a guaranteed 400.
+    val thinkingConfig: Option[(String, JsValue)] =
+      if (p.model.startsWith("gemini-2.5")) Some("thinkingConfig" -> JsObject("thinkingBudget" -> JsNumber(0)))
+      else if (p.model.startsWith("gemini-3.5"))
+        Some("thinkingConfig" -> JsObject("thinkingLevel" -> JsString("minimal")))
+      else None
     val body = JsObject(
       "contents" -> JsArray(
         JsObject("parts" -> JsArray(JsObject("text" -> JsString(prompt))))
       ),
       "generationConfig" -> JsObject(
-        "temperature" -> JsNumber(0.1),
-        // 2.5 Flash includes "thinking" tokens in the output budget.
-        // Classification doesn't benefit from chain-of-thought (the
-        // answer is a short list of IDs) so we disable thinking via
-        // thinkingBudget=0. The budget bump from 1024 to 4096 is
-        // belt-and-suspenders for longer category lists; without
-        // disabling thinking, 1024 was getting exhausted by reasoning
-        // tokens and the JSON came back truncated mid-field.
-        "maxOutputTokens" -> JsNumber(4096),
-        "responseMimeType" -> JsString("application/json"),
-        "thinkingConfig" -> JsObject(
-          "thinkingBudget" -> JsNumber(0)
-        )
+        Map(
+          "temperature" -> (JsNumber(0.1): JsValue),
+          // The budget bump from 1024 to 4096 is belt-and-suspenders for
+          // longer category lists; without disabled thinking, 1024 was
+          // getting exhausted by reasoning tokens and the JSON came back
+          // truncated mid-field.
+          "maxOutputTokens" -> (JsNumber(4096): JsValue),
+          "responseMimeType" -> (JsString("application/json"): JsValue)
+        ) ++ thinkingConfig
       )
     ).compactPrint
 
@@ -807,9 +817,16 @@ object IABTaxonomy extends DefaultJsonProtocol {
     /**
      * One name for the default Gemini model, shared with ClusterBootstrap.
      * Google retires model names (gemini-2.0-flash answers 404 since
-     * 2026-08); a tool that lagged the app's default broke silently.
+     * 2026-08, gemini-2.5-flash-lite since ~2026-08 too); a tool that
+     * lagged the app's default broke silently.
+     *
+     * gemini-3.5-flash-lite since 2026-08-27: the cheapest current-lineup
+     * model, and measured equal to gemini-2.5-flash on the classify-eval
+     * (categories 12/12, places 5/5 checked; out/35lite-names.json).
+     * Requires the generation-aware thinkingConfig in buildGeminiRequest —
+     * the 3.5 family hard-400s on the 2.5 family's thinkingBudget field.
      */
-    val DefaultGeminiModel = "gemini-2.5-flash"
+    val DefaultGeminiModel = "gemini-3.5-flash-lite"
 
     /** Create provider from environment variables (cheapest first); GEMINI_MODEL overrides the model. */
     def fromEnv(): Provider =
