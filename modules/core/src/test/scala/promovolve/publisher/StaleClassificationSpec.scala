@@ -52,22 +52,22 @@ class StaleClassificationSpec extends AnyWordSpec with Matchers {
       s.staleClassifications.map(_._1).toSet shouldBe Set("https://old")
     }
 
-    // The version-2 bump (expire v1 code-era entries wholesale) was
-    // REVERTED on 2026-08-26: it scheduled a corpus rewrite under a prompt
-    // that had never once been sent to Gemini — no eval run, no production
-    // classification. Until scripts/classify-eval clears the named-place
-    // prompt against the 2026-08-24 baseline, v1 entries are CURRENT and
-    // must not expire: their place data is the only evidence-backed copy.
-    // When the eval passes and the version returns to 2, flip this test
-    // back to expecting the v1 entry stale (see the version log in
-    // SiteEntity.ClassificationEntry).
-    "keep v1 entries serving while the version bump is reverted" in {
-      Current shouldBe 1
+    // v1 asked the model to recall ISO codes. A wrong-but-valid one parses
+    // exactly like a right one, so the entry looks healthy — non-empty
+    // places, current-looking data — and serves the page as somewhere it
+    // is not. Version is the ONLY thing that can tell those apart, which
+    // is why v2 expires v1 despite the field shape being identical.
+    // (v2 was briefly reverted 2026-08-26 until the classify-eval had
+    // actually validated the named-place prompt; it passed 2026-08-27 —
+    // places 5/5, categories 12/12 — and the bump returned. The gate is
+    // recorded in the version log in SiteEntity.ClassificationEntry.)
+    "flag a code-era entry even though it carries places" in {
+      Current shouldBe 2
       val s = state(
         "https://code-era" -> entry(ts = Long.MaxValue - 1, version = 1, places = Set("JP-18")),
         "https://named" -> entry(ts = 1L, version = Current, places = Set("GN1860243"))
       )
-      s.staleClassifications.map(_._1).toSet shouldBe Set.empty
+      s.staleClassifications.map(_._1).toSet shouldBe Set("https://code-era")
     }
 
     "treat a pre-versioning default as older" in {

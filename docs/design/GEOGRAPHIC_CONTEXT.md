@@ -1052,17 +1052,16 @@ script now refuses to write it) carries the everyday English names no upstream
 source has. `ResolvedPlace.unresolved` reports what could not be placed, which
 is the failure the code-shaped answer could never report.
 
-`CurrentClassifierVersion` went to **2** with this change — and was **reverted
-to 1 on 2026-08-26**, before any page re-classified. The bump was the right
-idea in the wrong order: it scheduled a whole-corpus rewrite under a prompt
-that had never once been sent to Gemini — the classify-eval was not run on it,
-and no production classification had exercised it. Migrate-then-measure risks
-the only evidence-backed place data we have: if the new prompt returns fewer
-places on a page, that page's data is gone and no version revert restores it.
-The bump returns ONLY after `scripts/classify-eval` shows the named-place
-prompt matching the 2026-08-24 baseline (5/5 place cells). The v2 rationale —
-a v1 entry may hold a confidently wrong code, invisible downstream and
-unrepaired by age — still stands; it is the *sequencing* that was wrong.
+`CurrentClassifierVersion` went to **2** with this change, was **reverted to 1
+on 2026-08-26** — the bump had shipped before the classify-eval ever ran on
+the named-place prompt, scheduling a whole-corpus rewrite on zero evidence —
+and was **re-raised to 2 on 2026-08-27 after the eval passed** on the prod
+model (`gemini-2.5-flash`): places 5/5 checked cells with no wrong or invented
+answers, categories 12/12 (one page better than the 2026-08-24 baseline), and
+Tainan resolving to the city where the old prompt stopped at the subdivision
+(`out/names-eval.json`). The lesson stands as the rule: the eval runs FIRST,
+and a version bump ships in its own deploy — migrate-then-measure risks the
+only evidence-backed place data there is.
 
 Not done here: `scripts/classify-eval/pages.tsv` is still 12 pages, all JP/TW,
 so it says nothing about subdivision naming where it is hardest (India,

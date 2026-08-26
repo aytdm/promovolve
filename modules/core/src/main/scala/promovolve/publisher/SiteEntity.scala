@@ -2262,18 +2262,17 @@ object SiteEntity {
      *       there, which the freshness window alone never repairs: a page
      *       with live winners keeps its entry until it goes dark.
      *
-     *   REVERTED to 1 on 2026-08-26, before any page re-classified. The
-     *       bump traded known-good v1 place data for output of a prompt
-     *       with NO production evidence — the classify-eval was never run
-     *       on it. Migrate-then-measure was the wrong order: if the new
-     *       prompt returns fewer places on a page, that page's place data
-     *       is gone and no version revert brings it back. Re-raise to 2
-     *       ONLY after scripts/classify-eval shows the named-place prompt
-     *       matching the 2026-08-24 baseline (which scored 5/5 place
-     *       cells). Nothing was lost by the round-trip: re-classification
-     *       fires on page views, and none occurred while this was 2.
+     *       (Briefly reverted to 1 on 2026-08-26: the bump had shipped
+     *       before the classify-eval ever ran on the named-place prompt —
+     *       migrate-then-measure, the wrong order. Re-raised 2026-08-27
+     *       after the eval PASSED on the prod model, gemini-2.5-flash:
+     *       places 5/5 checked cells, categories 12/12, one page better
+     *       than the 2026-08-24 baseline and Tainan resolving to the city
+     *       rather than the subdivision. out/names-eval.json is the
+     *       record. The gate for any future bump stands: the eval runs
+     *       FIRST, and the bump ships in its own deploy.)
      */
-    val CurrentClassifierVersion: Int = 1
+    val CurrentClassifierVersion: Int = 2
   }
 
   /**
