@@ -336,14 +336,6 @@ final class SlickPendingSelectionStore(db: Database)(using ec: ExecutionContext)
     db.run(query).map(_.toMap)
   }
 
-  def getApprovedCreativeAdvertisersByCampaign(publisherId: String, campaignId: String): Future[Map[String, String]] = {
-    val query = approvedCreatives
-      .filter(r => r.publisherId === publisherId && r.campaignId === campaignId)
-      .map(r => (r.creativeId, r.advertiserId))
-      .result
-    db.run(query).map(_.toMap)
-  }
-
   def insertApproved(publisherId: String, creativeId: String, campaignId: String, advertiserId: String, via: String)
       : Future[Unit] = {
     val row = ApprovedCreativeRow(
@@ -413,13 +405,6 @@ final class SlickPendingSelectionStore(db: Database)(using ec: ExecutionContext)
       .filter(r => r.publisherId === publisherId && r.creativeId === creativeId)
       .delete
     db.run(action).map(_ > 0)
-  }
-
-  def deleteApprovedByCampaignId(publisherId: String, campaignId: String): Future[Int] = {
-    val action = approvedCreatives
-      .filter(r => r.publisherId === publisherId && r.campaignId === campaignId)
-      .delete
-    db.run(action)
   }
 
   def deleteApprovedByAdvertiserId(publisherId: String, advertiserId: String): Future[Int] = {

@@ -98,12 +98,6 @@ trait PendingSelectionStore {
    */
   def getApprovedCreativeMeta(publisherId: String): Future[Vector[ApprovedCreativeMeta]]
 
-  /**
-   * Same, restricted to one campaign. Used when an explicit campaign
-   * pause/delete revokes the campaign's approvals on this site.
-   */
-  def getApprovedCreativeAdvertisersByCampaign(publisherId: String, campaignId: String): Future[Map[String, String]]
-
   /** Record a creative as approved for a publisher. `via` is "manual" or "auto". */
   def insertApproved(
       publisherId: String,
@@ -118,12 +112,6 @@ trait PendingSelectionStore {
    * Returns true if deleted, false if not found.
    */
   def deleteApproved(publisherId: String, creativeId: String): Future[Boolean]
-
-  /**
-   * Delete all approved creatives for a campaign.
-   * Returns number of rows deleted.
-   */
-  def deleteApprovedByCampaignId(publisherId: String, campaignId: String): Future[Int]
 
   /**
    * Delete all approved creatives for an advertiser.

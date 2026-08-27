@@ -1005,10 +1005,9 @@ object AdServer {
         val budgetEventAdapter = ctx.messageAdapter[BudgetEvent] {
           case su: SpendUpdate                          => SpendInfoUpdated(Some(su))
           case promovolve.CampaignPaused(campaignId, _) =>
-            // EXPLICIT advertiser pause/delete (published only by
-            // CampaignEntity.UpdateStatus) — the one sender allowed to
-            // revoke approvals. See Protocol.CampaignPaused.
-            Protocol.CampaignPaused(campaignId, revokeApprovals = true)
+            // Explicit advertiser pause/delete. Approvals SURVIVE it —
+            // see Protocol.CampaignPaused for the 2026-08-27 reversal.
+            Protocol.CampaignPaused(campaignId)
           case promovolve.CampaignAdProductChanged(campaignId, _) =>
             // Config edit, not a leave — approvals survive.
             Protocol.CampaignPaused(campaignId)
@@ -1857,7 +1856,7 @@ private[delivery] class AdServer(
           ))
         }
 
-      case Protocol.CampaignPaused(campaignId, revokeApprovals) =>
+      case Protocol.CampaignPaused(campaignId) =>
         log.info("Campaign {} paused - removing from all slots for site {}", campaignId.value, siteId.value)
         serveIndex ! ServeIndexDData.RemoveCampaignBySite(siteId.value, campaignId)
         // Also remove from pending queue
@@ -1866,43 +1865,10 @@ private[delivery] class AdServer(
             log.info("Removed {} pending selections for paused campaign {}", count, campaignId.value)
           }
         }
-        // EXPLICIT pause/delete (revokeApprovals=true — set ONLY for the
-        // promovolve.CampaignPaused topic event from CampaignEntity.UpdateStatus)
-        // REVOKES the campaign's approvals (user decision 2026-07-07): pausing
-        // is leaving the site — on resume every creative starts over from
-        // PENDING, re-entering the approval queue by winning an auction.
-        // Every OTHER sender of this message keeps approvals — in particular
-        // AuctioneerEntity fires it scope-blind on ANY CampaignChanged(
-        // isActive=false), including category re-registration churn during
-        // deploys, and revoking there re-creates the 2026-07-03 "approval
-        // queue is gone" cascade (0e1304c4). Announce the revoke to each
-        // AdvertiserEntity BEFORE deleting the rows (the fetch is the announce
-        // source), so Creative.approvedSites clears and the resumed bids read
-        // as pending, not floor-teaching.
-        if (revokeApprovals) {
-          store.getApprovedCreativeAdvertisersByCampaign(siteId.value, campaignId.value).onComplete {
-            case Success(rows) =>
-              rows.foreach { case (creativeId, advertiserId) =>
-                sharding.entityRefFor(AdvertiserEntity.TypeKey, advertiserId) !
-                AdvertiserEntity.RevokeCreativeApproval(CreativeId(creativeId), siteId, system.ignoreRef)
-              }
-              store.deleteApprovedByCampaignId(siteId.value, campaignId.value)
-              // Strip ONLY this campaign's creatives from in-memory approval
-              // state, resolved from the store rows. The slot-key index
-              // (idsForKey) conflates every campaign sharing a slot key, so
-              // stripping by index would revoke co-tenant campaigns' approvals.
-              ctx.self ! Protocol.CampaignApprovalsRevoked(campaignId, rows.keySet.map(CreativeId(_)))
-              if (rows.nonEmpty)
-                log.info("Revoked {} approvals for paused campaign {} on site {}", rows.size: java.lang.Integer,
-                  campaignId.value, siteId.value)
-            case Failure(ex) =>
-              // Nothing was revoked: no AdvertiserEntity announce, no DB delete,
-              // no in-memory strip — memory and DB stay consistent (both keep
-              // the approvals), but the pause did NOT revoke. Surface it.
-              log.error("Failed to load approvals for paused campaign {} on site {} — revocation skipped: {}",
-                campaignId.value, siteId.value, ex.getMessage)
-          }
-        }
+        // Approvals are NOT touched: a pause is the advertiser's schedule,
+        // not the publisher's judgment (Protocol.CampaignPaused). Nothing
+        // serves while paused — the index eviction above sees to that —
+        // and on resume the approved creatives return as approved.
         behavior(state.copy(
           participatingCampaigns = participatingCampaigns - campaignId,
           keysByCampaign = keysByCampaign - campaignId
@@ -1922,36 +1888,17 @@ private[delivery] class AdServer(
             log.info("Removed {} pending selections for narrowed-off campaign {}", count, campaignId.value)
           }
         }
-        // Strip ONLY this campaign's creatives from in-memory approval state,
-        // resolved from the store rows before deletion — not the slot-key
-        // index, which conflates co-tenant campaigns sharing a slot key.
-        store.getApprovedCreativeAdvertisersByCampaign(siteId.value, campaignId.value).onComplete {
-          case Success(rows) =>
-            store.deleteApprovedByCampaignId(siteId.value, campaignId.value)
-            ctx.self ! Protocol.CampaignApprovalsRevoked(campaignId, rows.keySet.map(CreativeId(_)))
-          case Failure(ex) =>
-            // Neither the DB delete nor the in-memory strip ran — consistent
-            // (both keep the approvals) but the eviction did NOT revoke them.
-            log.error("Failed to load approvals for evicted campaign {} on site {} — revocation skipped: {}",
-              campaignId.value, siteId.value, ex.getMessage)
-        }
+        // Approvals are NOT touched here either (2026-08-27, with the pause
+        // path): an allowlist or audience narrow is routinely transient — a
+        // targeting experiment, a mistaken audience setting — and destroying
+        // the publisher's approval decisions turned every such edit into a
+        // silent re-review cycle that only trusted advertisers survived
+        // invisibly. The eviction above stops all serving here; approvals
+        // lie dormant until the campaign targets this site again.
         behavior(state.copy(
           participatingCampaigns = participatingCampaigns - campaignId,
           keysByCampaign = keysByCampaign - campaignId
         ))
-
-      case Protocol.CampaignApprovalsRevoked(campaignId, creativeIds) =>
-        if (creativeIds.isEmpty) Behaviors.same
-        else {
-          log.info("Stripping {} approved creatives for revoked campaign {} on site {}",
-            creativeIds.size: java.lang.Integer, campaignId.value, siteId.value)
-          behavior(state.copy(
-            keysByCreative = keysByCreative -- creativeIds,
-            persistedApprovedIds = persistedApprovedIds -- creativeIds,
-            autoApprovedIds = state.autoApprovedIds -- creativeIds,
-            pinnedCreativeIds = pinnedCreativeIds -- creativeIds
-          ))
-        }
 
       case Protocol.EvictCampaignFromSlots(campaignId, slotKeys) =>
         // Topic-narrow eviction: the advertiser dropped a category, so this

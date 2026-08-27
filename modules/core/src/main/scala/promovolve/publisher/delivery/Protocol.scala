@@ -378,17 +378,25 @@ object Protocol {
   /**
    * Notifies AdServer that a campaign has been paused - remove its creatives from ServeIndex.
    *
-   * `revokeApprovals` MUST be true ONLY for an EXPLICIT advertiser
-   * pause/delete (the promovolve.CampaignPaused topic event from
-   * CampaignEntity.UpdateStatus): pausing is leaving the site, so approvals
-   * are revoked and resume starts from PENDING. It MUST stay false for
-   * every other sender — AuctioneerEntity fires this message scope-blind
-   * on ANY CampaignChanged(isActive=false), including category
-   * re-registration churn during deploys, and revoking approvals there
-   * re-creates the 2026-07-03 "approval queue is gone" cascade that
-   * 0e1304c4 fixed.
+   * Publisher approvals SURVIVE a pause — deliberately, and the capability
+   * to revoke them here no longer exists (the `revokeApprovals` flag was
+   * removed 2026-08-27, reversing the 2026-07-07 "pausing is leaving the
+   * site" decision). Approval is the PUBLISHER's judgment of a creative's
+   * content and suitability; the advertiser's schedule changes neither, so
+   * pausing must not destroy the publisher's decision. The old semantics
+   * also self-repaired asymmetrically — a trusted advertiser was silently
+   * re-admitted by auto-approve on resume while an untrusted one fell back
+   * to the queue — which made approvals look haunted to everyone
+   * (operator included, live 2026-08-26/27).
+   *
+   * Nothing serves while paused regardless: this message still evicts the
+   * campaign from the ServeIndex and drops its pending queue rows, and a
+   * paused campaign places no bids. The approvals merely lie dormant, so
+   * resume is continuity, not a re-application. Real revocations remain
+   * where a publisher actually decides one: reject/revoke of a creative,
+   * and the advertiser-domain block.
    */
-  final case class CampaignPaused(campaignId: CampaignId, revokeApprovals: Boolean = false) extends Command
+  final case class CampaignPaused(campaignId: CampaignId) extends Command
 
   /**
    * Campaign hit its daily budget (CampaignBudgetExhausted on the budget
@@ -1100,20 +1108,6 @@ object Protocol {
    * wait for organic traffic to benefit from newly-granted trust.
    */
   private[delivery] final case class TrustSweepReauction(urls: Vector[String]) extends Command
-
-  /**
-   * Internal: the approved creatives to strip from in-memory approval state
-   * for a campaign whose approvals were revoked (pause / site-narrow
-   * eviction). Carries the campaign's OWN creatives, resolved from the
-   * approvals store — the in-memory slot-key index conflates every campaign
-   * sharing a slot key, so stripping by index would revoke co-tenant
-   * campaigns' approvals too (their DB rows survive → memory/DB divergence,
-   * spurious re-queue as pending, voided reader pins).
-   */
-  private[delivery] final case class CampaignApprovalsRevoked(
-      campaignId: CampaignId,
-      creativeIds: Set[CreativeId]
-  ) extends Command
 
   /** Internal: traffic shape snapshot save completed */
   private[delivery] final case class TrafficShapeSnapshotSaveResult(

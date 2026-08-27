@@ -134,10 +134,7 @@ class AdServerSuspensionSpec extends AnyWordSpec with Matchers with BeforeAndAft
     def getApprovedCreativeIds(p: String): Future[Set[String]] = Future.successful(Set.empty)
     def getApprovedCreativeAdvertisers(p: String): Future[Map[String, String]] = Future.successful(Map.empty)
     def getApprovedCreativeMeta(p: String): Future[Vector[ApprovedCreativeMeta]] = Future.successful(Vector.empty)
-    def getApprovedCreativeAdvertisersByCampaign(p: String, c: String): Future[Map[String, String]] =
-      Future.successful(Map.empty)
     def deleteApproved(p: String, c: String): Future[Boolean] = Future.successful(true)
-    def deleteApprovedByCampaignId(p: String, c: String): Future[Int] = Future.successful(0)
     def deleteApprovedByAdvertiserId(p: String, a: String): Future[Int] = Future.successful(0)
     def insertTrustAnchors(p: String, anchors: Seq[(String, String)], src: String): Future[Unit] =
       Future.successful(())
