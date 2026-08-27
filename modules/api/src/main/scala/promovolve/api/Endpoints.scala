@@ -1373,6 +1373,7 @@ object Endpoints extends ApiJsonFormats {
     // Approval Queue
     listPendingCreatives,
     listServingCreatives,
+    getCreativeLedger,
     approveCreative,
     rejectCreative,
     flagCreative,
