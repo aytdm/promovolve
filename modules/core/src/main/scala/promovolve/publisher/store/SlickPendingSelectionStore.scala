@@ -352,7 +352,7 @@ final class SlickPendingSelectionStore(db: Database)(using ec: ExecutionContext)
   def getApprovedCreativeMeta(publisherId: String): Future[Vector[ApprovedCreativeMeta]] = {
     val query = approvedCreatives
       .filter(_.publisherId === publisherId)
-      .map(r => (r.creativeId, r.advertiserId, r.approvedVia))
+      .map(r => (r.creativeId, r.advertiserId, r.approvedVia, r.approvedAt))
       .result
     db.run(query).map(_.map(ApprovedCreativeMeta.apply.tupled).toVector)
   }

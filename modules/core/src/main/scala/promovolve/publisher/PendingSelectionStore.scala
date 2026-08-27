@@ -217,7 +217,11 @@ trait PendingSelectionStore {
 case class FirstSeen(firstSeen: Instant, lastQueued: Instant, requeueCount: Int)
 
 /** Boot-backfill row: who to re-announce to, and how the approval happened. */
-case class ApprovedCreativeMeta(creativeId: String, advertiserId: String, approvedVia: String)
+case class ApprovedCreativeMeta(
+    creativeId: String,
+    advertiserId: String,
+    approvedVia: String,
+    approvedAt: Instant = Instant.EPOCH)
 
 /**
  * One unit of auto-approve trust on a site. anchorType is "campaign" or

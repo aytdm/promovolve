@@ -326,6 +326,7 @@ func main() {
 	mux.HandleFunc("POST /publisher/approval/auto-approve", pub(h.PublisherAutoApprove))
 	mux.HandleFunc("POST /publisher/approval/trust-anchor/remove", pub(h.PublisherTrustAnchorRemove))
 	mux.HandleFunc("GET /publisher/trusted", pub(h.PublisherTrusted))
+	mux.HandleFunc("GET /publisher/ledger", pub(h.PublisherLedger))
 	mux.HandleFunc("GET /publisher/sites", pub(h.PublisherSites))
 	mux.HandleFunc("POST /publisher/block-advertiser-domain", pub(h.BlockAdvertiserDomain))
 	mux.HandleFunc("POST /publisher/unblock-advertiser-domain", pub(h.UnblockAdvertiserDomain))

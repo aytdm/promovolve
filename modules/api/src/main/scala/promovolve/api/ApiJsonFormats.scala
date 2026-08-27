@@ -22,6 +22,9 @@ trait ApiJsonFormats extends DefaultJsonProtocol {
   given RootJsonFormat[CampaignSchedule] = jsonFormat2(CampaignSchedule.apply)
   given RootJsonFormat[CampaignBidding] = jsonFormat2(CampaignBidding.apply)
   given RootJsonFormat[FrequencyCapDto] = jsonFormat2(FrequencyCapDto.apply)
+  given RootJsonFormat[LedgerCreative] = jsonFormat10(LedgerCreative.apply)
+  given RootJsonFormat[LedgerAdvertiser] = jsonFormat3(LedgerAdvertiser.apply)
+  given RootJsonFormat[CreativeLedger] = jsonFormat1(CreativeLedger.apply)
   // Hand-written because Campaign has 23 fields and spray-json's derivation
   // stops at jsonFormat22. Reads tolerate absent optional fields so an older
   // client's payload still parses.

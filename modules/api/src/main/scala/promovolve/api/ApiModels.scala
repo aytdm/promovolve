@@ -1561,6 +1561,41 @@ object ApiModels {
    * A currently-serving creative grouped with the (url, slot) places
    * it has actually been delivered to over the lookback window.
    */
+  /**
+   * One creative in the publisher's per-advertiser ledger — the durable
+   * record of everything ever offered to this site, with its TRUE state.
+   * Exists because the approval QUEUE is a live shadow of auction state
+   * (rows appear at auction time, vanish on edits/TTL), which made it
+   * impossible for a publisher to answer "is this advertiser approved
+   * here?" at all (live, 2026-08-26/27).
+   *
+   * `approvalState`: "approved" | "pending" | "flagged" | "none".
+   * `creativeStatus` is the ADVERTISER's own lifecycle for the creative
+   * ("Active", "Paused", …) — orthogonal to the publisher's approval, and
+   * rendered as a second badge: an approved-but-paused creative is dormant
+   * by the advertiser's hand, not the publisher's.
+   */
+  case class LedgerCreative(
+      creativeId: String,
+      campaignId: String,
+      name: String = "",
+      approvalState: String,
+      approvedVia: Option[String] = None, // "manual" | "auto", when approved
+      approvedAt: Option[String] = None, // ISO instant, when approved
+      pendingPlacements: Int = 0, // queue rows now, when pending
+      queuedSince: Option[String] = None, // ISO instant, when pending
+      flagReason: Option[String] = None, // when flagged
+      creativeStatus: String = ""
+  )
+
+  case class LedgerAdvertiser(
+      advertiserId: String,
+      email: String = "", // best-effort display identity
+      creatives: Vector[LedgerCreative] = Vector.empty
+  )
+
+  case class CreativeLedger(data: Vector[LedgerAdvertiser])
+
   case class ServingCreativeGroup(
       creativeId: String,
       campaignId: Option[String],

@@ -1,0 +1,73 @@
+{{define "content"}}
+<div class="max-w-4xl">
+  <a href="/publisher/approval" class="inline-flex items-center gap-1 text-sm text-brand hover:underline mb-3">&larr; {{t "Approval Queue"}}</a>
+  <h1 class="page-title">{{t "Creative Ledger"}}</h1>
+  <p class="page-sub">
+    {{t "Every creative ever offered to your sites, grouped by advertiser, with its current state. Unlike the approval queue — which only shows items awaiting a decision and changes as auctions run — this list is stable: your decisions stay visible here."}}
+  </p>
+
+  {{range .LedgerSites}}
+  <div class="card mt-6 p-6">
+    <h2 class="font-semibold text-lg">{{.Domain}}</h2>
+    {{range .Advertisers}}
+    <div class="mt-4">
+      <div class="flex items-center gap-2">
+        <span class="font-medium text-sm">{{if .Email}}{{.Email}}{{else}}{{.AdvertiserID}}{{end}}</span>
+        <span class="text-xs text-gray-400">{{t "%d creatives" (len .Creatives)}}</span>
+      </div>
+      <div class="mt-2 overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="text-left text-xs text-gray-400">
+              <th class="py-1 pr-4 font-medium">{{t "Creative"}}</th>
+              <th class="py-1 pr-4 font-medium">{{t "Approval"}}</th>
+              <th class="py-1 pr-4 font-medium">{{t "Advertiser status"}}</th>
+              <th class="py-1 font-medium">{{t "Detail"}}</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Creatives}}
+            <tr class="border-t border-gray-100">
+              <td class="py-2 pr-4">
+                <span class="font-mono text-xs">{{.CreativeID}}</span>
+                {{if .Name}}<div class="text-xs text-gray-500">{{.Name}}</div>{{end}}
+              </td>
+              <td class="py-2 pr-4">
+                {{if eq .ApprovalState "approved"}}
+                  <span class="badge badge-success">{{t "Approved"}}</span>
+                  {{if eq .ApprovedVia "auto"}}<span class="badge badge-info ml-1">{{t "auto"}}</span>{{end}}
+                {{else if eq .ApprovalState "pending"}}
+                  <span class="badge badge-warning">{{t "Pending review"}}</span>
+                {{else if eq .ApprovalState "flagged"}}
+                  <span class="badge badge-danger">{{t "Flagged"}}</span>
+                {{else}}
+                  <span class="badge badge-neutral">{{t "No decision"}}</span>
+                {{end}}
+              </td>
+              <td class="py-2 pr-4">
+                {{if eq .CreativeStatus "Paused"}}
+                  <span class="badge badge-neutral" title="{{t "The advertiser paused this creative. Your approval, if any, is kept and resumes with it."}}">{{t "Paused by advertiser"}}</span>
+                {{else if .CreativeStatus}}
+                  <span class="text-xs text-gray-500">{{.CreativeStatus}}</span>
+                {{end}}
+              </td>
+              <td class="py-2 text-xs text-gray-500">
+                {{if .FlagReason}}{{.FlagReason}}
+                {{else if gt .PendingPlacements 0}}{{t "%d placements waiting" .PendingPlacements}}
+                {{end}}
+              </td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {{else}}
+    <p class="text-sm text-gray-400 mt-2">{{t "No advertisers have offered creatives to this site yet."}}</p>
+    {{end}}
+  </div>
+  {{else}}
+  <p class="text-sm text-gray-400 mt-6">{{t "No sites yet."}}</p>
+  {{end}}
+</div>
+{{end}}

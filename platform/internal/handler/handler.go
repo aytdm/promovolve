@@ -453,6 +453,9 @@ type pageData struct {
 	Nav   string
 	User  *model.User
 	Error string
+	// Publisher creative ledger (publisher/ledger.html) — `any` because the
+	// row types are local to PublisherLedger; the template ranges over them.
+	LedgerSites any
 	// Billing (docs/design/BILLING.md Phase 4)
 	AdminBilling  *adminBillingData
 	AdminTopups   *adminTopupsData
@@ -1813,6 +1816,73 @@ func (h *Handler) loadAutoApprove(siteID string, claims *model.Claims) (bool, []
 // auto-approve toggles plus one table of every trust anchor across the
 // publisher's sites — the scalable home for a list the inbox panel's
 // chips would drown in.
+// PublisherLedger renders the durable per-advertiser record of every
+// creative ever offered to the publisher's sites, with its true state.
+// It exists because the approval QUEUE is a live shadow of auction state —
+// rows appear at auction time and vanish on advertiser edits and TTLs —
+// which left publishers unable to answer "is this advertiser approved
+// here?" at all (live confusion, 2026-08-26/27).
+func (h *Handler) PublisherLedger(w http.ResponseWriter, r *http.Request) {
+	user, claims := h.sessionUser(r)
+	if user == nil {
+		http.Redirect(w, r, "/login", http.StatusSeeOther)
+		return
+	}
+
+	sitesBody, _ := h.coreGet("/v1/publishers/me/sites?limit=50", claims)
+	var sitesResp struct {
+		Data []struct {
+			ID     string `json:"id"`
+			Domain string `json:"domain"`
+		} `json:"data"`
+	}
+	json.Unmarshal(sitesBody, &sitesResp)
+
+	type ledgerCreative struct {
+		CreativeID        string `json:"creativeId"`
+		CampaignID        string `json:"campaignId"`
+		Name              string `json:"name"`
+		ApprovalState     string `json:"approvalState"`
+		ApprovedVia       string `json:"approvedVia"`
+		ApprovedAt        string `json:"approvedAt"`
+		PendingPlacements int    `json:"pendingPlacements"`
+		QueuedSince       string `json:"queuedSince"`
+		FlagReason        string `json:"flagReason"`
+		CreativeStatus    string `json:"creativeStatus"`
+	}
+	type ledgerAdvertiser struct {
+		AdvertiserID string           `json:"advertiserId"`
+		Email        string           `json:"email"`
+		Creatives    []ledgerCreative `json:"creatives"`
+	}
+	type ledgerSite struct {
+		SiteID      string
+		Domain      string
+		Advertisers []ledgerAdvertiser
+	}
+
+	var ledgerSites []ledgerSite
+	for _, s := range sitesResp.Data {
+		body, _ := h.coreGet(fmt.Sprintf("/v1/publishers/me/sites/%s/approval/ledger", s.ID), claims)
+		var resp struct {
+			Data []ledgerAdvertiser `json:"data"`
+		}
+		json.Unmarshal(body, &resp)
+		label := s.Domain
+		if label == "" {
+			label = s.ID
+		}
+		ledgerSites = append(ledgerSites, ledgerSite{SiteID: s.ID, Domain: label, Advertisers: resp.Data})
+	}
+
+	h.render(w, r, "publisher/ledger.html", pageData{
+		Title:       "Creative Ledger",
+		Nav:         "approval",
+		User:        user,
+		LedgerSites: ledgerSites,
+	})
+}
+
 func (h *Handler) PublisherTrusted(w http.ResponseWriter, r *http.Request) {
 	user, claims := h.sessionUser(r)
 	if user == nil {

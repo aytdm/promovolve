@@ -934,6 +934,20 @@ object Endpoints extends ApiJsonFormats {
       .out(jsonBody[PendingCreativeGroupList])
       .errorOut(jsonBody[ErrorResponse])
 
+  val getCreativeLedger: PublicEndpoint[(String, String), ErrorResponse, CreativeLedger, Any] =
+    endpoint
+      .tag("Approval Queue")
+      .summary("Creative ledger")
+      .description(
+        "The durable per-advertiser record of every creative ever offered to this site, " +
+        "with its true approval state (approved/pending/flagged/none) and the advertiser's " +
+        "own creative status. Unlike the pending queue — a live shadow of auction state — " +
+        "this answers \"is this advertiser approved here?\" stably.")
+      .get
+      .in(approvalBase / "ledger")
+      .out(jsonBody[CreativeLedger])
+      .errorOut(jsonBody[ErrorResponse])
+
   val listServingCreatives: PublicEndpoint[(String, String, Int), ErrorResponse, ServingCreativeGroupList, Any] =
     endpoint
       .tag("Approval Queue")

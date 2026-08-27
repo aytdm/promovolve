@@ -3163,6 +3163,96 @@ class EndpointRoutes(
         Left(ErrorResponse("list_pending_failed", ex.getMessage))
       }
   }
+
+  /**
+   * The publisher's per-advertiser creative ledger — pure store reads, no
+   * entity asks. The queue answers "what needs my decision right now";
+   * this answers "what have I decided, and what state is everything in",
+   * and it must stay stable while auctions, TTLs, and advertiser edits
+   * churn the queue around it. Approval-state precedence per creative:
+   * approved > flagged > pending > none — a creative can hold queue rows
+   * AND an approval during churn, and the durable decision wins.
+   */
+  private val getCreativeLedgerLogic: ((String, String)) => Future[Either[ErrorResponse, CreativeLedger]] = {
+    case (publisherId, siteId) =>
+      pendingSelectionStore match {
+        case None        => Future.successful(Right(CreativeLedger(Vector.empty)))
+        case Some(store) =>
+          (for {
+            approved <- store.getApprovedCreativeMeta(siteId)
+            pending <- store.pendingQueue(siteId)
+            flagged <- store.getFlagged(siteId)
+            firstSeen <- store.getFirstSeen(siteId)
+            // (creativeId, campaignId, advertiserId) from every source; the
+            // creative record fills in name/status where it still exists.
+            pendingByCreative = pending.groupBy(_._3.creativeId.value)
+            ids = approved.map(_.creativeId).toSet ++
+              pendingByCreative.keySet ++ flagged.map(_.creativeId).toSet
+            creatives <- Future.traverse(ids.toVector) { id =>
+              creativeRepo.map(_.get(id)).getOrElse(Future.successful(None)).map(id -> _)
+            }
+            creativeById = creatives.toMap
+            approvedById = approved.map(m => m.creativeId -> m).toMap
+            flaggedById = flagged.map(f => f.creativeId -> f).toMap
+            rows = ids.toVector.map { id =>
+              val cr = creativeById.get(id).flatten
+              val pendRows = pendingByCreative.getOrElse(id, Vector.empty)
+              val fromPend = pendRows.headOption.map(_._3)
+              val fromFlag = flaggedById.get(id)
+              val advertiserId = cr.map(_.advertiserId)
+                .orElse(approvedById.get(id).map(_.advertiserId))
+                .orElse(fromPend.map(_.advertiserId.value))
+                .orElse(fromFlag.map(_.advertiserId))
+                .getOrElse("")
+              val campaignId = cr.map(_.campaignId)
+                .orElse(fromPend.map(_.campaignId.value))
+                .orElse(fromFlag.map(_.campaignId))
+                .getOrElse("")
+              val state =
+                if (approvedById.contains(id)) "approved"
+                else if (flaggedById.contains(id)) "flagged"
+                else if (pendRows.nonEmpty) "pending"
+                else "none"
+              advertiserId -> LedgerCreative(
+                creativeId = id,
+                campaignId = campaignId,
+                name = cr.map(_.name).getOrElse(""),
+                approvalState = state,
+                approvedVia = approvedById.get(id).map(_.approvedVia),
+                approvedAt = approvedById.get(id)
+                  .map(_.approvedAt).filter(_ != java.time.Instant.EPOCH).map(_.toString),
+                pendingPlacements = pendRows.size,
+                queuedSince = firstSeen.get(id).map(_.firstSeen.toString),
+                flagReason = flaggedById.get(id).map(_.reason),
+                creativeStatus = cr.map(_.status.toString).getOrElse("")
+              )
+            }
+            emails <- Future.traverse(rows.map(_._1).distinct.filter(_.nonEmpty)) { adv =>
+              advertiserEmailRepo
+                .map(_.getEmails(adv).map(es => adv -> es.headOption.getOrElse("")))
+                .getOrElse(Future.successful(adv -> ""))
+                .recover { case _ => adv -> "" }
+            }
+          } yield {
+            val emailByAdv = emails.toMap
+            val groups = rows
+              .groupBy(_._1)
+              .toVector
+              .map { case (adv, rs) =>
+                LedgerAdvertiser(
+                  advertiserId = adv,
+                  email = emailByAdv.getOrElse(adv, ""),
+                  creatives = rs.map(_._2).sortBy(_.creativeId)
+                )
+              }
+              .sortBy(g => (g.email, g.advertiserId))
+            Right(CreativeLedger(groups)): Either[ErrorResponse, CreativeLedger]
+          }).recover { case ex =>
+            Left(ErrorResponse("ledger_failed", ex.getMessage))
+          }
+      }
+  }
+
   private val listServingCreativesLogic
       : ((String, String, Int)) => Future[Either[ErrorResponse, ServingCreativeGroupList]] = {
     case (publisherId, siteId, hours) =>
@@ -6266,6 +6356,8 @@ class EndpointRoutes(
       Endpoints.listPendingCreatives.serverLogic(gateSite4(listPendingCreativesLogic))),
     PekkoHttpServerInterpreter().toRoute(
       Endpoints.listServingCreatives.serverLogic(gateSite3(listServingCreativesLogic))),
+    PekkoHttpServerInterpreter().toRoute(
+      Endpoints.getCreativeLedger.serverLogic(gateSite2(getCreativeLedgerLogic))),
     PekkoHttpServerInterpreter().toRoute(Endpoints.approveCreative.serverLogic(gateSite3(approveCreativeLogic))),
     PekkoHttpServerInterpreter().toRoute(Endpoints.rejectCreative.serverLogic(gateSite3(rejectCreativeLogic))),
     PekkoHttpServerInterpreter().toRoute(Endpoints.flagCreative.serverLogic(gateSite3(flagCreativeLogic))),
