@@ -50,8 +50,7 @@
 	// post, so without a scope it could only ever be a single shared slot.
 	var SCOPES = [
 		{ value: 'site', label: __( 'Shared — one slot everywhere', 'promovolve' ), token: '' },
-		{ value: 'category', label: __( 'Per category — split by the post’s category', 'promovolve' ), token: '-<category>' },
-		{ value: 'post', label: __( 'Per post — split by post ID', 'promovolve' ), token: '-post-<id>' }
+		{ value: 'category', label: __( 'Per category — split by the post’s category', 'promovolve' ), token: '-<category>' }
 	];
 
 	function scopeToken( scope ) {

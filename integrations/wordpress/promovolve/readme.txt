@@ -4,7 +4,7 @@ Tags: ads, advertising, publisher
 Requires at least: 6.0
 Tested up to: 7.0
 Requires PHP: 7.4
-Stable tag: 0.5.5
+Stable tag: 0.6.0
 License: Apache-2.0
 License URI: https://www.apache.org/licenses/LICENSE-2.0
 
@@ -92,6 +92,16 @@ there is nothing for a Global Privacy Control signal to opt out of — ads
 serve the same with or without it.
 
 == Changelog ==
+
+= 0.6.0 =
+* Removed the "Per post" slot scope (settings and block). One slot per post
+  minted a permanent dashboard row and a permanently cold ad pool for every
+  post, and shrank a reader's dog-ear bookmark to a single URL — the ad
+  server learns per slot, so slots must be shared to learn. Per-category
+  remains the finest scope. Existing "Per post" settings and saved blocks
+  degrade to the shared scope automatically; per-post inventory rows on the
+  dashboard go dormant. Page-level ad relevance is handled by the ad server
+  at serve time and is unaffected.
 
 = 0.5.5 =
 * Readme only: corrected the dog-ear retention statement. 0.5.4 said

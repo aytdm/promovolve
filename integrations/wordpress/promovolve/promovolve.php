@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Promovolve Publisher
  * Description:       Connects this site to a Promovolve ad server: prints the ad tag, serves the site-verification file, and places ad slots via editor block or shortcode.
- * Version:           0.5.5
+ * Version:           0.6.0
  * Requires at least: 6.0
  * Requires PHP:      7.4
  * Author:            Promovolve
@@ -709,9 +709,17 @@ add_shortcode( 'promovolve_slot', function ( $atts ) {
  * - 'site':     one shared slot everywhere (least granular; ad pools and the
  *               dashboard category label blend all posts).
  * - 'category': one slot per WordPress category (bounded, topically coherent
- *               pools; recommended for blogs).
- * - 'post':     one slot per post (exact page attribution; a row and a cold
- *               ad pool per post — avoid on large sites).
+ *               pools; recommended for blogs). The finest scope offered.
+ *
+ * A 'post' scope (one slot per post) existed through 0.5.x and was REMOVED
+ * in 0.6.0 as a deliberate stance, not an oversight: the ad server learns
+ * per slot — floor priors, quality scores, market rates, dog-ear pin reach
+ * all accumulate on the slot ID — so per-post slots mint a permanent
+ * dashboard row and a permanently cold ad pool per post, and gut a
+ * reader's pin to a single URL. Page-level precision (which ad fits THIS
+ * page) is the server's job at serve time, not the slot model's. A stored
+ * 'post' setting or a saved block attribute degrades to the shared scope
+ * below; the old per-post inventory rows simply go dormant.
  *
  * Shared by the automatic slot and the editor block. The block needs it for the
  * same reason the automatic slot does: placed in a Site Editor template it is
@@ -719,7 +727,7 @@ add_shortcode( 'promovolve_slot', function ( $atts ) {
  * be a single shared slot.
  */
 function promovolve_slot_scope_suffix( $scope ) {
-	if ( 'category' !== $scope && 'post' !== $scope ) {
+	if ( 'category' !== $scope ) {
 		return '';
 	}
 	// Only a singular view has an unambiguous "current post": inside an archive
@@ -728,9 +736,6 @@ function promovolve_slot_scope_suffix( $scope ) {
 	// inventory rows. Fall back to the shared ID.
 	if ( ! is_singular() ) {
 		return '';
-	}
-	if ( 'post' === $scope ) {
-		return '-post-' . get_the_ID();
 	}
 	$cats = get_the_category();
 	if ( empty( $cats ) ) {
@@ -821,7 +826,8 @@ function promovolve_render_slot_block( $attributes ) {
 		return '';
 	}
 	$scope = (string) ( $attributes['scope'] ?? 'site' );
-	if ( ! in_array( $scope, array( 'site', 'category', 'post' ), true ) ) {
+	// 'post' (removed 0.6.0) and anything unknown degrade to the shared scope.
+	if ( ! in_array( $scope, array( 'site', 'category' ), true ) ) {
 		$scope = 'site';
 	}
 
@@ -1116,7 +1122,7 @@ function promovolve_sanitize_settings( $input ) {
 	if ( isset( $input['auto_slot_id'] ) ) {
 		$clean['auto_slot_id'] = sanitize_text_field( (string) $input['auto_slot_id'] );
 	}
-	if ( isset( $input['auto_slot_scope'] ) && in_array( $input['auto_slot_scope'], array( 'site', 'category', 'post' ), true ) ) {
+	if ( isset( $input['auto_slot_scope'] ) && in_array( $input['auto_slot_scope'], array( 'site', 'category' ), true ) ) {
 		$clean['auto_slot_scope'] = $input['auto_slot_scope'];
 	}
 	if ( isset( $input['auto_slot_w'] ) ) {
@@ -1495,7 +1501,6 @@ function promovolve_render_settings_page() {
 						<select name="<?php echo esc_attr( PROMOVOLVE_OPTION ); ?>[auto_slot_scope]" id="promovolve-slot-scope">
 							<option value="site" <?php selected( $s['auto_slot_scope'], 'site' ); ?>><?php esc_html_e( 'Shared — one slot ID on every post', 'promovolve' ); ?></option>
 							<option value="category" <?php selected( $s['auto_slot_scope'], 'category' ); ?>><?php esc_html_e( 'Per category — slot ID + the post’s category slug', 'promovolve' ); ?></option>
-							<option value="post" <?php selected( $s['auto_slot_scope'], 'post' ); ?>><?php esc_html_e( 'Per post — slot ID + the post ID', 'promovolve' ); ?></option>
 						</select>
 						<p class="description"><?php esc_html_e( 'Each distinct slot ID becomes its own row (with its own floor learning and ad pool) on the Promovolve dashboard. Per category keeps that list small and topical — recommended for blogs. Per post gives exact page attribution but creates one row and one cold ad pool per post; avoid on large sites. Changing this later leaves the old slot rows behind on the dashboard.', 'promovolve' ); ?></p>
 					</td>

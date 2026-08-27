@@ -48,6 +48,13 @@ function apply_filters( $hook, $value ) {
 }
 
 function is_singular( $t = '' ) { return $GLOBALS['pv']['is_singular']; }
+function get_the_ID() { return 42; }
+function get_the_category() {
+	$c = new stdClass();
+	$c->slug    = 'travel';
+	$c->term_id = 7;
+	return array( $c );
+}
 function is_category( $t = '' ) { return $GLOBALS['pv']['is_category']; }
 function is_tag( $t = '' )      { return $GLOBALS['pv']['is_tag']; }
 function is_tax( $t = '', $x = '' ) { return $GLOBALS['pv']['is_tax']; }
@@ -272,6 +279,16 @@ sort( $flat );
 t( 'place-taxonomy-groups-cover-the-list', $flat, $grouped );
 t( 'no slug is listed in two groups', count( $grouped ), count( array_unique( $grouped ) ) );
 t( 'the recommended slug is one we actually read', true, in_array( PROMOVOLVE_PLACE_TAXONOMY_RECOMMENDED, PROMOVOLVE_PLACE_TAXONOMIES, true ) );
+
+// ── slot scope: 'post' is REMOVED (0.6.0), and removal must mean DEGRADE,
+// not break. A site that stored the old 'post' setting — or a saved block
+// carrying scope:"post" in its attributes — renders the SHARED slot, so ads
+// keep serving on the pre-existing installs the option was removed from.
+// Per-category, the finest scope offered, must keep working unchanged.
+$GLOBALS['pv']['is_singular'] = true;
+t( "removed 'post' scope degrades to the shared slot", '', promovolve_slot_scope_suffix( 'post' ) );
+t( "'category' scope still suffixes by category slug", '-travel', promovolve_slot_scope_suffix( 'category' ) );
+t( "'site' scope stays unsuffixed", '', promovolve_slot_scope_suffix( 'site' ) );
 
 echo $failures ? "\n$failures failure(s)\n" : "\nall passed\n";
 exit( $failures ? 1 : 0 );
