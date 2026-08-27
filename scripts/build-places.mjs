@@ -89,10 +89,77 @@ for (const s of iso2) {
 subdivisions.sort(byCode);
 const subEnName = new Map(subdivisions.map((r) => [r[0], r[2]]));
 
-// name -> ISO code, per country, for the GeoNames link
-const subByCountryName = new Map();
+// -- name matching for the GeoNames link --------------------------------
+// The sources disagree in SHAPE, not just spelling: GeoNames says "Tainan
+// City" where ISO says "Tainan"; ISO says "Asturias, Principado de" where
+// GeoNames says "Asturias"; brackets carry alternates ("Catalunya
+// [Cataluna]"). Exact-equality matching left 39% of cities with no
+// subdivision link — and an unlinked city silently kills subdivision-level
+// place targeting for every page classified as that city (found live
+// 2026-08-27: targeting TW-TNN could never match the Tainan page).
+//
+// Every variant match is UNIQUE-GATED: a key that could mean two different
+// subdivisions of one country maps to nothing. A wrong link is worse than
+// a blank — a blank degrades targeting to the country, a wrong link sends
+// it to the wrong subdivision.
+const ADMIN_WORDS = new Set([
+  "city", "province", "prefecture", "state", "region", "district", "county",
+  "municipality", "governorate", "oblast", "krai", "voivodeship", "department",
+  "canton", "territory", "division", "zone", "emirate", "parish", "special",
+  "metropolitan", "autonomous", "capital", "federal", "do", "si", "shi", "ken",
+  "fu", "sheng",
+]);
+/** All the ways one subdivision/admin1 name may be written, normalized. */
+function nameKeys(raw) {
+  const out = new Set();
+  const bare = (raw || "").replace(/\[[^\]]*\]/g, " ").trim();
+  const inBrackets = [...(raw || "").matchAll(/\[([^\]]*)\]/g)].map((m) => m[1]);
+  const bases = [bare, ...inBrackets];
+  const cut = bare.indexOf(",");
+  if (cut > 0) bases.push(bare.slice(0, cut), `${bare.slice(cut + 1)} ${bare.slice(0, cut)}`);
+  for (const b of bases) {
+    const k = norm(b);
+    if (k) out.add(k);
+    // Strip leading/trailing administrative words (possibly several:
+    // "Special Municipality"), word by word.
+    let words = b.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+    while (words.length > 1 && ADMIN_WORDS.has(words[words.length - 1])) words = words.slice(0, -1);
+    while (words.length > 1 && ADMIN_WORDS.has(words[0])) words = words.slice(1);
+    const stripped = words.join("");
+    if (stripped) out.add(stripped);
+  }
+  return out;
+}
+// TIER 1 — the original exact map, PRESERVED VERBATIM (same insertion
+// semantics as before the variant matching existed). Anything this map
+// linked before must keep linking identically: the first cut of the
+// variant matcher let derived keys collide with exact ones ("Madrid" vs
+// "Madrid, Comunidad de"), which UNLINKED 375 previously-linked cities
+// and, in one case, let the city-name fallback assign Madrid's Salamanca
+// district to Salamanca province. Exact wins; variants only ever ADD.
+const subExact = new Map();
 for (const [code, country, name] of subdivisions) {
-  subByCountryName.set(`${country} ${norm(name)}`, code);
+  subExact.set(`${country} ${norm(name)}`, code);
+}
+// TIER 2 — variant keys, unique-gated, consulted only when tier 1 missed.
+const subKeyToIso = new Map();
+for (const [code, country, name] of subdivisions) {
+  for (const k of nameKeys(name)) {
+    const mapKey = `${country} ${k}`;
+    if (subKeyToIso.has(mapKey) && subKeyToIso.get(mapKey) !== code) subKeyToIso.set(mapKey, null);
+    else subKeyToIso.set(mapKey, code);
+  }
+}
+/** ISO subdivision for a name in a country: exact first, else unique variant. */
+function isoSubFor(country, raw) {
+  const exact = subExact.get(`${country} ${norm(raw)}`);
+  if (exact) return exact;
+  const hits = new Set();
+  for (const k of nameKeys(raw)) {
+    const c = subKeyToIso.get(`${country} ${k}`);
+    if (c) hits.add(c);
+  }
+  return hits.size === 1 ? [...hits][0] : undefined;
 }
 
 // -- cities (GeoNames) ------------------------------------------------
@@ -110,7 +177,7 @@ for (const [gnKey, name] of gnAdmin1Name) {
   const country = gnKey.split(".")[0];
   if (!validCountries.has(country)) continue;
   gnAdmin1Total++;
-  const iso = subByCountryName.get(`${country} ${norm(name)}`);
+  const iso = isoSubFor(country, name);
   if (iso) { gnToIso.set(gnKey, iso); gnAdmin1Mapped++; }
 }
 
@@ -139,7 +206,19 @@ for (const line of lines("cities5000.txt")) {
   if (c.length < 15 || !c[0] || !c[8]) continue;
   if (!validCountries.has(c[8])) continue;
   const code = `GN${c[0]}`;
-  const admin1 = c[10] ? (gnToIso.get(`${c[8]}.${c[10]}`) || "") : "";
+  let admin1 = c[10] ? (gnToIso.get(`${c[8]}.${c[10]}`) || "") : "";
+  // Last resort for a city whose admin1 could not be mapped AT ALL (e.g.
+  // GeoNames' Taiwan has only 4 admin1s — "Taiwan" covers Tainan, so no
+  // admin1 mapping can ever exist): a large city whose OWN name uniquely
+  // names a subdivision of its country IS that subdivision (Taiwan's
+  // special municipalities, metropolitan cities). Guard rails, in order:
+  // a mapped admin1 always wins (a Madrid district named Salamanca keeps
+  // Madrid — it never reaches this line); the match is unique-gated; and
+  // the population floor keeps a small township that merely shares a
+  // distant subdivision's name from being teleported into it — for a
+  // city that big, sharing the name IS the relationship.
+  const pop = parseInt(c[14] || "0", 10);
+  if (!admin1 && pop >= 100000) admin1 = isoSubFor(c[8], c[1]) || isoSubFor(c[8], c[2]) || "";
   cities.push([code, c[1], c[8], admin1, c[14] || "0"]);
   cityGeoId.set(c[0], code);
 }

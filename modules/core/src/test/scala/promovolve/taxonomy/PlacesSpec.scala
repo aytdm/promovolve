@@ -157,6 +157,25 @@ class PlacesSpec extends AnyWordSpec with Matchers with OptionValues {
   // arbitrary numbering it has no principled grip on, and a wrong-but-
   // valid code is indistinguishable from a right one once parsed. Asking
   // for "Ishikawa" asks it for geography, and the table does the rest.
+  // The build links cities to ISO subdivisions by admin1 NAME — and for
+  // Taiwan that can never work: GeoNames carries only 4 admin1s there, with
+  // "Taiwan" covering Tainan. The large-city name fallback (build-places.mjs,
+  // tiered + unique-gated + population-floored) closes it. Found live
+  // 2026-08-27: targeting TW-TNN could never match the Tainan page.
+  "the Taiwan city links" should {
+    "chain Tainan city through its ISO subdivision" in {
+      Places.get("GN1668355").value.parent shouldBe Some("TW-TNN")
+      Places.ancestors("GN1668355").map(_.code) shouldBe List("TW-TNN", "TW")
+      Places.targetingMatches(Set("TW-TNN"), Set("GN1668355")) shouldBe true
+    }
+    // The guard the fallback must never break: a city named after a
+    // DIFFERENT subdivision than the one it sits in keeps its mapped
+    // admin1 — Madrid's Salamanca district stays in Madrid.
+    "never let the name fallback override a mapped admin1" in {
+      Places.get("GN6544491").value.parent shouldBe Some("ES-M")
+    }
+  }
+
   "resolveCountry" should {
 
     "resolve the catalogue's own name" in {
