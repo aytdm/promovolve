@@ -603,6 +603,20 @@ an old-image node mid-rolling-deploy), never "about nowhere";
 included. The fail-closed read stands — it is only correct because the cache
 is now actually warm.
 
+**The place-narrow eviction was REMOVED on 2026-08-27** — a direct
+consequence of this re-check existing. The eviction's intent was page-scoped
+("leave the Tainan article, keep the Kyoto one") but slot keys carry no page,
+so evicting one page's keys wiped the campaign from those slots on every page
+that still qualified: each place-targeting edit became a sitewide blackout
+until a re-auction re-awarded — indefinitely when re-auctions stalled (live,
+2026-08-26/27, reproduced three ways by the first advertiser to use place
+targeting). Since `forPage` enforces the same rule per page at serve, the
+eviction bought no correctness, only the blast radius. The residual window:
+between the edit and the next re-auction, stored candidates carry the previous
+targeting — minutes, bounded, advertiser-favorable. The TOPIC narrow keeps its
+eviction: categories have no serve-time re-check, so there it still earns its
+place.
+
 The relevance decay (`0.7^hops`) moved with it. It used to be baked into the
 view's `categoryScore` at auction, using the distance for the page that
 produced the candidate; it is now computed at serve for the page being

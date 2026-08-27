@@ -256,39 +256,6 @@ object AuctioneerEntity {
    * Pure + side-effect-free for unit testing. An unknown campaign maps to an
    * empty `awardedUrls` set → empty result (no crash).
    */
-  /**
-   * Slot keys to evict when a campaign narrows its CONTENT-PLACE targeting.
-   *
-   * Page-scoped, not site-scoped, and that distinction is the whole point:
-   * an audience narrow says "not this site's readers" and takes the whole
-   * site, while a place narrow says "not this article's subject" and must
-   * take only the pages that stopped qualifying. A campaign that drops
-   * `JP-13` should leave a Tokyo article and keep serving on the Kyoto one.
-   *
-   * Pages with NO places (the common case) are never evicted: a campaign
-   * that narrows its place targeting still bids on pages that were never
-   * about anywhere, because an empty page-place set means the classifier
-   * had nothing to say, not that the page contradicts the target.
-   */
-  private[auction] def placeEvictionSlotKeys(
-      siteId: String,
-      awardedUrls: Set[URL],
-      lastPage: Map[URL, (Map[String, Double], List[AdSlotSpec], Instant)],
-      lastPagePlaces: Map[URL, Set[String]],
-      placeTargeting: Set[String]
-  ): Set[String] =
-    if (placeTargeting.isEmpty) Set.empty
-    else
-      awardedUrls.flatMap { url =>
-        val pagePlaces = lastPagePlaces.getOrElse(url, Set.empty)
-        if (pagePlaces.nonEmpty &&
-          promovolve.taxonomy.Places.matchHops(placeTargeting, pagePlaces).isEmpty)
-          lastPage.get(url).iterator.flatMap { case (_, slots, _) =>
-            slots.iterator.map(sp => promovolve.publisher.Keys.keyUnsafe(siteId, sp.slotId.value))
-          }
-        else Iterator.empty
-      }
-
   private[auction] def topicEvictionSlotKeys(
       siteId: String,
       awardedUrls: Set[URL],
@@ -1171,26 +1138,33 @@ private final class AuctioneerEntity private (
               lastPage = lastPage,
               targetCategories = event.targetCategories
             )
-          // Place-narrow eviction, same page-scoped shape as the topic
-          // narrow above and for the same reason.
-          val placeKeysToEvict: Set[String] =
-            AuctioneerEntity.placeEvictionSlotKeys(
-              siteId = siteId.value,
-              awardedUrls = awardedCampaigns.getOrElse(event.campaignId, Set.empty),
-              lastPage = lastPage,
-              lastPagePlaces = lastPagePlaces,
-              placeTargeting = event.placeTargeting
-            )
-          if (placeKeysToEvict.nonEmpty) {
-            ctx.log.info(
-              "Campaign {} narrowed off place on site {} - evicting from {} slot key(s): {}",
-              event.campaignId.value,
-              siteId.value,
-              placeKeysToEvict.size: java.lang.Integer,
-              placeKeysToEvict.mkString(",")
-            )
-            adServer ! AdServer.EvictCampaignFromSlots(event.campaignId, placeKeysToEvict)
-          }
+          // NO place-narrow eviction — removed 2026-08-27, and the removal
+          // is load-bearing. The eviction's intent was page-scoped ("leave
+          // the Tainan article, keep the Kyoto one") but slot keys carry NO
+          // page: `site|slot` is shared by every page using that slot id,
+          // so evicting "the Tainan page's keys" also wiped the campaign
+          // from those slots on every page that still qualified. Every
+          // place-targeting edit became a sitewide blackout until the next
+          // re-auction re-awarded — indefinitely, when re-auctions stalled
+          // (live, 2026-08-26/27: the advertiser reproduced "set Hyogo →
+          // ads stop everywhere" three separate ways).
+          //
+          // It is safe to remove because the serve path enforces the SAME
+          // rule precisely: since the serve-time re-check (2026-08-22),
+          // every candidate carries its `placeTargeting` and
+          // `CandidateLogic.forPage` drops non-admitted candidates PER
+          // PAGE at selection. The eviction bought no correctness — only
+          // the blast radius. The window that remains: between the edit
+          // and the next re-auction (`scheduleReauction` below), serving
+          // uses the PREVIOUS targeting carried by the stored candidates —
+          // minutes at most, bounded by the re-auction cadence, and
+          // advertiser-favorable (briefly wider, never sitewide-dark).
+          //
+          // The TOPIC narrow below keeps its eviction deliberately:
+          // category targeting has NO serve-time re-check (the same
+          // structural leak, mitigated by per-category slot scope, which
+          // also keeps its keys roughly page-aligned) — there, eviction
+          // still buys correctness.
           if (slotKeysToEvict.nonEmpty) {
             ctx.log.info(
               "Campaign {} narrowed off topic on site {} - evicting from {} slot key(s): {}",
