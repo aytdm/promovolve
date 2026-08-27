@@ -162,8 +162,8 @@ secretGenerator:
 images:
   - name: promovolve/api
     newName: docker.io/hanishi/promovolve-api
-    # build: 128f846 2026-08-26T16:11Z (Deploy run 32986584821)
-    digest: sha256:b08631005fb960e5aada9730362749f3cdfa2e73bd9243b91ead247fb41a40b8
+    # build: 783c927 2026-08-27T02:45Z (Deploy run 33033771860)
+    digest: sha256:9b2e9122c62bfbde1d9b02e9102d267f42f388420b6c4107cea04c42c1529bab
   - name: promovolve/platform
     newName: docker.io/hanishi/promovolve-platform
     # build: 128f846 2026-08-26T16:11Z (Deploy run 32986584821)
