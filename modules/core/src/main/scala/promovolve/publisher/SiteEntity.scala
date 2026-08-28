@@ -1076,7 +1076,17 @@ object SiteEntity {
                 state.config match {
                   case Some(cfg) =>
                     val seen = cfg.slots.iterator.map(_.slotId).toSet
-                    val added = discovered.filterNot(d => seen.contains(d.slotId))
+                    val (added, overCap) =
+                      admitSlots(seen.size, discovered.filterNot(d => seen.contains(d.slotId)))
+                    if (overCap.nonEmpty) {
+                      ctx.log.warn(
+                        "SiteEntity {} slot cap ({}) reached — NOT enrolling {} slot id(s) from {}: {}{}",
+                        siteId.value, MaxSlotsPerSite: java.lang.Integer,
+                        overCap.size: java.lang.Integer, url,
+                        overCap.iterator.map(_.slotId).take(10).mkString(","),
+                        if (overCap.size > 10) ",…" else ""
+                      )
+                    }
                     if (added.isEmpty) Effect.none
                     else {
                       ctx.log.info(
@@ -1859,6 +1869,20 @@ object SiteEntity {
                 val activatedConfig: Option[SiteConfig] =
                   if (discoveredSlots.nonEmpty) state.config.map { cfg =>
                     val seen = cfg.slots.iterator.map(_.slotId).toSet
+                    // Same cap as ActivateServeSlots — this is the other
+                    // door into the inventory, and a cap with a second
+                    // uncapped door is theater.
+                    val (admitted, overCap) =
+                      admitSlots(seen.size, discoveredSlots.filterNot(d => seen.contains(d.slotId)))
+                    if (overCap.nonEmpty) {
+                      ctx.log.warn(
+                        "SiteEntity {} slot cap ({}) reached — NOT enrolling {} slot id(s) from {}: {}{}",
+                        siteId, MaxSlotsPerSite: java.lang.Integer,
+                        overCap.size: java.lang.Integer, url,
+                        overCap.iterator.map(_.slotId).take(10).mkString(","),
+                        if (overCap.size > 10) ",…" else ""
+                      )
+                    }
                     val refreshed = cfg.slots.map { e =>
                       discoveredSlots
                         .find(_.slotId == e.slotId)
@@ -1870,8 +1894,7 @@ object SiteEntity {
                             prior = d.prior.orElse(e.prior))
                         )
                     }
-                    val added = discoveredSlots.filterNot(d => seen.contains(d.slotId))
-                    cfg.copy(slots = refreshed ++ added)
+                    cfg.copy(slots = refreshed ++ admitted)
                   }
                   else None
                 def withActivated(s: State): State =
@@ -2133,6 +2156,38 @@ object SiteEntity {
    * Both are Option so existing journaled slots deserialize with
    * defaults and the system falls through to the site-level floor.
    */
+  /**
+   * Hard ceiling on distinct slot ids per site.
+   *
+   * Slots auto-enroll: any slot id the ad tag reports on a live page
+   * becomes a permanent inventory row and its own learning unit (floor
+   * prior, quality score, pin scope). That is the right default for a
+   * publisher's handful of template placements and an open door for
+   * everything else — a theme minting ids per pageview, a hand-written
+   * per-post id scheme (the WP plugin's per-post scope was removed in
+   * 0.6.0 for exactly this), or a hostile page inventing ids without
+   * bound. Real template designs use a few dozen ids; the cap is set
+   * far above any legitimate layout and exists so "slots are shared
+   * learning units" is an enforced invariant, not a hope.
+   *
+   * Enforcement DEGRADES, never breaks: already-enrolled slots are
+   * untouched, overflow ids are dropped from ENROLLMENT only (the page
+   * still serves through its enrolled slots) and named in a warning.
+   */
+  val MaxSlotsPerSite: Int = 200
+
+  /**
+   * Which newly-discovered slots may enroll, given how many the site
+   * already has: `(admitted, dropped)`. Pure so the cap's arithmetic is
+   * testable apart from the entity.
+   */
+  def admitSlots(
+      existingCount: Int,
+      added: List[AdSlotConfig],
+      cap: Int = MaxSlotsPerSite
+  ): (List[AdSlotConfig], List[AdSlotConfig]) =
+    added.splitAt(math.max(0, cap - existingCount))
+
   final case class AdSlotConfig(
       slotId: String,
       width: Int,
