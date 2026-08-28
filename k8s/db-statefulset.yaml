@@ -52,8 +52,10 @@ spec:
             periodSeconds: 5
           resources:
             requests:
-              # 100m (was 250m): right-sized 2026-08-29; observed ~50m.
-              cpu: "100m"
+              # 50m (was 250m; first cut 100m): right-sized 2026-08-29 —
+              # see the api statefulset note on GKE system-pod overhead.
+              # Observed ~50m; burst headroom comes from the absent limit.
+              cpu: "50m"
               memory: 512Mi
             limits:
               # Headroom for max_connections=300 backend processes.

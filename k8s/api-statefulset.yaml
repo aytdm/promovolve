@@ -241,12 +241,14 @@ spec:
             failureThreshold: 6
           resources:
             requests:
-              # 300m (was 1000m): right-sized 2026-08-29 for c4a-standard-2
-              # (1.93 CPU allocatable). Requests are scheduling weights, not
-              # runtime caps — measured steady-state CPU across the whole
-              # cluster is <100m, and the old 1000m×2 existed to fill a
-              # 4-core node nobody was using. See the GCP cost handoff.
-              cpu: "300m"
+              # 250m (was 1000m; first cut 300m): right-sized 2026-08-29
+              # for c4a-standard-2. The node allocates 1930m but GKE's own
+              # system pods (kube-dns 270m, fluentbit, kube-proxy, metadata
+              # server, …) claim ~750m of it — the sizing that forgets them
+              # strands the second api pod Pending, which is how this number
+              # was found. Requests are scheduling weights, not caps:
+              # measured steady-state CPU across the whole cluster is <100m.
+              cpu: "250m"
               # Headroom for the JVM + a Chromium pool (each ~150-300MB).
               memory: 1536Mi
             limits:
