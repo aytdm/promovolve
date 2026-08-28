@@ -241,11 +241,19 @@ spec:
             failureThreshold: 6
           resources:
             requests:
-              cpu: "1000m"
+              # 300m (was 1000m): right-sized 2026-08-29 for c4a-standard-2
+              # (1.93 CPU allocatable). Requests are scheduling weights, not
+              # runtime caps — measured steady-state CPU across the whole
+              # cluster is <100m, and the old 1000m×2 existed to fill a
+              # 4-core node nobody was using. See the GCP cost handoff.
+              cpu: "300m"
               # Headroom for the JVM + a Chromium pool (each ~150-300MB).
               memory: 1536Mi
             limits:
-              memory: 2560Mi
+              # 2048Mi (was 2560Mi): fits two api pods + singleton + db in
+              # 8 GB with modest overcommit; observed api peak ~1.1 GiB
+              # including the Chromium pool.
+              memory: 2048Mi
       volumes:
         # Chromium is unhappy with the default 64MB /dev/shm; --disable-dev-shm-usage
         # (set via CHROMIUM_NO_SANDBOX) plus this larger tmpfs keeps renders stable.

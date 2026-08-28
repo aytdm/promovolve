@@ -52,7 +52,8 @@ spec:
             periodSeconds: 5
           resources:
             requests:
-              cpu: "250m"
+              # 100m (was 250m): right-sized 2026-08-29; observed ~50m.
+              cpu: "100m"
               memory: 512Mi
             limits:
               # Headroom for max_connections=300 backend processes.

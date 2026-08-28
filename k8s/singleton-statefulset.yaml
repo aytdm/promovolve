@@ -148,7 +148,12 @@ spec:
               # the 11h silent Bidder[497|0] outage (2026-07-25) under the
               # then-flat timeout ladders. 500m doubles its scheduling weight
               # while leaving ~350m headroom for the backup cron jobs.
-              cpu: "500m"
+              # 200m (was 500m, was 250m): re-sized 2026-08-29 for
+              # c4a-standard-2. The 2026-07-25 lesson above was about
+              # RELATIVE scheduling weight, and the ratio is preserved:
+              # 200m of a 950m total is a larger share than 500m of the
+              # old 2850m. Absolute CPU here idles <10m.
+              cpu: "200m"
               memory: 1024Mi
             limits:
               memory: 2048Mi

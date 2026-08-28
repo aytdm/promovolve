@@ -58,7 +58,8 @@ spec:
             periodSeconds: 10
           resources:
             requests:
-              cpu: "100m"
+              # 50m (was 100m): right-sized 2026-08-29; observed ~1m.
+              cpu: "50m"
               memory: 64Mi
             limits:
               memory: 256Mi

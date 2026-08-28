@@ -62,7 +62,10 @@ set -euo pipefail
 PROJECT_ID="${PROJECT_ID:-promovolve}"
 ZONE="${ZONE:-asia-northeast1-b}"
 CLUSTER="${CLUSTER:-promovolve}"
-MACHINE="${MACHINE:-c4a-standard-4}"
+# standard-2 (was standard-4): the 4-core node idled at 3% CPU and cost
+# ~¥14k/mo alone; 2 cores / 8 GB fits the right-sized pod requests with
+# headroom. See the GCP cost profile handoff (2026-08-23, executed 08-29).
+MACHINE="${MACHINE:-c4a-standard-2}"
 NS=promovolve
 IP_NAME=promovolve-ingress
 # Overridable so a caller that already knows its context (scripts/gke-factory-reset.sh
@@ -195,7 +198,8 @@ if [ "$DEPLOY_ONLY" -ne 1 ]; then
     gcloud container clusters create "$CLUSTER" \
       --project "$PROJECT_ID" --zone "$ZONE" \
       --machine-type "$MACHINE" --spot --num-nodes 1 \
-      --disk-type hyperdisk-balanced --disk-size 50 \
+      --disk-type hyperdisk-balanced --disk-size 30 \
+      --boot-disk-provisioned-iops 3000 --boot-disk-provisioned-throughput 140 \
       --release-channel regular \
       --logging=SYSTEM --monitoring=SYSTEM
   fi
